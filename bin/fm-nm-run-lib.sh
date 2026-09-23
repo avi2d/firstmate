@@ -128,16 +128,15 @@ fm_nm_run_status_class() {  # <status_word>
 # toolchain. A capped overview requires an optional Python 3 sqlite3 reader
 # for a read-only same-branch query of NM_HOME/state.sqlite (default:
 # ~/.no-mistakes/state.sqlite; relative NM_HOME resolves from the worktree).
-# Repo identity is the overview's own top-level `repo:` line, which every axi
-# release emits: it is the `working_path` the CLI itself resolved for the
-# queried worktree. That is NOT the task worktree path in general - a linked
-# git worktree resolves to its main clone's registered path (observed
-# 2026-09-22 on v1.79.0: every task copy of a firstmate home reports
-# `repo: <home clone>`, and looking the repo up by the task worktree path
-# matched no row, so every capped read reported the inventory unreadable).
-# The recorded spelling is matched exactly, so an overview without exactly one
-# absolute `repo:` line, or with one the inventory does not record, reads as
-# unreadable rather than guessed among candidates.
+# Repo identity is the main checkout path, resolved from the queried worktree
+# through git before the query: a linked worktree's common dir is the main
+# checkout's .git directory, so its parent is the `working_path` the inventory
+# records, which no spelling of the worktree path can match. The dir is read
+# against the worktree and canonicalized, since git prints it relative for a
+# plain checkout. The overview's own top-level `repo:` line stays as a second
+# exact key for a worktree git cannot map. Each key must match exactly one
+# recorded row, and keys matching different rows read as unreadable rather
+# than guessed between.
 # The reader subprocess is bounded by $4 seconds (default 10), so a contended
 # database can never outlast the caller's per-read budget.
 # If that reader or inventory is unavailable, report unknown with available
@@ -160,7 +159,7 @@ fm_nm_run_status_class() {  # <status_word>
 # structurally truncated tables report unknown, retaining every readable
 # same-branch candidate id.
 fm_nm_select_run() {  # <branch> <axi-overview> <worktree> [timeout_secs]
-  local selection inventory available_ids timeout_secs=${4:-10}
+  local selection inventory available_ids main_path common_dir resolved timeout_secs=${4:-10}
   case "$timeout_secs" in ''|*[!0-9]*) timeout_secs=10 ;; esac
   selection=$(printf '%s\n' "$2" | awk -v branch="$1" '
     function scalar(s) {
@@ -235,7 +234,22 @@ fm_nm_select_run() {  # <branch> <axi-overview> <worktree> [timeout_secs]
     incomplete\|*) available_ids=${selection#*|} ;;
     *) printf '%s\n' "$selection"; return ;;
   esac
-  if ! inventory=$(fm_nm_bounded "$3" "$timeout_secs" python3 - "$1" "$2" "$3" "$available_ids" 2>/dev/null <<'PY'
+  main_path=""
+  if common_dir=$(git -C "$3" rev-parse --git-common-dir 2>/dev/null); then
+    case "$common_dir" in
+      /*) ;;
+      *) common_dir="$3/$common_dir" ;;
+    esac
+    case "$common_dir" in
+      */.git)
+        main_path=${common_dir%/.git}
+        if resolved=$(cd -P -- "$main_path" 2>/dev/null && pwd -P); then
+          main_path=$resolved
+        fi
+        ;;
+    esac
+  fi
+  if ! inventory=$(fm_nm_bounded "$3" "$timeout_secs" python3 - "$1" "$2" "$3" "$available_ids" "$main_path" 2>/dev/null <<'PY'
 import json
 import os
 import re
@@ -244,26 +258,36 @@ import sys
 from contextlib import closing
 from pathlib import Path
 
-branch, overview, worktree, available_ids = sys.argv[1:]
+branch, overview, worktree, available_ids, main_path = sys.argv[1:]
 ids = available_ids.split(", ") if available_ids else []
 try:
-    repos = [line[6:].strip() for line in overview.splitlines() if line.startswith("repo: ")]
-    if len(repos) != 1:
-        raise ValueError
-    repo_path = json.loads(repos[0]) if repos[0].startswith('"') else repos[0]
-    if not isinstance(repo_path, str) or not os.path.isabs(repo_path):
+    candidates = [main_path] if main_path and os.path.isabs(main_path) else []
+    for line in overview.splitlines():
+        if not line.startswith("repo: "):
+            continue
+        repo_path = line[6:].strip()
+        repo_path = json.loads(repo_path) if repo_path.startswith('"') else repo_path
+        if not isinstance(repo_path, str) or not os.path.isabs(repo_path):
+            raise ValueError
+        if repo_path not in candidates:
+            candidates.append(repo_path)
+    if not candidates:
         raise ValueError
     root = Path(os.environ.get("NM_HOME") or Path.home() / ".no-mistakes")
     if not root.is_absolute():
         root = Path(worktree) / root
     with closing(sqlite3.connect((root / "state.sqlite").as_uri() + "?mode=ro", uri=True, timeout=30)) as db:
         db.execute("BEGIN")
-        repo = db.execute("SELECT id FROM repos WHERE working_path = ?", (repo_path,)).fetchall()
-        if len(repo) != 1:
+        repo_ids = set()
+        for candidate in candidates:
+            repo = db.execute("SELECT id FROM repos WHERE working_path = ?", (candidate,)).fetchall()
+            if len(repo) == 1:
+                repo_ids.add(repo[0][0])
+        if len(repo_ids) != 1:
             raise ValueError
         rows = db.execute(
             "SELECT id, branch, status, head_sha FROM runs WHERE repo_id = ? AND branch = ? "
-            "ORDER BY created_at DESC, id DESC", (repo[0][0], branch)
+            "ORDER BY created_at DESC, id DESC", (repo_ids.pop(), branch)
         ).fetchall()
     displayed_ids = set(ids)
     for row in rows:

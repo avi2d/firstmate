@@ -4019,20 +4019,43 @@ SH
   pass 'the capped inventory reader is bounded by the crew read budget'
 }
 
-# Repo identity is the overview's own `repo:` line matched exactly against the
-# recorded `working_path`; a spelling the inventory does not record is not
-# guessed at, and reads as an unreadable inventory that still names every
-# candidate run id.
+# A noncanonical spelling of the same worktree resolves through git to the
+# recorded main checkout path, so the inventory still reads: the exact-match
+# rule applies per key, and only identities that map to no recorded row read
+# as unreadable. The hidden same-branch pair keeps its competing-live
+# verdict, naming both runs.
 test_capped_inventory_requires_exact_repo_path() {
   make_capped_runs_case capped-noncanonical running pending hidden
   local d=$TMP_ROOT/capped-noncanonical out
   FM_FAKE_AXI_HOME=$(printf '%s\n' "$FM_FAKE_AXI_HOME" | sed "s|^repo: .*|repo: \"$d/wt/./\"|")
   out=$(run_crew_state "$d" competing)
-  assert_contains "$out" 'state: unknown' 'an unmatched repo spelling cannot establish a verdict'
-  assert_contains "$out" 'unreadable' 'an unmatched repo lookup reports the inventory unreadable'
-  assert_contains "$out" '01NEW' 'an unmatched repo lookup still names the candidate run'
-  assert_not_contains "$out" 'absent' 'an unmatched repo lookup never reads as a branch without runs'
-  pass 'a repo spelling the inventory does not record reads unreadable'
+  assert_contains "$out" 'state: unknown' 'two live same-branch runs cannot establish a verdict'
+  assert_not_contains "$out" 'unreadable' 'a worktree spelling that git maps to the recorded path still reads'
+  assert_contains "$out" '01NEW' 'the newer hidden run is identified'
+  assert_contains "$out" '01OLD' 'the older hidden pending run is identified'
+  assert_not_contains "$out" 'absent' 'a branch with runs never reads as a branch without runs'
+  pass 'a noncanonical worktree spelling resolves to the recorded path'
+}
+
+# Two exact keys matching different recorded rows refuse rather than guess:
+# the overview names one registered path while the queried worktree resolves
+# through git to another.
+test_capped_inventory_disagreeing_identities_read_unreadable() {
+  make_capped_runs_case capped-disagree running running
+  local d=$TMP_ROOT/capped-disagree out
+  python3 - "$NM_HOME/state.sqlite" "$d/wt-other" <<'PY'
+import sqlite3
+import sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute("INSERT INTO repos VALUES ('other-repo', ?)", (sys.argv[2],))
+PY
+  FM_FAKE_AXI_HOME=$(printf '%s\n' "$FM_FAKE_AXI_HOME" | sed "s|^repo: .*|repo: \"$d/wt-other\"|")
+  out=$(run_crew_state "$d" competing)
+  assert_contains "$out" 'state: unknown' 'disagreeing identities cannot establish a verdict'
+  assert_contains "$out" 'unreadable' 'disagreeing identities report the inventory unreadable'
+  assert_contains "$out" '01NEW' 'disagreement still names the candidate run'
+  assert_not_contains "$out" '01FOREIGN' 'another repository cannot claim this branch'
+  pass 'disagreeing repo identities read unreadable'
 }
 
 # The 2026-09-22 PR #5317 shape on no-mistakes v1.79.0. A task copy is a linked
@@ -4109,6 +4132,70 @@ EOF
   assert_contains "$out" 'checks green: PR ready for review' 'the reading is held for the merge decision'
   assert_contains "$out" 'https://github.com/o/r/pull/2' 'the reading names the PR to ask about'
   pass 'a linked worktree green PR in merge monitoring reads held for merge'
+}
+
+# The worktree-spelled identity shape. The inventory registers the repository
+# once by its main checkout path, but the identity reaching the reader can name
+# the linked worktree instead: keyed on that spelling alone the lookup matches
+# no row and every read reports the inventory unreadable. The reader resolves
+# the queried worktree to its main checkout through git and keys on that path,
+# so a linked worktree reads its real inventory rather than the unreadable
+# verdict.
+test_linked_worktree_spelled_identity_reads_real_inventory() {
+  reset_fakes
+  local d out overview
+  d=$(new_case linked-worktree-identity)
+  mkdir -p "$d/clone"
+  git -C "$d/clone" init -q
+  git -C "$d/clone" commit -q --allow-empty -m init
+  git -C "$d/clone" worktree add -q -b fm/feat-wt "$d/wt"
+  FM_FAKE_RUN_HEAD=$(git -C "$d/wt" rev-parse HEAD)
+  export FM_FAKE_RUN_HEAD
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-wt.meta" "window=fm:fm-feat-wt" "worktree=$d/wt" "kind=ship"
+  NM_HOME="$d/nm"
+  mkdir -p "$NM_HOME"
+  overview=$(python3 - "$NM_HOME/state.sqlite" "$d/clone" "$d/wt" "$FM_FAKE_RUN_HEAD" <<'PY'
+import json
+import sqlite3
+import sys
+
+database, clone, worktree, head = sys.argv[1:]
+with sqlite3.connect(database) as db:
+    db.executescript("""
+        CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL UNIQUE);
+        CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT NOT NULL,
+                           status TEXT NOT NULL, head_sha TEXT NOT NULL, created_at INTEGER NOT NULL);
+    """)
+    db.execute("INSERT INTO repos VALUES ('repo', ?)", (clone,))
+    db.execute("INSERT INTO runs VALUES ('01WT', 'repo', 'fm/feat-wt', 'running', ?, 100)", (head,))
+    db.executemany("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?)",
+                   [("01DONE%02d" % i, "repo", "fm/done-%d" % i, "completed", head, i)
+                    for i in range(11)])
+print("repo: " + json.dumps(worktree))
+print("current_branch: fm/feat-wt")
+print("daemon: running")
+print("count: 10 of 12 total")
+print("runs[10]{id,branch,status,head,pr}:")
+for i in reversed(range(1, 11)):
+    print('  "01DONE%02d",fm/done-%d,completed,%s,""' % (i, i, head[:8]))
+PY
+) || fail 'could not create the worktree-identity run inventory fixture'
+  # Guard the divergence this case exists for, so it cannot go vacuous.
+  [ "$(git -C "$d/wt" rev-parse --show-toplevel)" != "$(git -C "$d/clone" rev-parse --show-toplevel)" ] \
+    || fail 'the fixture task copy must not be the registered clone'
+  assert_contains "$overview" 'count: 10 of 12 total' 'the fixture overview must be capped'
+  FM_FAKE_AXI_HOME=$overview
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-wt | sed 's/01RUN/01WT/')"
+  FM_FAKE_AXI_STATUS_RUN=$FM_FAKE_AXI_STATUS
+  out=$(run_crew_state "$d" feat-wt)
+  assert_not_contains "$out" 'unreadable' 'a worktree-spelled identity still reads the real inventory'
+  assert_not_contains "$out" 'state: unknown' 'a running selected run is never unknown'
+  assert_contains "$out" 'state: working' 'the selected run reports working'
+  assert_contains "$out" 'source: run-step' 'the working verdict comes from the selected run'
+  assert_contains "$out" 'validating (running)' 'the working verdict names the active step'
+  assert_contains "$out" '01WT' 'the selected run is identified'
+  pass 'a linked worktree reads its real inventory through its main checkout path'
 }
 
 test_capped_replacement_keeps_gate_and_inventory_unchanged() {
@@ -5633,7 +5720,9 @@ test_capped_overview_with_no_branch_runs_reports_absent
 test_no_branch_run_beside_a_live_run_elsewhere_reads_absent
 test_capped_inventory_reader_is_time_bounded
 test_capped_inventory_requires_exact_repo_path
+test_capped_inventory_disagreeing_identities_read_unreadable
 test_linked_worktree_green_merge_monitoring_reads_held_for_merge
+test_linked_worktree_spelled_identity_reads_real_inventory
 test_capped_replacement_keeps_gate_and_inventory_unchanged
 test_capped_inventory_failures_report_unknown
 test_complete_inventory_ignores_unrelated_semantics
