@@ -53,6 +53,7 @@
 #   (w) index.lock mtime read failure                         -> lock kept, REFUSE
 #   (x) transient lock cleared after first failed return      -> retry ALLOW
 #   (y) persistent lock (never clears, not provably stale)    -> REFUSE loudly
+#   (z) teardown removes the retired task's signal markers and keeps a live task's
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -4390,5 +4391,36 @@ test_reused_pid_identity_is_not_force_killed
 test_exec_changed_process_is_still_reaped
 test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
+test_teardown_removes_retired_task_signal_markers_and_keeps_live_task() {
+  local case_dir rc marker
+  case_dir=$(make_case task-signal-markers)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  for marker in .seen-task-x1_status .seen-task-x1_turn-ended .hb-surfaced-task-x1; do
+    printf 'stale\n' > "$case_dir/state/$marker"
+  done
+  for marker in .seen-live-task_status .seen-live-task_turn-ended .hb-surfaced-live-task; do
+    printf 'live\n' > "$case_dir/state/$marker"
+  done
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "task-signal-markers: teardown should succeed when HEAD is on a fork remote"
+  for marker in .seen-task-x1_status .seen-task-x1_turn-ended .hb-surfaced-task-x1; do
+    [ ! -e "$case_dir/state/$marker" ] \
+      || fail "task-signal-markers: teardown left $marker behind"
+  done
+  for marker in .seen-live-task_status .seen-live-task_turn-ended .hb-surfaced-live-task; do
+    [ "$(cat "$case_dir/state/$marker" 2>/dev/null)" = live ] \
+      || fail "task-signal-markers: teardown touched $marker belonging to a live task"
+  done
+  pass "teardown removes the retired task signal markers and keeps the live task markers"
+}
+
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_teardown_removes_retired_task_signal_markers_and_keeps_live_task
