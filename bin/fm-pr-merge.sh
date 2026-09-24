@@ -630,6 +630,20 @@ github_checks_not_green() {
   ' 2>/dev/null || return 1
 }
 
+# mergeStateStatus reports BEHIND only where branch protection requires an
+# up-to-date branch, which GitHub refuses on a private repository without a paid
+# plan, so the forge's own comparison decides instead. Fails unless the forge
+# answers with a count.
+github_head_behind_base() {
+  local base=$1 head=$2 behind
+  behind=$(gh api "repos/$PR_OWNER/$PR_REPO/compare/$(github_urlencode_path_segment "$base")...$head" \
+    --jq '.behind_by' 2>/dev/null) || return 1
+  case "$behind" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s' "$behind"
+}
+
 FM_PR_GITHUB_REQUIRED=
 FM_PR_GITHUB_REQUIRED_ERROR=
 github_read_required_contexts() {
@@ -719,7 +733,7 @@ github_required_checks_missing() {
 # the usual 1, when mergeable=UNKNOWN is the only failing condition, so the
 # caller can retry a still-computing mergeability read instead of refusing.
 github_verify_mergeable() {
-  local json fields line red name covered missing unreported producers runs
+  local json fields line red name covered behind commits missing unreported producers runs
   local total=0 named=0 refusals='' mergeable_refusal=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
 
@@ -786,6 +800,15 @@ FIELDS
   [ "$merge_state" != DIRTY ] \
     || refusals="$refusals  - mergeStateStatus is DIRTY (conflicts)
 "
+  if ! behind=$(github_head_behind_base "$base" "$live_head"); then
+    refusals="$refusals  - could not determine whether head $live_head contains the current tip of base branch '$base'
+"
+  elif [ "$behind" -gt 0 ]; then
+    commits=commits
+    [ "$behind" -ne 1 ] || commits=commit
+    refusals="$refusals  - head $live_head is $behind $commits behind base branch '$base'; the branch must take in $base and pass its checks again
+"
+  fi
 
   uncovered=''
   while IFS= read -r name; do
@@ -856,8 +879,8 @@ EOF
     [ -z "$unreported" ] || printf 'error: these required checks have not reported: %s\n' "$unreported" >&2
     return 1
   fi
-  printf 'verified: %s is open and mergeable, with every unwaived required check reported and every unwaived check green at head %s\n' \
-    "$URL" "$live_head" >&2
+  printf 'verified: %s is open and mergeable, contains the tip of base branch %s, with every unwaived required check reported and every unwaived check green at head %s\n' \
+    "$URL" "$base" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
 }
