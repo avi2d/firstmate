@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Behavior tests for the shipped bearings board renderer
-# (.agents/skills/bearings/assets/board-template.html), exercised through a real
-# `fm-bearings-board.sh build` and then executed under the minimal DOM shim in
-# tests/assets/board-render-harness.mjs. The assertions are on what the page
-# renders - row badges, the stat strip, the empty state - never on the
-# template's source text.
+# Behavior tests for the shipped bearings board template: a real build, asserted
+# on what the page renders, never on the template's source text.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -92,6 +88,16 @@ require_listener_reached_poll() {  # <home>
   fail "the board listener did not reach the Lavish poll (owner: ${owner:-none})"
 }
 
+build_board() {  # <home> <data.json>
+  local home=$1 data=$2
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    LAVISH_AXI_STATE_DIR="$home/lavish-state" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  require_listener_reached_poll "$home"
+}
+
 # Build the board from <underway-json> plus <charted-json> and return what the
 # renderer produced.
 render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charted_warning_more]
@@ -101,14 +107,64 @@ render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charte
     schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z",
     prs_live:false, captains_call:[], underway:$underway, landed:[],
     charted:$charted, charted_more:$more, charted_warning_more:$warning_more}' > "$data"
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
-    LAVISH_AXI_STATE_DIR="$home/lavish-state" \
-    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
-  require_listener_reached_poll "$home"
+  build_board "$home" "$data"
   node "$HARNESS" "$home/.lavish/bearings-board.html" \
     || fail "the built board could not be rendered"
+}
+
+# Line breaks and whitespace collapsing depend on CSS, which only a real browser
+# applies, so the DOM shim cannot measure card text. Host resolution is blocked
+# because the template's web-font import would otherwise stall the render on the
+# network, and a font cannot change where lines break.
+render_cards_in_chrome() {  # <home> <captains-call-json>
+  local home=$1 call=$2 data="$1/payload.json" probe="$1/probe.html" dom="$1/probe-dom.html"
+  local chrome report
+  jq -n --argjson call "$call" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z",
+    prs_live:false, captains_call:$call, underway:[], landed:[],
+    charted:[], charted_more:0}' > "$data"
+  build_board "$home" "$data"
+  chrome=$(fm_test_find_chrome) \
+    || fail "Chrome or Chromium is required to measure rendered card text; set FM_CHROME_BIN to one"
+  node - "$home/.lavish/bearings-board.html" "$probe" <<'JS' || fail "could not add the card probe to the built board"
+const fs = require("node:fs");
+const [board, probe] = process.argv.slice(2);
+const html = fs.readFileSync(board, "utf8");
+const end = html.lastIndexOf("</body>");
+if (end < 0) process.exit(1);
+const script = `<script>
+(function () {
+  var next = document.getElementById("bb-stack-next");
+  var shown = [];
+  document.querySelectorAll(".bb-call > .bb-decision").forEach(function () {
+    var card = document.querySelector(".bb-call > .bb-decision:not([hidden])");
+    var detail = card.querySelector(".bb-decision__detail");
+    shown.push({
+      title: card.querySelector(".bb-decision__title").textContent,
+      detail: detail ? detail.innerText : null,
+      detail_elements: detail ? detail.children.length : 0
+    });
+    next.click();
+  });
+  var out = document.createElement("script");
+  out.type = "application/json";
+  out.id = "fm-card-probe";
+  out.textContent = JSON.stringify(shown).replace(/</g, "\\\\u003c");
+  document.body.appendChild(out);
+})();
+</script>
+`;
+fs.writeFileSync(probe, html.slice(0, end) + script + html.slice(end));
+JS
+  report=$(fm_test_chrome_dump_dom "$chrome" "$probe" "$dom" "board=$probe" \
+    '--host-resolver-rules=MAP * ~NOTFOUND') \
+    || fail "could not render the board in Chrome: $report"
+  node - "$dom" <<'JS' || fail "the rendered board carried no card probe result"
+const dom = require("node:fs").readFileSync(process.argv[2], "utf8");
+const found = dom.match(/<script type="application\/json" id="fm-card-probe">([\s\S]*?)<\/script>/);
+if (!found) process.exit(1);
+process.stdout.write(JSON.stringify(JSON.parse(found[1])) + "\n");
+JS
 }
 
 # Build the board from <charted-json> alone and return what the renderer produced.
@@ -266,6 +322,32 @@ test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() 
   pass "charted rows with no filed date follow the dated rows in payload order"
 }
 
+test_card_detail_keeps_its_line_breaks_as_plain_text() {
+  local home out
+  home=$(make_home detail-lines)
+  out=$(render_cards_in_chrome "$home" '[
+    {"key":"docs-choices","type":"decision","repo":"sample","title":"Docs choices",
+     "about":"The docs investigation is finished.","decide":"Three choices.",
+     "detail":"D1.   Where does guidance live?\n   D2. How do checks run?\nD3. <b>Who</b> owns it?",
+     "options":[{"value":"take-all","label":"Take every recommendation"}]},
+    {"key":"merge.sample-fix","type":"merge","repo":"sample","title":"Merge the fix","risk":"low",
+     "detail":"validation green\nno review findings",
+     "pr_url":"https://github.com/example/sample/pull/1",
+     "options":[{"value":"merge","label":"Merge now"}]}
+  ]')
+  printf '%s' "$out" | jq -e '[.[] | .title] == ["Docs choices", "Merge the fix"]' >/dev/null \
+    || fail "the deck did not deal both cards: $out"
+  # The collapsed runs of spaces prove the text was read as laid out, not raw.
+  printf '%s' "$out" | jq -e '
+    .[0].detail == "D1. Where does guidance live?\nD2. How do checks run?\nD3. <b>Who</b> owns it?"
+      and .[0].detail_elements == 0
+  ' >/dev/null || fail "a decision card did not show its detail one line per question as plain text: $out"
+  printf '%s' "$out" | jq -e '.[1].detail == "validation green\nno review findings"' >/dev/null \
+    || fail "a merge card collapsed the line breaks in its detail: $out"
+  pass "a card detail keeps its line breaks and renders as plain text on decision and merge cards"
+}
+
+test_card_detail_keeps_its_line_breaks_as_plain_text
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first

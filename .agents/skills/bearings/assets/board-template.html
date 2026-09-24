@@ -191,7 +191,7 @@ a { color: inherit; text-decoration: none; }
 .bb-decision__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .bb-decision__repo { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-faint); white-space: nowrap; }
 .bb-decision__title { margin: 0; font-size: var(--fs-h4); font-weight: 800; color: var(--text-strong); line-height: 1.25; }
-.bb-decision__detail { margin: 0; font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.45; }
+.bb-decision__detail { margin: 0; font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.45; white-space: pre-line; }
 /* about / decide / recommended - three scannable context rows */
 .bb-ctx { display: flex; flex-direction: column; gap: 6px; }
 .bb-ctx__row { display: grid; grid-template-columns: 78px minmax(0,1fr); gap: 8px; align-items: baseline; }
@@ -513,6 +513,7 @@ __FM_BEARINGS_BOARD_DATA__
       if (item.about) ctx.appendChild(ctxRow("about", item.about));
       if (item.decide) ctx.appendChild(ctxRow("decide", item.decide));
       pad.appendChild(ctx);
+      if (item.detail) pad.appendChild(el("p", "bb-decision__detail", item.detail));
     }
 
     var form = document.createElement("form");
