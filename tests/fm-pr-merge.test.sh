@@ -52,6 +52,7 @@ make_case() {
     'merged=true' \
     'queued=false' \
     'base=main' > "$case_dir/github-outcome"
+  printf '0\n' > "$case_dir/github-compare"
   : > "$case_dir/github-rules"
   # The base branch the forge reports by default: unprotected, with no ruleset
   # rule, so nothing is required unless a case says otherwise.
@@ -238,6 +239,14 @@ case "${1:-} ${2:-}" in
       exit 1
     fi
     cat "$FM_TEST_GH_OUTCOME"
+    exit 0
+    ;;
+  "api repos/"*/compare/*)
+    if [ -f "${FM_TEST_GH_COMPARE_FAIL:-}" ]; then
+      echo 'gh: Not Found (HTTP 404)' >&2
+      exit 1
+    fi
+    cat "$FM_TEST_GH_COMPARE"
     exit 0
     ;;
   api\ *)
@@ -459,6 +468,8 @@ run_pr_merge() {
   FM_TEST_GH_LOG="$case_dir/gh.log" \
   FM_TEST_GH_OUTCOME="$case_dir/github-outcome" \
   FM_TEST_GH_RULES="$case_dir/github-rules" \
+  FM_TEST_GH_COMPARE="$case_dir/github-compare" \
+  FM_TEST_GH_COMPARE_FAIL="$case_dir/github-compare-fail" \
   FM_TEST_GH_VIEW_JSON="$case_dir/github-view.json" \
   FM_TEST_GH_MERGEABLE_SEQUENCE="${FM_TEST_GH_MERGEABLE_SEQUENCE:-}" \
   FM_TEST_GH_MERGEABLE_CALLS="$case_dir/mergeable-calls" \
@@ -2650,6 +2661,108 @@ test_github_draft_or_unreadable_draft_state_refuses() {
   pass "fm-pr-merge refuses a draft pull request and one with no boolean draft state"
 }
 
+test_github_head_behind_base_refuses() {
+  local case_dir rc head
+  head=abababababababababababababababababababab
+  case_dir=$(make_case github-head-behind-base)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '3\n' > "$case_dir/github-compare"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/140 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-head-behind-base: a head missing the base tip must refuse"
+  assert_grep "api repos/example/repo/compare/main...$head " "$case_dir/gh.log" \
+    "github-head-behind-base: containment was not read against the exact live head"
+  assert_grep "head $head is 3 commits behind base branch 'main'; the branch must take in main and pass its checks again" \
+    "$case_dir/stderr" "github-head-behind-base: the refusal did not name the base and the commit count"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-head-behind-base: gh pr merge ran on a head missing the base tip"
+
+  case_dir=$(make_case github-head-behind-base-and-red)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" lint
+  printf '1\n' > "$case_dir/github-compare"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/141 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-head-behind-base-and-red: a behind, red head must refuse"
+  assert_grep "head $head is 1 commit behind base branch 'main'" "$case_dir/stderr" \
+    "github-head-behind-base-and-red: the behind refusal was not reported"
+  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
+    "github-head-behind-base-and-red: the red check was not reported beside the behind refusal"
+
+  case_dir=$(make_case github-head-behind-base-allow-red)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" lint
+  printf '2\n' > "$case_dir/github-compare"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/142 \
+    --allow-red lint > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-head-behind-base-allow-red: --allow-red must not waive a head missing the base tip"
+  assert_grep "head $head is 2 commits behind base branch 'main'" "$case_dir/stderr" \
+    "github-head-behind-base-allow-red: the behind refusal was not reported"
+  assert_no_grep "check 'lint' is not green" "$case_dir/stderr" \
+    "github-head-behind-base-allow-red: the waived check was still reported"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-head-behind-base-allow-red: gh pr merge ran on a head missing the base tip"
+  pass "fm-pr-merge refuses a head missing its base tip, beside other refusals and under --allow-red"
+}
+
+test_github_head_containing_base_tip_merges() {
+  local case_dir head
+  head=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+  case_dir=$(make_case github-head-contains-base)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '0\n' > "$case_dir/github-compare"
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/143 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-head-contains-base: a head containing the base tip should merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep "api repos/example/repo/compare/main...$head " "$case_dir/gh.log" \
+    "github-head-contains-base: containment was not read against the exact live head"
+  assert_logged_gh_merge "$case_dir" 143 example/repo --squash
+  pass "fm-pr-merge merges a head that contains the current tip of its base"
+}
+
+test_github_unreadable_base_containment_refuses() {
+  local case_dir rc head label
+  head=efefefefefefefefefefefefefefefefefefefef
+  for label in failed null; do
+    case_dir=$(make_case "github-containment-$label")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" "$head"
+    case "$label" in
+      failed) : > "$case_dir/github-compare-fail" ;;
+      *) printf 'null\n' > "$case_dir/github-compare" ;;
+    esac
+
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/144 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "github-containment-$label: an unreadable comparison must refuse"
+    assert_grep "could not determine whether head $head contains the current tip of base branch 'main'" \
+      "$case_dir/stderr" "github-containment-$label: the unreadable comparison was not named"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" \
+      "github-containment-$label: gh pr merge ran without a readable comparison"
+  done
+  pass "fm-pr-merge refuses when it cannot read whether the head contains its base tip"
+}
+
 # When the base branch advances, GitHub cancels a pull request's in-flight run
 # and re-triggers it, leaving the cancelled run in the rollup beside the passing
 # re-run while reporting the pull request itself CLEAN. The merge must follow the
@@ -3853,6 +3966,9 @@ test_absent_user_backend_config_directory_and_backlog_still_merge
 test_backend_override_bypasses_unreadable_user_config
 test_github_red_checks_refuse_and_allow_red_waives_named
 test_github_draft_or_unreadable_draft_state_refuses
+test_github_head_behind_base_refuses
+test_github_head_containing_base_tip_merges
+test_github_unreadable_base_containment_refuses
 test_superseded_failed_check_run_no_longer_refuses
 test_check_runs_never_supersede_status_contexts
 test_current_failed_check_run_still_refuses
