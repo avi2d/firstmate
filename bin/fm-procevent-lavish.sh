@@ -590,10 +590,12 @@ cmd_choice_rows() {
   local selection=$1 file=${2-}
   [ -n "$file" ] || usage
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
-  perl -MJSON::PP -e '
+  perl -MJSON::PP -MEncode=decode -e '
     use strict; use warnings;
     my ($selection, $path) = @ARGV;
     open my $fh, "<", $path or exit 1;
+    binmode STDOUT, ":encoding(UTF-8)";
+    my $json = JSON::PP->new;
     my (@fields, $want, @rows);
     while (my $line = <$fh>) {
       if (!@fields) {
@@ -604,7 +606,7 @@ cmd_choice_rows() {
       last unless $line =~ /^\s/;
       last if @rows >= $want;
       chomp $line;
-      push @rows, $line;
+      push @rows, decode("UTF-8", $line);
     }
     close $fh;
     my %seen;
@@ -629,7 +631,7 @@ cmd_choice_rows() {
       my $prompt = $f{prompt};
       next unless defined $prompt && $prompt =~ /Context data:\s*(\{.*\})/s;
       my $ctx = $1;
-      my $data = eval { decode_json($ctx) };
+      my $data = eval { $json->decode($ctx) };
       next unless ref($data) eq "HASH";
       my ($key, $selected, $note, $answer, $legacy);
       if (defined($data->{schema}) && !ref($data->{schema})
