@@ -3781,7 +3781,6 @@ SH
   cat >"$dir/chrome-hang" <<'SH'
 #!/bin/sh
 case "${1:-}" in --version) echo "FakeChrome 1.2.3"; exit 0 ;; esac
-echo attempt >>"$FM_FAKE_CHROME_ATTEMPTS"
 printf '<html><head></head><body>export'
 exec sleep 30
 SH
@@ -3822,18 +3821,16 @@ SH
   assert_contains "$report" "timed_out=no" "the render failure did not report that Chrome exited on its own"
   assert_contains "$report" "FAKE_CHROME_STARTUP_MARKER" "the render failure discarded Chrome's own diagnostic"
 
-  : >"$dir/attempts-hang"
   : >"$out_file"
-  if FM_FAKE_CHROME_ATTEMPTS="$dir/attempts-hang" FM_CHROME_RENDER_WAIT_TICKS=3 \
+  if FM_CHROME_RENDER_WAIT_TICKS=3 \
     fm_test_chrome_dump_dom "$dir/chrome-hang" "$source_file" "$out_file" pi=9.9.9 >"$dir/report-hang"
   then
     fail "fm_test_chrome_dump_dom accepted a Chrome that never finished the DOM"
   fi
-  [ "$(wc -l <"$dir/attempts-hang")" -eq 3 ] \
-    || fail "fm_test_chrome_dump_dom did not exhaust its bounded retries on a Chrome that never finished"
-  report=$(cat "$dir/report-hang")
-  assert_contains "$report" "timed_out=yes" \
-    "the render failure reported its own kill signal without saying the attempt was timed out"
+  # A hung Chrome killed before its first line records nothing itself, so the
+  # helper's own report is what counts every timed-out attempt.
+  [ "$(grep -o 'attempt [0-9]*: exit=[0-9]* timed_out=yes' "$dir/report-hang" | wc -l)" -eq 3 ] \
+    || fail "fm_test_chrome_dump_dom did not exhaust its bounded retries, each reported as timed out, on a Chrome that never finished"
 
   pass "the rendered-export-DOM guard renders in one pass, retries a bounded number of Chrome start-up failures, and reports the Chrome binary, Chrome version, Pi version, exit status, and Chrome diagnostic when every attempt fails"
 }
