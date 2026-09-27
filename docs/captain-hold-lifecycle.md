@@ -193,6 +193,7 @@ Only `answer` with the captain's words or evidence-backed `reconcile close` reso
 `answers` is its channel-agnostic entry point.
 It reads `<task-id>\t<answer>\t<label>[\t<mode>]` lines and resolves each named task through the same `answer` path.
 Every guard therefore applies identically no matter which channel the answer arrived on.
+It bounds each answer in bytes and cuts it on a character boundary, so the keyed record always fits what `answer` accepts; the script's header owns the bound.
 
 The optional mode column carries a card-declared close:
 
@@ -239,6 +240,7 @@ Two channels feed that one intake today, and both are ordinary callers rather th
 `bin/fm-procevent-lavish.sh answers` is one such built-in adapter command.
 It reads only rows tagged `choice` and relays a card's declared close mode.
 It can never let freeform captain prose forge a task id or a mode.
+A round card answers several questions of one captain-held task in one submission, and its answer carries every question id with its selection and note, recorded whole or not at all; the adapter's header owns the round format.
 
 Trusted external process-event adapters intentionally expose no answer operation and cannot feed this authority-bearing intake; [`extension-bindings.md`](extension-bindings.md#trust-boundary) owns that boundary.
 
@@ -268,7 +270,7 @@ The Lavish adapter splits each capture between two commands:
 
 | Command | What it emits |
 | --- | --- |
-| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile selection, or a bare note when no option was selected. |
+| `bin/fm-procevent-lavish.sh answers` | An exact non-reconcile selection, a bare note when no option was selected, or a whole round. |
 | `reconciles` | Only task ids whose structured selection is Reconcile, carrying their notes as request provenance. |
 
 Current rows require the versioned shape and the `choice` tag.

@@ -81,7 +81,9 @@
 # `<task-id>\t<answer>\t<label>[\t<mode>]` lines on stdin and resolves each named
 # task through the very same `answer` path above, so every guard applies
 # identically no matter which channel the answer arrived on. The key IS the
-# task id - no identity arithmetic. The optional fourth field selects the close:
+# task id - no identity arithmetic. An answer is recorded up to 3840 bytes, cut
+# on a character boundary, which keeps the keyed record inside `answer`'s
+# 8192-byte limit. The optional fourth field selects the close:
 # empty or `done` completes the task, `release` lifts the hold so held work
 # resumes; anything else is skipped. A key that names no task, a task that is
 # not held for the captain, or a task already closed is reported as `skipped:`
@@ -1309,6 +1311,24 @@ sanitize_field() {  # <text>
   printf '%s' "$1" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177' | cut -c1-512
 }
 
+# Bounded in bytes, not characters: a 512-character source and label take at
+# most 2048 bytes each, so a 3840-byte answer keeps the keyed record inside the
+# 8192 bytes `answer` accepts.
+sanitize_answer() {  # <text>
+  printf '%s' "$1" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177' | perl -e '
+    local $/;
+    my $text = <STDIN> // "";
+    if (length($text) > 3840) {
+      $text = substr($text, 0, 3840);
+      if ($text =~ /([\xC0-\xFF])([\x80-\xBF]*)\z/) {
+        my $continuations = ord($1) >= 0xF0 ? 3 : ord($1) >= 0xE0 ? 2 : 1;
+        substr($text, -1 - length($2)) = "" if length($2) < $continuations;
+      }
+    }
+    print $text;
+  '
+}
+
 sanitize_reconcile_provenance() {
   printf '%s' "$1" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177' | cut -c1-1024
 }
@@ -1349,7 +1369,7 @@ command_answers() {
     [ -n "${key:-}" ] || continue
     case "$key" in *[!A-Za-z0-9._-]*) continue ;; esac
     [ "${#key}" -le 128 ] || continue
-    answer=$(sanitize_field "${answer:-}")
+    answer=$(sanitize_answer "${answer:-}")
     [ -n "$answer" ] || continue
     label=$(sanitize_field "${label:-}")
     if [ "$answer" = "$RECONCILE_VALUE" ]; then

@@ -586,16 +586,55 @@ cmd_silent() {
 # The question cap is 128 so any task id fits, including the long legacy
 # `<origin>-decision-<key>` identities pre-collapse decks still carry; the
 # security property is the slug SHAPE, which is unchanged.
+#
+# A ROUND is one card answering several questions of one captain-held task at
+# once: its versioned context keeps `question` as that task id, an empty
+# `selection`, `note` as the round note, and adds `answers`, an array with one
+# `{question, selection, note}` object per question id, a skipped question
+# carrying an empty selection and note. Its answer is every question in
+# submitted order as `<id>: <selection>` or `<id>: (no selection)`, each
+# followed by ` (note: "<note>")` when it has one, then `round note: "<note>"`,
+# joined by `; `, with backslashes and double quotes inside a note escaped. A
+# round with a duplicate or non-slug question id, a malformed entry, nothing
+# selected or said anywhere, or an answer longer than the intake records whole
+# reports nothing, so its task stays held for the handler instead of closing
+# on part of the round.
 cmd_choice_rows() {
   local selection=$1 file=${2-}
   [ -n "$file" ] || usage
   [ -f "$file" ] && [ ! -L "$file" ] || die "result file does not exist: $file"
-  perl -MJSON::PP -MEncode=decode -e '
+  perl -MJSON::PP -MEncode=decode,encode -e '
     use strict; use warnings;
     my ($selection, $path) = @ARGV;
     open my $fh, "<", $path or exit 1;
     binmode STDOUT, ":encoding(UTF-8)";
     my $json = JSON::PP->new;
+    my $slug = qr/\A[A-Za-z0-9._-]{1,128}\z/;
+    sub quoted { my ($text) = @_; $text =~ s/([\\"])/\\$1/g; return qq{"$text"}; }
+    # A round is recorded whole or not at all: undef refuses the whole row.
+    # The keyed-answer intake cuts an answer past 3840 bytes, so a longer
+    # round is refused here rather than recorded in part.
+    sub round_answer {
+      my ($entries, $selected, $note) = @_;
+      return undef unless ref($entries) eq "ARRAY" && @$entries && $selected eq "";
+      my (%asked, @parts);
+      my $said = length $note;
+      for my $entry (@$entries) {
+        return undef unless ref($entry) eq "HASH";
+        my ($id, $choice, $words) = @{$entry}{qw(question selection note)};
+        return undef if grep { !defined($_) || ref($_) } $id, $choice, $words;
+        return undef unless $id =~ $slug && !$asked{$id}++;
+        return undef unless $choice eq "" || $choice =~ $slug;
+        return undef unless length($words) <= 512;
+        $said ||= length($choice) || length($words);
+        push @parts, "$id: " . (length $choice ? $choice : "(no selection)")
+          . (length $words ? " (note: " . quoted($words) . ")" : "");
+      }
+      return undef unless $said;
+      push @parts, "round note: " . quoted($note) if length $note;
+      my $answer = join "; ", @parts;
+      return length(encode("UTF-8", $answer)) <= 3840 ? $answer : undef;
+    }
     my (@fields, $want, @rows);
     while (my $line = <$fh>) {
       if (!@fields) {
@@ -641,10 +680,15 @@ cmd_choice_rows() {
         $note = $data->{note};
         next if !defined($key) || ref($key) || !defined($selected) || ref($selected)
           || !defined($note) || ref($note);
-        next unless $selected eq "" || $selected =~ /\A[A-Za-z0-9._-]{1,128}\z/;
+        next unless $selected eq "" || $selected =~ $slug;
         next unless length($note) <= 512;
-        next unless length($selected) || length($note);
-        $answer = length($selected) ? $selected : $note;
+        if (exists $data->{answers}) {
+          $answer = round_answer($data->{answers}, $selected, $note);
+          next unless defined $answer;
+        } else {
+          next unless length($selected) || length($note);
+          $answer = length($selected) ? $selected : $note;
+        }
         $legacy = 0;
       # Time-limited compatibility for captures from pre-change boards; remove
       # once no board carrying the old question/answer context can remain armed.
