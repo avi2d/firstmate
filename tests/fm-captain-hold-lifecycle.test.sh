@@ -2359,6 +2359,164 @@ SH
   pass "a board answer keeps the captain's non-ASCII words byte for byte"
 }
 
+# One Lavish choice row carrying <context-json> the way the published poll
+# frames a queued prompt: the context pretty-printed after the prompt text, and
+# the row's quoted fields escaped.
+lavish_choice_row() {  # <uid> <label> <context-json>
+  perl -MJSON::PP -e '
+    my ($uid, $label, $ctx) = @ARGV;
+    my $data = JSON::PP->new->decode($ctx);
+    my $prompt = "Round answers\n\nContext data:\n" . JSON::PP->new->pretty->canonical->encode($data);
+    $prompt =~ s/\n\z//;
+    for ($prompt, $label) { s/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g; }
+    print qq{  "$uid","$prompt","form#round",choice,"$label"\n};
+  ' "$1" "$2" "$3"
+}
+
+# A grilling round is one captain-held task answered by one board submission
+# that carries every question of the round. The row below is the real capture a
+# throwaway round page produced through lavish-axi 0.1.77 and a browser: the
+# held task must record every question id with its selection and note, and the
+# round note, rather than closing on the round note alone. A round the intake
+# cannot record whole records nothing and leaves the round held.
+test_round_answer_records_every_question_whole() {
+  local home sid result out show round_answer long_ctx long_answer oversize_ctx stored id i note
+  home=$(make_home round-channel)
+  sid=lavish-b0a4d0000000f1e4
+  fm_test_track_procevent_home "$home" "$home/procevent-claims"
+  stored="$home/data/backlog.md"
+
+  for id in sample-interview-r1 sample-long-round sample-duplicate-round sample-unslugged-round \
+    sample-selected-round sample-empty-round sample-blank-round sample-partial-entry-round \
+    sample-oversize-round; do
+    run_captain "$home" hold "$id" --title "Grilling round $id" \
+      --reason "round questions pending" --repo sample >/dev/null \
+      || fail "could not register $id"
+  done
+
+  long_ctx='{"schema":"fm-bearings-answer.v1","question":"sample-long-round","selection":"","note":"","answers":['
+  long_answer=''
+  note="keep this choice because the neighbors asked for it twice, the hall confirmed the space, and the budget holds for the first season without new volunteers or paid staff of any kind"
+  for i in 01 02 03 04 05 06 07 08 09 10 11 12; do
+    [ "$i" = 01 ] || { long_ctx="$long_ctx,"; long_answer="$long_answer; "; }
+    long_ctx="$long_ctx{\"question\":\"q$i\",\"selection\":\"option-$i\",\"note\":\"$note $i\"}"
+    long_answer="${long_answer}q$i: option-$i (note: \"$note $i\")"
+  done
+  long_ctx="$long_ctx]}"
+  [ "$(printf '%s' "$long_answer" | LC_ALL=C wc -c | tr -d ' ')" -gt 2048 ] \
+    || fail "precondition: the long round must be longer than four 512-character fields"
+
+  oversize_ctx='{"schema":"fm-bearings-answer.v1","question":"sample-oversize-round","selection":"","note":"","answers":['
+  note=$(printf 'перенести на субботу %.0s' $(seq 1 20))
+  for i in 01 02 03 04 05 06 07 08; do
+    [ "$i" = 01 ] || oversize_ctx="$oversize_ctx,"
+    oversize_ctx="$oversize_ctx{\"question\":\"q$i\",\"selection\":\"\",\"note\":\"${note% }\"}"
+  done
+  oversize_ctx="$oversize_ctx]}"
+  [ "$(printf '%s' "$oversize_ctx" | perl -MEncode=decode -e 'local $/; print length(decode("UTF-8", <STDIN>))')" -lt 3840 ] \
+    && [ "$(printf '%s' "$oversize_ctx" | LC_ALL=C wc -c | tr -d ' ')" -gt 3840 ] \
+    || fail "precondition: the oversize round must fit the 3840-byte bound in characters but not in bytes"
+
+  result="$home/round.result"
+  {
+    printf 'session:\n  file: /round.html\n  status: feedback\nprompts[10]{uid,prompt,selector,tag,text}:\n'
+    cat <<'ROW'
+  "1","Round 1 answers - audience: neighbors - start with Elm, Oak and Birch streets; format: low-cost-sale - sale — €1 per book; \"free\" invites dumping; day: no selection; storage: no selection - ask the hall manager first\n\nContext data:\n{\n  \"schema\": \"fm-bearings-answer.v1\",\n  \"question\": \"sample-interview-r1\",\n  \"selection\": \"\",\n  \"note\": \"Looks right overall; revisit the day once the hall confirms.\",\n  \"answers\": [\n    {\n      \"question\": \"audience\",\n      \"selection\": \"neighbors\",\n      \"note\": \"start with Elm, Oak and Birch streets\"\n    },\n    {\n      \"question\": \"format\",\n      \"selection\": \"low-cost-sale\",\n      \"note\": \"sale — €1 per book; \\\"free\\\" invites dumping\"\n    },\n    {\n      \"question\": \"day\",\n      \"selection\": \"\",\n      \"note\": \"\"\n    },\n    {\n      \"question\": \"storage\",\n      \"selection\": \"\",\n      \"note\": \"ask the hall manager first\"\n    }\n  ]\n}",form#round,choice,Round 1 answers for 4 questions
+ROW
+    lavish_choice_row 2 "Round 2 answers for 12 questions" "$long_ctx"
+    lavish_choice_row 3 "Duplicate question" \
+      '{"schema":"fm-bearings-answer.v1","question":"sample-duplicate-round","selection":"","note":"","answers":[{"question":"day","selection":"saturday","note":""},{"question":"day","selection":"sunday","note":""}]}'
+    lavish_choice_row 4 "Question id with a space" \
+      '{"schema":"fm-bearings-answer.v1","question":"sample-unslugged-round","selection":"","note":"","answers":[{"question":"the day","selection":"saturday","note":""}]}'
+    lavish_choice_row 5 "Round with a top-level selection" \
+      '{"schema":"fm-bearings-answer.v1","question":"sample-selected-round","selection":"yes","note":"","answers":[{"question":"day","selection":"saturday","note":""}]}'
+    lavish_choice_row 6 "Round with no questions" \
+      '{"schema":"fm-bearings-answer.v1","question":"sample-empty-round","selection":"","note":"a note alone","answers":[]}'
+    lavish_choice_row 7 "Round the captain left blank" \
+      '{"schema":"fm-bearings-answer.v1","question":"sample-blank-round","selection":"","note":"","answers":[{"question":"day","selection":"","note":""}]}'
+    lavish_choice_row 8 "Round entry without a note field" \
+      '{"schema":"fm-bearings-answer.v1","question":"sample-partial-entry-round","selection":"","note":"","answers":[{"question":"day","selection":"saturday"}]}'
+    lavish_choice_row 9 "Round larger than the intake records" "$oversize_ctx"
+    lavish_choice_row 10 "Membership: gold-only - captain detail" \
+      '{"schema":"fm-bearings-answer.v1","question":"sample-single-call","selection":"gold-only","note":"captain detail"}'
+  } > "$result"
+  run_captain "$home" hold sample-single-call --title "Choose the sample membership" \
+    --reason "captain membership choice pending" --repo sample >/dev/null \
+    || fail "could not register the single-question call"
+
+  out=$(run_lavish "$home" answers "$result") || fail "the adapter could not read the round answers"
+  round_answer='audience: neighbors (note: "start with Elm, Oak and Birch streets"); format: low-cost-sale (note: "sale — €1 per book; \"free\" invites dumping"); day: (no selection); storage: (no selection) (note: "ask the hall manager first"); round note: "Looks right overall; revisit the day once the hall confirms."'
+  assert_contains "$out" "sample-interview-r1	$round_answer	Round 1 answers for 4 questions" \
+    "the real round capture did not yield every question with its selection and note"
+  assert_contains "$out" "sample-long-round	$long_answer	Round 2 answers for 12 questions" \
+    "a round longer than one 512-character field was not reported whole"
+  assert_contains "$out" "sample-single-call	gold-only	Membership: gold-only - captain detail" \
+    "a single-question answer beside rounds changed shape"
+  for id in sample-duplicate-round sample-unslugged-round sample-selected-round sample-empty-round \
+    sample-blank-round sample-partial-entry-round sample-oversize-round; do
+    assert_not_contains "$out" "$id" "a round the intake cannot record whole was reported: $id"
+  done
+
+  run_procevent "$home" register lavish "$sid" -- cat "$result" >/dev/null \
+    || fail "could not register the round board source"
+  run_captain "$home" bind "$sid" >/dev/null \
+    || fail "could not bind the round board source to the keyed-answer intake"
+  out=$(run_procevent "$home" start "$sid" 2>&1) \
+    || fail "the round board source runner did not complete: $out"
+  assert_contains "$out" "answers-fed: $sid" "the captured round never reached the intake: $out"
+
+  show=$(tasks_in "$home" show sample-interview-r1 --full)
+  assert_contains "$show" "state: done" "the answered round did not close its held task"
+  # data/backlog.md is the markdown backend's own persisted artifact, read here
+  # for its bytes because the shown field re-encodes them.
+  LC_ALL=C grep -qF "Answer: $round_answer" "$stored" \
+    || fail "the round's held task did not record every question, selection, and note"
+  LC_ALL=C grep -qF "Answer: $long_answer" "$stored" \
+    || fail "the long round's held task did not record the round whole"
+  show=$(tasks_in "$home" show sample-single-call --full)
+  assert_contains "$show" "state: done" "a single-question answer beside rounds did not close its call"
+  for id in sample-duplicate-round sample-unslugged-round sample-selected-round sample-empty-round \
+    sample-blank-round sample-partial-entry-round sample-oversize-round; do
+    show=$(tasks_in "$home" show "$id" --full)
+    assert_contains "$show" "held: yes" "a round the intake cannot record whole changed its held task: $id"
+    assert_contains "$show" "state: queued" "a round the intake cannot record whole closed its held task: $id"
+  done
+  pass "a round answer records every question whole on its one held task"
+}
+
+# The intake records an answer up to 3840 bytes, so a round fits whole, and
+# cuts a longer one on a character boundary so the record stays valid UTF-8 and
+# inside the 8192-byte record that `answer` accepts.
+test_keyed_answer_intake_bounds_answers_in_whole_characters() {
+  local home stored long huge out
+  home=$(make_home keyed-answer-bound)
+  stored="$home/data/backlog.md"
+  run_captain "$home" hold sample-long-answer-call --title "Choose the long sample answer" \
+    --reason "captain long answer pending" --repo sample >/dev/null \
+    || fail "could not register the long-answer call"
+  run_captain "$home" hold sample-huge-answer-call --title "Choose the huge sample answer" \
+    --reason "captain huge answer pending" --repo sample >/dev/null \
+    || fail "could not register the huge-answer call"
+
+  long=$(printf 'keep the saturday slot %.0s' $(seq 1 30))
+  long=${long% }
+  [ "${#long}" -gt 512 ] || fail "precondition: the long answer must be longer than 512 characters"
+  huge=x$(printf 'с%.0s' $(seq 1 3000))
+  out=$(printf 'sample-long-answer-call\t%s\t\nsample-huge-answer-call\t%s\t\n' "$long" "$huge" \
+    | run_captain "$home" answers --source "a bounded keyed answer") \
+    || fail "the intake did not record the long answers: $out"
+  assert_contains "$out" "closed: sample-long-answer-call" "the long answer did not close its call: $out"
+  assert_contains "$out" "closed: sample-huge-answer-call" "the huge answer did not close its call: $out"
+
+  # data/backlog.md is the markdown backend's own persisted artifact, read here
+  # for its bytes because the shown field re-encodes them.
+  LC_ALL=C grep -qF "Answer: $long" "$stored" \
+    || fail "an answer longer than 512 characters but inside the bound was cut"
+  LC_ALL=C grep -qxF "  Answer: x$(printf 'с%.0s' $(seq 1 1919))" "$stored" \
+    || fail "an answer past the bound was not cut to 3840 bytes on a character boundary"
+  pass "the keyed-answer intake records answers up to 3840 bytes in whole characters"
+}
+
 # The intake is channel-agnostic, so chat must reach it the same way a captured
 # review does - for a task-id key, and for a legacy composed identity.
 test_chat_channel_feeds_the_same_keyed_answer_intake() {
@@ -4721,6 +4879,8 @@ test_unbound_source_closes_no_hold
 test_legacy_identities_keep_working
 test_board_answer_reaches_the_keyed_answer_intake
 test_board_answer_keeps_the_captains_non_ascii_words
+test_round_answer_records_every_question_whole
+test_keyed_answer_intake_bounds_answers_in_whole_characters
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
