@@ -722,7 +722,7 @@ fm_test_find_chrome() {
 # rendered DOM of a local file.
 fm_test_chrome_dump_dom() {
   local chrome=$1 source_file=$2 out_file=$3 context=$4
-  local attempt pid status wait_count wait_limit reap_wait log profile report timed_out
+  local attempt pid status wait_count wait_limit reap_wait log profile_dir report timed_out
   local -a profile_arg extra_args
   shift 4
   extra_args=("$@")
@@ -731,19 +731,19 @@ fm_test_chrome_dump_dom() {
   : >"$report"
   for attempt in 1 2 3; do
     log="$out_file.chrome-$attempt.err"
-    profile="$out_file.chrome-home-$attempt"
-    rm -rf "$profile"
-    mkdir -p "$profile"
+    profile_dir="$out_file.chrome-home-$attempt"
+    rm -rf "$profile_dir"
+    mkdir -p "$profile_dir"
     : >"$out_file"
     # Off Darwin, an explicit --user-data-dir on a brand-new profile never
     # finishes first-run initialization, so --dump-dom never returns; a private
     # HOME is Chromium's isolation switch there. macOS derives its profile from
     # ~/Library regardless of HOME, so Darwin keeps --user-data-dir.
     case "$(uname -s)" in
-      Darwin) profile_arg=(--user-data-dir="$profile") ;;
+      Darwin) profile_arg=(--user-data-dir="$profile_dir") ;;
       *) profile_arg=() ;;
     esac
-    HOME="$profile" XDG_CONFIG_HOME="$profile/.config" XDG_CACHE_HOME="$profile/.cache" \
+    HOME="$profile_dir" XDG_CONFIG_HOME="$profile_dir/.config" XDG_CACHE_HOME="$profile_dir/.cache" \
       "$chrome" \
       ${profile_arg[@]+"${profile_arg[@]}"} \
       --headless=new \
