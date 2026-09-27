@@ -2298,6 +2298,67 @@ SH
   pass "a board answer reaches the keyed-answer intake and wakes firstmate"
 }
 
+# The captain's words are recorded as the UTF-8 the board sent, whatever script
+# they are written in: a note with a character at or below U+00FF, a note with
+# one above it, and a label carrying a typographic dash.
+test_board_answer_keeps_the_captains_non_ascii_words() {
+  local home sid stub out err expected stored
+  home=$(make_home board-channel-utf8)
+  sid=lavish-b0a4d0000000f1e3
+  fm_test_track_procevent_home "$home" "$home/procevent-claims"
+  stored="$home/data/backlog.md"
+
+  run_captain "$home" hold sample-accent-call --title "Choose the sample drink" \
+    --reason "captain drink choice pending" --repo sample >/dev/null \
+    || fail "could not register the accented call"
+  run_captain "$home" hold sample-cyrillic-call --title "Choose the sample crossing" \
+    --reason "captain crossing choice pending" --repo sample >/dev/null \
+    || fail "could not register the cyrillic call"
+
+  stub="$home/board-source.sh"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+cat <<'OUT'
+session:
+  status: feedback
+  session_ended: false
+prompts[2]{tag,text,prompt}:
+  "choice","Drink — café","Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"sample-accent-call\",\"selection\":\"\",\"note\":\"café au lait\"}"
+  "choice","Переправа: north - через мост","Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"sample-cyrillic-call\",\"selection\":\"north\",\"note\":\"через мост\"}"
+OUT
+SH
+  chmod +x "$stub"
+
+  "$stub" > "$home/board.result"
+  err="$home/answers.err"
+  out=$(run_lavish "$home" answers "$home/board.result" 2>"$err") \
+    || fail "the adapter could not read the non-ASCII answers"
+  expected=$(printf 'sample-accent-call\tcafé au lait\tDrink — café\nsample-cyrillic-call\tnorth\tПереправа: north - через мост')
+  [ "$out" = "$expected" ] \
+    || fail "the adapter changed the bytes of the captain's words: $(printf '%s' "$out" | od -c | head -8)"
+  assert_no_grep "Wide character" "$err" "the adapter warned about a wide character instead of writing UTF-8"
+
+  run_procevent "$home" register lavish "$sid" -- "$stub" >/dev/null \
+    || fail "could not register the board source"
+  run_captain "$home" bind "$sid" >/dev/null \
+    || fail "could not bind the board source to the keyed-answer intake"
+  out=$(run_procevent "$home" start "$sid" 2>&1) \
+    || fail "the board source runner did not complete: $out"
+  assert_contains "$out" "answers-fed: $sid" "the captured answers never reached the intake: $out"
+
+  # data/backlog.md is the markdown backend's own persisted artifact, read here
+  # for its bytes because the shown field re-encodes them.
+  LC_ALL=C grep -qF "Answer: café au lait" "$stored" \
+    || fail "the recorded note lost the UTF-8 bytes of a character at or below U+00FF"
+  LC_ALL=C grep -qF "Answer as shown to the captain: Drink — café" "$stored" \
+    || fail "the recorded label lost the UTF-8 bytes of its typographic dash"
+  LC_ALL=C grep -qF "Answer as shown to the captain: Переправа: north - через мост" "$stored" \
+    || fail "the recorded label lost the UTF-8 bytes of its cyrillic words"
+  ! LC_ALL=C grep -q "$(printf '[^\xc3]\xe9')" "$stored" \
+    || fail "the recorded answer holds a lone latin-1 byte, so it is no longer valid UTF-8"
+  pass "a board answer keeps the captain's non-ASCII words byte for byte"
+}
+
 # The intake is channel-agnostic, so chat must reach it the same way a captured
 # review does - for a task-id key, and for a legacy composed identity.
 test_chat_channel_feeds_the_same_keyed_answer_intake() {
@@ -4659,6 +4720,7 @@ test_reconcile_outcomes_retry_partial_failures_once
 test_unbound_source_closes_no_hold
 test_legacy_identities_keep_working
 test_board_answer_reaches_the_keyed_answer_intake
+test_board_answer_keeps_the_captains_non_ascii_words
 test_chat_channel_feeds_the_same_keyed_answer_intake
 test_origin_slug_validation_precedes_path_construction
 test_status_resolution_over_an_open_hold_is_signalled
