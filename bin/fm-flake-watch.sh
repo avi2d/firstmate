@@ -36,7 +36,8 @@ Usage:
 Watched repositories are avi2d/skills, avi2d/checks, avi2d/dotfiles,
 avi2d/career, avi2d/learning, avi2d/smithers, and avi2d/website.
 Each filed task names the repository, the failing test with its line,
-the seed, and the run URL. A run already recorded in
+the seed, and the run URL. A run whose flake job never started files
+nothing. A run already recorded in
 state/.flake-watch-seen, or already owning its backlog task, is never
 filed twice. Failure detail comes from the run's flake-report artifact;
 a run whose artifact has expired still gets its one task, with the run
@@ -134,6 +135,25 @@ report_runs() {
     --jq '.workflow_runs[] | "\(.id)\t\(.conclusion)\t\(.html_url)\t\(.created_at)"'
 }
 
+flake_jobs() {
+  local repo=$1 id=$2
+  api_body api "/repos/$OWNER/$repo/actions/runs/$id/jobs?per_page=50" \
+    --jq 'if (.jobs | length) == 0 then "nojobs" else (.jobs[] | "\(.name)\t\(.conclusion)\t\(.runner_id)\t\(if (.runner_name // "") == "" then "-" else .runner_name end)\t\(.steps | length)") end'
+}
+
+# A refused or cancelled job still concludes failure, so the run conclusion alone cannot tell a real red run from one that never started.
+flake_job_started() {
+  local name _ runner_id runner_name steps saw=0
+  while IFS="$(printf '\t')" read -r name _ runner_id runner_name steps; do
+    [ "${name:-}" = flake ] || continue
+    saw=1
+    if [ "${steps:-0}" -gt 0 ] 2>/dev/null || [ "${runner_id:-0}" != 0 ] || { [ -n "${runner_name:-}" ] && [ "$runner_name" != - ]; }; then
+      return 0
+    fi
+  done
+  [ "$saw" = 0 ]
+}
+
 red_runs_since() {
   jq -R -s -r --argjson cutoff "$CUTOFF" '
     split("\n") | map(select(length > 0) | split("\t")
@@ -157,7 +177,7 @@ file_task() {
 }
 
 action_check() {
-  local repo runs rc=0 task title body detail outside first_file first_line first_seeds count failures
+  local repo runs rc=0 task title body detail outside first_file first_line first_seeds count failures jobs
   local errors=0 filed=0 truncated=
   local error_line=
   local tmp report
@@ -183,6 +203,17 @@ action_check() {
         seen_has "$repo/$id" && continue
         task="flake-$repo-$id"
         if "$TASKS_BIN" show "$task" >/dev/null 2>&1; then
+          seen_add "$repo/$id" || true
+          continue
+        fi
+        jobs=$(flake_jobs "$repo" "$id") || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          errors=1
+          error_line="$repo run $id: ${jobs:-flake job list failed}"
+          rc=0
+          continue
+        fi
+        if ! printf '%s\n' "$jobs" | flake_job_started; then
           seen_add "$repo/$id" || true
           continue
         fi

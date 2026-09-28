@@ -34,6 +34,15 @@ write_gh_fake() {
 #!/usr/bin/env bash
 if [ "\${1:-}" = api ]; then
   case "\$2" in
+    */jobs*)
+      printf 'api_response:\n'
+      if [ "$mode" = notstarted ]; then
+        printf '  body: "flake\\\\tfailure\\\\t0\\\\t-\\\\t0"\n'
+      else
+        printf '  body: "flake\\\\tfailure\\\\t21\\\\twinbox-skills\\\\t12"\n'
+      fi
+      printf '  truncated: false\n'
+      ;;
     */repos/avi2d/skills/*)
       printf 'api_response:\n'
       if [ "$mode" = green ]; then
@@ -153,6 +162,19 @@ test_expired_artifact_still_files_its_one_task() {
   pass "fm-flake-watch: expired artifact still files exactly one task"
 }
 
+test_unstarted_job_files_nothing_but_is_recorded_seen() {
+  local home
+  home=$(make_home notstarted)
+  write_gh_fake "$home" notstarted
+  run_check "$home" "$home/out1.txt"
+  [ ! -s "$home/out1.txt" ] || fail "a never-started job must stay silent: $(cat "$home/out1.txt")"
+  [ "$(tasks_count "$home")" = 0 ] || fail "a never-started job files nothing"
+  assert_contains "$(cat "$home/state/.flake-watch-seen")" "skills/36312923331" "the skipped run is recorded as seen"
+  run_check "$home" "$home/out2.txt"
+  [ ! -s "$home/out2.txt" ] || fail "second pass must stay silent: $(cat "$home/out2.txt")"
+  pass "fm-flake-watch: a job that never started files nothing and is recorded as seen"
+}
+
 test_existing_task_is_adopted_not_duplicated() {
   local home
   home=$(make_home adopted)
@@ -172,4 +194,5 @@ test_arm_writes_and_binds_the_check_and_disarm_removes_it
 test_red_run_files_one_task_then_silence
 test_green_week_files_nothing
 test_expired_artifact_still_files_its_one_task
+test_unstarted_job_files_nothing_but_is_recorded_seen
 test_existing_task_is_adopted_not_duplicated
