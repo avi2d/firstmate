@@ -2130,6 +2130,77 @@ SH
   pass "seeded dispatcher, adapter, production-owner, and test-local diagnostics preserve parity"
 }
 
+# A caller that kills the lint owner's process group leaves the workers, which
+# run in groups of their own, orphaned; each worker must notice its owner is
+# gone and take its ShellCheck child down with it.
+fm_lint_orphan_pids() {  # <fixed-marker> <fixed-kind>
+  ps -A -o pid= -o args= 2>/dev/null | awk -v marker="$1" -v kind="$2" '
+    index($0, marker) > 0 && index($0, kind) > 0 { print $1 }'
+}
+
+test_orphaned_workers_stop_when_owner_dies() {
+  if ! pinned_ready; then
+    pass "SKIP (ShellCheck $REQUIRED not resolved): orphaned worker kill check"
+    return
+  fi
+  local tmp roots_dir scratch_dir out owner seed copy i start elapsed
+  local -a roots snapshot alive current leftover
+  tmp=$(fm_test_tmproot fm-lint-orphan)
+  roots_dir="$tmp/roots"
+  scratch_dir="$tmp/scratch"
+  mkdir -p "$roots_dir" "$scratch_dir"
+  seed=
+  for copy in bin/*.sh; do
+    if [ -z "$seed" ] || [ "$(wc -c < "$copy")" -gt "$(wc -c < "$seed")" ]; then
+      seed=$copy
+    fi
+  done
+  [ -n "$seed" ] || fail "no bin seed script found for the orphan lint run"
+  roots=()
+  for i in $(seq 1 12); do
+    copy="$roots_dir/root-$i.sh"
+    cp "$seed" "$copy"
+    roots+=("$copy")
+  done
+  out="$tmp/lint.out"
+  TMPDIR="$scratch_dir" perl -e 'setpgrp(0, 0) or die "setpgrp: $!"; exec @ARGV or die "exec: $!"' \
+    bash "$LINT" "${roots[@]}" > "$out" 2>&1 &
+  owner=$!
+  i=0
+  while [ "$i" -lt 200 ]; do
+    mapfile -t snapshot < <({ fm_lint_orphan_pids "$tmp" "--internal-worker"; fm_lint_orphan_pids "$roots_dir" "shellcheck"; } | LC_ALL=C sort -u)
+    [ "${#snapshot[@]}" -ge 2 ] && break
+    kill -0 "$owner" 2>/dev/null || break
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ "${#snapshot[@]}" -ge 2 ] \
+    || fail "the orphan lint run never got a worker and its ShellCheck child busy"
+  kill -KILL -- "-$owner" 2>/dev/null || kill -KILL "$owner" 2>/dev/null || true
+  start=$(date +%s)
+  alive=("${snapshot[@]}")
+  i=0
+  while [ "$i" -lt 100 ]; do
+    leftover=()
+    for copy in "${alive[@]}"; do
+      kill -0 "$copy" 2>/dev/null || continue
+      leftover+=("$copy")
+    done
+    mapfile -t current < <({ fm_lint_orphan_pids "$tmp" "--internal-worker"; fm_lint_orphan_pids "$roots_dir" "shellcheck"; } | LC_ALL=C sort -u)
+    [ "${#leftover[@]}" -eq 0 ] && [ "${#current[@]}" -eq 0 ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  elapsed=$(( $(date +%s) - start ))
+  for copy in "${leftover[@]}" "${current[@]}"; do
+    kill -KILL "$copy" 2>/dev/null || true
+  done
+  wait "$owner" 2>/dev/null || true
+  [ "${#leftover[@]}" -eq 0 ] && [ "${#current[@]}" -eq 0 ] \
+    || fail "killing the lint owner's group left ${#leftover[@]} tracked and ${#current[@]} matching worker/ShellCheck processes alive after ${elapsed}s"
+  pass "killing the lint owner's group stops its workers and ShellCheck children within ${elapsed}s"
+}
+
 test_help_reports_the_complete_interface
 test_list_files_reports_the_shell_inventory
 test_canonical_partitions_preserve_full_lint
@@ -2153,6 +2224,7 @@ test_ignores_ambient_shellcheck_opts
 test_clean_fixture_passes
 test_jobs_are_deterministic_and_complete
 test_worker_trees_stop_on_signal
+test_orphaned_workers_stop_when_owner_dies
 test_root_deadline_names_the_root_and_reaps_the_tree
 test_root_memory_limit_reports_a_named_death
 test_memory_failure_retries_without_external_sources

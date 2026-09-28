@@ -141,6 +141,28 @@ fm_lint_worker_stop() {
   FM_LINT_WORKER_RUN_PID=
 }
 
+# True while the lint owner that started this worker exists. A caller that
+# kills the owner's process group leaves workers in other groups alive, so
+# each worker polls this instead of trusting the owner's signals to reach it.
+fm_lint_owner_alive() {
+  [ -z "${FM_LINT_OWNER_PID:-}" ] || kill -0 "$FM_LINT_OWNER_PID" 2>/dev/null
+}
+
+# Wait for the running root like wait does, but stop the root and report 143
+# once the owner is gone, so a worker never sits out a long ShellCheck run
+# whose owner was already killed.
+fm_lint_wait_run() {
+  local pid=$FM_LINT_WORKER_RUN_PID
+  while kill -0 "$pid" 2>/dev/null; do
+    if ! fm_lint_owner_alive; then
+      fm_lint_worker_stop
+      return 143
+    fi
+    sleep 0.1
+  done
+  wait "$pid" 2>/dev/null
+}
+
 fm_lint_now_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
     local seconds=${EPOCHREALTIME%.*} micros=${EPOCHREALTIME#*.}
@@ -253,12 +275,12 @@ fm_lint_exec_root() {  # <path> <stdout-file> <stderr-file> <rss-file> <seconds>
         "${BASH:-bash}" "$SELF" --internal-root "$rss_file" "$FM_LINT_INTERNAL_MEMORY_KIB" \
         "$FM_LINT_SHELLCHECK" "$@" -- "$path" ) > "$root_out" 2> "$root_err" &
     FM_LINT_WORKER_RUN_PID=$!
-    wait "$FM_LINT_WORKER_RUN_PID" || invocation_rc=$?
+    fm_lint_wait_run || invocation_rc=$?
     FM_LINT_WORKER_RUN_PID=
   else
     "$FM_LINT_SHELLCHECK" "$@" -- "$path" > "$root_out" 2> "$root_err" &
     FM_LINT_WORKER_RUN_PID=$!
-    wait "$FM_LINT_WORKER_RUN_PID" || invocation_rc=$?
+    fm_lint_wait_run || invocation_rc=$?
     FM_LINT_WORKER_RUN_PID=
   fi
   FM_LINT_LAST_RC=$invocation_rc
@@ -377,6 +399,11 @@ fm_lint_worker() {  # <manifest> <output-dir> <shard-index>
     fi
     : > "$output.out"
     for entry in "${root_entries[@]}"; do
+      if ! fm_lint_owner_alive; then
+        fm_lint_worker_stop
+        [ "$rc" -ne 0 ] || rc=143
+        break
+      fi
       index=${entry%%"$tab"*}
       path=${entry#*"$tab"}
       invocation_rc=0
@@ -1201,6 +1228,7 @@ fm_lint_run_worker() {  # <worker-index>
   timing="$TMP_ROOT/timing.$worker_index"
   worker_env=(
     FM_LINT_INTERNAL=1
+    FM_LINT_OWNER_PID="$FM_LINT_OWNER_PID"
     FM_LINT_INTERNAL_FAST="$FAST"
     FM_LINT_INTERNAL_FOLLOW_SOURCES="$FOLLOW_SOURCES"
     FM_LINT_INTERNAL_EXCLUDE="$EXCLUDE_CODES"
@@ -1248,6 +1276,7 @@ fm_lint_wait_workers() {
   done
 }
 
+FM_LINT_OWNER_PID=$$
 if [ "$JOBS" -eq 1 ]; then
   worker=0
   while [ "$worker" -lt "$SHARD_COUNT" ]; do
