@@ -116,19 +116,30 @@ else
   printf 'curl:clean\n' >> "${CHILD_ENV_LOG:?}"
 fi
 out=''
+headers=''
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out=$2; shift 2 ;;
+    -D) headers=$2; shift 2 ;;
     *) printf '%s\n' "$1" >> "${FAKE_CURL_LOG:?}/argv"; shift ;;
   esac
 done
 cat > "$FAKE_CURL_LOG/body"
 cat /dev/fd/3 > "$FAKE_CURL_LOG/header" 2>/dev/null || printf 'fd3 unreadable\n' > "$FAKE_CURL_LOG/header"
+if [ -n "$headers" ]; then
+  printf 'HTTP/1.1 200 OK\r\nx-envoy-upstream-service-time: %s\r\n\r\n' "${FAKE_CURL_UPSTREAM_MS:-37}" > "$headers"
+fi
 if [ -n "${FAKE_CURL_MUTATE_SOURCE:-}" ]; then
   cp "$FAKE_CURL_MUTATE_SOURCE" "${FAKE_CURL_MUTATE_TARGET:?}"
 fi
 if [ "${FAKE_CURL_FAIL:-0}" = 1 ]; then
   exit 7
+fi
+if [ "${FAKE_CURL_FLAKY_ONCE:-0}" = 1 ] && [ ! -e "$FAKE_CURL_LOG/flaky-done" ]; then
+  : > "$FAKE_CURL_LOG/flaky-done"
+  printf 'upstream unavailable' > "$out"
+  printf '%s' '503'
+  exit 0
 fi
 cp "${FAKE_CURL_RESPONSE:?}" "$out"
 printf '%s' "${FAKE_CURL_HTTP:-200}"
@@ -229,7 +240,7 @@ assert_not_contains "$out" '--effort' "cursor profile without effort emits no --
 argv=$(cat "$LOG/argv")
 assert_not_contains "$argv" "$KEY" "the key never appears on curl argv"
 assert_contains "$argv" 'https://api.typesafe.ai/v1/systemone' "the request uses the fixed typesafe.ai endpoint"
-assert_contains "$argv" $'--max-time\n5' "the request uses the fixed five-second timeout"
+assert_contains "$argv" $'--max-time\n10' "the request uses the fixed ten-second timeout"
 assert_contains "$argv" '@/dev/fd/3' "the header is read from a file descriptor"
 assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "curl receives the bearer header on fd 3"
 assert_equals $'curl:clean\nquota-axi:clean' "$(cat "$LOG/child-env")" "the API key is absent from every child environment"
@@ -568,15 +579,17 @@ assert_not_contains "$sent" 'mode=' "a ship brief's delivery mode is not sent"
 
 { cat "$SCAFFOLD_BRIEF"; printf '%s\n' 'This is a SCOUT task: the deliverable is a written report, not a PR.'; } > "$KIND_BRIEF"
 reset_log
+write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY run code out err "$KIND_BRIEF"
-sent=$(jq -r .state.task.brief "$LOG/body")
-assert_contains "$sent" $'Brief kind: scout (report only)\n\n## Captain\'s intent' "a scout brief's contract line names its kind"
-assert_not_contains "$sent" 'This is a SCOUT task' "the scout contract line itself is not sent"
+expect_code 0 "$code" "scout routing exits 0"
+assert_contains "$out" '  status: error' "a scout brief with no rule_5 in the file is an error outcome, not a Jev call"
+assert_contains "$out" '  reason: rule rule_5 is not in the rules file' "the missing investigation rule is named"
+assert_absent "$LOG/argv" "scout routing never calls curl"
 
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_equals "$(cat "$BRIEF")" "$(jq -r .state.task.brief "$LOG/body")" "a brief with neither heading is sent whole"
-pass "only the brief's task sections and scout tag reach the model, with a whole-brief fallback"
+pass "only the brief's task sections reach the model, scout briefs route by program, with a whole-brief fallback"
 
 # --- escalate: captain approval ------------------------------------------------
 reset_log
@@ -1004,5 +1017,77 @@ run code out err --help
 expect_code 0 "$code" "--help exits 0"
 assert_contains "$out" 'Usage:' "--help prints usage"
 pass "configuration errors exit 2 before any network call"
+
+# --- tuned request: scout routing, ship options, size paragraph, retry --------
+FIVE_RULES="$TMP_ROOT/five-rules.json"
+jq '.rules += [{"when": "The task is an investigation that ends in a written report.", "use": {"harness": "claude", "model": "sonnet", "effort": "high"}}]' "$BASE_RULES" > "$FIVE_RULES"
+cp "$FIVE_RULES" "$RULES"
+
+SCOUT_BRIEF="$TMP_ROOT/scout-brief.md"
+cat > "$SCOUT_BRIEF" <<'MD'
+# Task
+## Captain's intent
+Investigate the pager off-by-one and write up the findings.
+
+## Firstmate spec
+Report only, no code.
+
+This is a SCOUT task: the deliverable is a written report, not a PR.
+MD
+
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$SCOUT_BRIEF" --project pager
+expect_code 0 "$code" "scout routing exits 0"
+assert_contains "$out" '  status: clear' "a scout brief resolves without a Jev request"
+assert_contains "$out" '  rule: rule_5 (The task is an investigation that ends in a written report.)   confidence: 1' "the scout marker maps to rule_5"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "rule_5 ranks through the quota stage as today"
+assert_absent "$LOG/argv" "scout routing makes no Jev request"
+assert_equals '--json' "$(cat "$LOG/quota-axi.calls")" "scout routing still reads quota once"
+
+SHIP_RESPONSE="$TMP_ROOT/ship-response.json"
+cat > "$SHIP_RESPONSE" <<'JSON'
+{ "model": "jev-1.13.0",
+  "answers": { "rule": { "type": "choice", "choice": "rule_4", "confidence": 0.9,
+    "probabilities": { "rule_1": 0.01, "rule_2": 0.01, "rule_3": 0.01, "rule_4": 0.95, "default": 0.01 } } },
+  "usage": { "input_tokens": 900, "output_tokens": 60 } }
+JSON
+cp "$SHIP_RESPONSE" "$RESPONSE"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "ship request exits 0"
+assert_contains "$out" '  status: clear' "a ship brief still resolves"
+assert_equals '["default","rule_1","rule_2","rule_3","rule_4"]' "$(jq -c '.questions.rule.criteria | keys' "$LOG/body")" "a ship request omits rule_5 from the options"
+EXPECTED_INSTRUCTIONS=$(cat <<'EOF'
+Which ONE dispatch rule best fits `task` (read `task.brief` and `task.project`)? Each option is the rule's own matching condition; pick `default` when no rule's condition is met, including when a rule's own exemption text excludes this task. Judge size by the whole pull request a worker will merge for this brief, not only the core code: new or changed tests, fixtures, docs, schema and config all count, and so does a decision record where the repository keeps them. A new option, field, check or command carried through code, schema, docs and tests, a fix that must first be reproduced by a new test, or work across several source files usually changes more than 150 lines. A version bump, a pin, a release, a single setting flip, or copying an existing file or workflow usually changes far fewer.
+EOF
+)
+assert_equals "$EXPECTED_INSTRUCTIONS" "$(jq -r .questions.rule.instructions "$LOG/body")" "a ship request carries the size paragraph after one space, word for word"
+
+cat > "$RESPONSE" <<'JSON'
+{ "model": "jev-1.13.0",
+  "answers": { "rule": { "type": "choice", "choice": "rule_4", "confidence": 0.9,
+    "probabilities": { "rule_1": 0.01, "rule_2": 0.01, "rule_3": 0.01, "rule_4": 0.95, "rule_5": 0.01, "default": 0.0 } } },
+  "usage": { "input_tokens": 900, "output_tokens": 60 } }
+JSON
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+assert_contains "$out" '  reason: response is not a rule Choice answer' "an answer naming rule_5 is rejected on a ship brief"
+
+reset_log
+cp "$SHIP_RESPONSE" "$RESPONSE"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_FLAKY_ONCE=1 run code out err "$BRIEF" --project pager
+assert_contains "$out" '  status: clear' "a 503 followed by 200 resolves on the retry"
+assert_equals '2' "$(grep -c 'https://api.typesafe.ai/v1/systemone' "$LOG/argv")" "the retry sends the request twice"
+
+reset_log
+TYPESAFE_API_KEY=$KEY FAKE_CURL_HTTP=503 run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "two failures exit 0"
+assert_contains "$out" '  status: error' "two failures are an error outcome"
+assert_contains "$out" '  reason: http 503 after' "the error names the status"
+assert_contains "$out" 'upstream 37 ms' "the error carries the upstream service time"
+assert_equals '2' "$(grep -c 'https://api.typesafe.ai/v1/systemone' "$LOG/argv")" "a retryable failure sends the request twice"
+cp "$BASE_RULES" "$RULES"
+pass "tuned request: scout briefs resolve rule_5 with no call, ship requests omit rule_5 and carry the paragraph, one retry rescues a 503"
 
 printf '# all fm-dispatch-resolve tests passed\n'

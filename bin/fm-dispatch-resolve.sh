@@ -93,8 +93,9 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 CONFIDENCE_FLOOR=0.6
 TS_MODEL=jev-latest
 TS_BASE=https://api.typesafe.ai
-TS_TIMEOUT=5
+TS_TIMEOUT=10
 DEFAULT_WHEN="No listed rule applies to this task."
+SIZE_HINT=' Judge size by the whole pull request a worker will merge for this brief, not only the core code: new or changed tests, fixtures, docs, schema and config all count, and so does a decision record where the repository keeps them. A new option, field, check or command carried through code, schema, docs and tests, a fix that must first be reproduced by a new test, or work across several source files usually changes more than 150 lines. A version bump, a pin, a release, a single setting flip, or copying an existing file or workflow usually changes far fewer.'
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 no_rules() {
@@ -245,7 +246,8 @@ RESP_FILE=$(mktemp) || die "mktemp failed"
 QUOTA=$(mktemp) || { rm -f "$RESP_FILE"; die "mktemp failed"; }
 TASK_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA"; die "mktemp failed"; }
 SEND_TEXT=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA" "$TASK_TEXT"; die "mktemp failed"; }
-trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT"' EXIT
+RESP_HEADERS=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT"; die "mktemp failed"; }
+trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT" "$RESP_HEADERS"' EXIT
 
 never_send_off() {
   echo "dispatch-resolve: off ($1; nothing sent)" >&2
@@ -286,8 +288,11 @@ never_send_check() {
 # standard boilerplate whose safety language reads as high stakes on every task.
 # A brief with neither section goes whole. Ship delivery mode is deliberately
 # not sent: live runs showed it pushing routine ship briefs to the top tier.
+is_scout_brief() {
+  grep -qxF 'This is a SCOUT task: the deliverable is a written report, not a PR.' "$BRIEF"
+}
 brief_kind() {
-  if grep -qxF 'This is a SCOUT task: the deliverable is a written report, not a PR.' "$BRIEF"; then
+  if is_scout_brief; then
     printf 'Brief kind: scout (report only)\n\n'
   fi
 }
@@ -305,33 +310,58 @@ else
   cp "$BRIEF" "$TASK_TEXT" || die "could not read brief: $BRIEF"
 fi
 LAT_MS=null
-command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
+SCOUT_BRIEF=0
+if is_scout_brief; then
+  SCOUT_BRIEF=1
+fi
+if [ "$SCOUT_BRIEF" -eq 1 ]; then
+  # The marker line maps to rule_5 exactly, so a scout brief never reaches Jev.
+  jq -n --slurpfile rules "$RULES" '
+    (($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) + ["default"]) as $choices |
+    {model: "scout-routing",
+     answers: {rule: {type: "choice", choice: "rule_5", confidence: 1,
+       probabilities: ($choices | map({key: ., value: (if . == "rule_5" then 1 else 0 end)}) | from_entries
+         | if has("rule_5") then . else .default = 1 end)}}}' > "$RESP_FILE" \
+    || emit_error "scout routing failed"
+  LAT_MS=0
+else
+  command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
   REQUEST=$(jq -n --rawfile brief "$TASK_TEXT" --arg project "$PROJECT" --arg model "$TS_MODEL" \
-    --arg none_criterion "$DEFAULT_WHEN" --slurpfile rules "$RULES" '
+    --arg none_criterion "$DEFAULT_WHEN" --arg size_hint "$SIZE_HINT" --slurpfile rules "$RULES" '
     ($rules[0]) as $cfg |
-    ($cfg.rules | to_entries | map({key: ("rule_" + ((.key + 1) | tostring)), value: .value.when}) | from_entries) as $criteria |
+    ($cfg.rules | to_entries | map({key: ("rule_" + ((.key + 1) | tostring)), value: .value.when}) | from_entries | del(.rule_5)) as $criteria |
     {
       model: $model,
       state: {task: {project: $project, brief: $brief}},
       questions: {
         rule: {
           type: "choice",
-          instructions: "Which ONE dispatch rule best fits `task` (read `task.brief` and `task.project`)? Each option is the rule'"'"'s own matching condition; pick `default` when no rule'"'"'s condition is met, including when a rule'"'"'s own exemption text excludes this task.",
+          instructions: ("Which ONE dispatch rule best fits `task` (read `task.brief` and `task.project`)? Each option is the rule'"'"'s own matching condition; pick `default` when no rule'"'"'s condition is met, including when a rule'"'"'s own exemption text excludes this task." + $size_hint),
           criteria: ($criteria + {default: $none_criterion})
         }
       }
     }')
   never_send_check
   T0=$(fm_timing_now_ms)
-  HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
-    -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
-    -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE") \
-    --data-binary @- 2>/dev/null) || HTTP=000
+  ATTEMPT=1
+  while :; do
+    HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
+      -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
+      -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE") \
+      --data-binary @- 2>/dev/null) || HTTP=000
+    # Only transient statuses merit the one retry; anything else would repeat the same answer.
+    case "$HTTP" in
+      000|408|429|5*) ATTEMPT=$((ATTEMPT + 1)); [ "$ATTEMPT" -le 2 ] && continue ;;
+    esac
+    break
+  done
   T1=$(fm_timing_now_ms)
   LAT_MS=$(( T1 - T0 ))
-  [ "$HTTP" = 200 ] || emit_error "http $HTTP after ${LAT_MS} ms: $(head -c 200 "$RESP_FILE" 2>/dev/null | tr '\n' ' ')"
-jq -e --slurpfile rules "$RULES" '
-    (($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) + ["default"] | sort) as $choices |
+  UPSTREAM_MS=$(grep -i '^x-envoy-upstream-service-time:' "$RESP_HEADERS" 2>/dev/null | tail -n 1 | tr -d '\r' | sed 's/^[^:]*:[[:space:]]*//;s/[[:space:]]*$//')
+  [ "$HTTP" = 200 ] || emit_error "http $HTTP after ${LAT_MS} ms${UPSTREAM_MS:+ (upstream ${UPSTREAM_MS} ms)}: $(head -c 200 "$RESP_FILE" 2>/dev/null | tr '\n' ' ')"
+fi
+jq -e --argjson scout "$SCOUT_BRIEF" --slurpfile rules "$RULES" '
+    ((($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) | map(select(. != "rule_5" or $scout == 1))) + ["default"] | sort) as $choices |
     (.answers.rule.choice | type) == "string" and
     (.answers.rule.confidence | type) == "number" and
     .answers.rule.confidence >= 0 and .answers.rule.confidence <= 1 and
