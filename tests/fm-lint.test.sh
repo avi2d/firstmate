@@ -894,6 +894,110 @@ test_local_exclusion_list_covers_every_no_external_sources_code() {
   pass "local exclusion list covers every no-external-sources ShellCheck code"
 }
 
+test_skills_mode_lints_only_the_listed_canonical_file() {
+  local tmp fakebin log flag_log diff_file out target
+  tmp=$(fm_test_tmproot fm-lint-skills-select)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+  log="$tmp/shellcheck.log"
+  flag_log="$tmp/flags.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+  diff_file="$tmp/diff.nul"
+  target="bin/fm-install-shellcheck.sh"
+  fm_lint_write_diff_file "$diff_file" "tests/fm-lint.test.sh"
+
+  # The git diff names a different canonical file, so this proves the gate list
+  # wins over the branch diff rather than merging with it.
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
+    FM_TEST_GIT_BRANCH=feature FM_TEST_GIT_DIFF_FILE="$diff_file" \
+    FM_TEST_FLAG_LOG="$flag_log" \
+    SKILLS_CHANGED_FILES="$target" "$LINT" --skills-changed-files 2>&1) \
+    || fail "skills changed-file lint run failed"$'\n'"$out"
+  [ "$(cat "$log")" = "$target" ] \
+    || fail "skills mode did not run ShellCheck on exactly the listed file"$'\n'"logged: $(cat "$log")"
+  fm_lint_assert_flag_log "$flag_log" yes none
+  assert_contains "$out" "skills changed-file mode" \
+    "skills mode did not disclose its file-list source"
+  pass "fm-lint.sh --skills-changed-files lints only the listed canonical file"
+}
+
+test_skills_mode_passes_when_list_holds_no_lint_targets() {
+  local tmp fakebin log out rc
+  tmp=$(fm_test_tmproot fm-lint-skills-empty)
+  fakebin=$(fm_fakebin "$tmp")
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+
+  rc=0
+  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
+    SKILLS_CHANGED_FILES="$(printf 'README.md\nbin/definitely-not-real-file.sh')" \
+    "$LINT" --skills-changed-files 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "skills mode with no lint targets must exit 0, got $rc"$'\n'"$out"
+  [ ! -s "$log" ] || fail "skills mode invoked ShellCheck with no lint targets"$'\n'"logged: $(cat "$log")"
+  assert_contains "$out" "no skills changed-file lint targets" \
+    "skills mode did not note the empty target set"
+  assert_contains "$out" "workflow files valid" \
+    "skills mode skipped workflow YAML validation"
+  pass "fm-lint.sh --skills-changed-files passes without a full fallback when the list holds no lint targets"
+}
+
+test_skills_mode_unset_keeps_context_selection() {
+  local tmp fakebin listed expected
+  tmp=$(fm_test_tmproot fm-lint-skills-unset)
+  fakebin=$(fm_fakebin "$tmp")
+  fm_lint_stub_git "$fakebin"
+
+  # No merge-base forces the full canonical set through the ordinary context
+  # selection, proving an unset list changes nothing.
+  listed=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' \
+    FM_TEST_GIT_BRANCH=feature FM_TEST_GIT_MERGE_BASE_OK=0 \
+    env -u SKILLS_CHANGED_FILES "$LINT" --skills-changed-files --list-files)
+  expected=$(find bin bin/backends tests -maxdepth 1 -type f -name '*.sh' -print | LC_ALL=C sort)
+  [ "$(printf '%s\n' "$listed" | LC_ALL=C sort)" = "$expected" ] \
+    || fail "unset SKILLS_CHANGED_FILES did not keep the full canonical file set"
+  pass "fm-lint.sh --skills-changed-files with an unset list keeps the context-selected file set"
+}
+
+test_skills_mode_refuses_partition_and_explicit_paths() {
+  local out rc
+
+  rc=0
+  out=$("$LINT" --skills-changed-files --partition 1of2 --list-files 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "skills mode accepted --partition (exit $rc)"$'\n'"$out"
+  rc=0
+  out=$("$LINT" --skills-changed-files bin/fm-lint.sh 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] || fail "skills mode accepted an explicit path (exit $rc)"$'\n'"$out"
+  pass "fm-lint.sh --skills-changed-files refuses partitions and explicit paths"
+}
+
+test_skills_mode_keeps_one_path_per_line() {
+  local tmp fakebin log lint_copy out
+  tmp=$(fm_test_tmproot fm-lint-skills-lines)
+  mkdir -p "$tmp/repo/bin/backends" "$tmp/repo/tests"
+  lint_copy="$tmp/repo/bin/fm-lint.sh"
+  cp "$LINT" "$lint_copy"
+  cat > "$tmp/repo/bin/fm-lint-workflows.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/backends/noop.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/tests/noop.test.sh"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" ok\n' > "$tmp/repo/bin/with space.sh"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" ok\n' > "$tmp/repo/bin/star*.sh"
+  chmod +x "$lint_copy" "$tmp/repo/bin/fm-lint-workflows.sh"
+  fakebin=$(fm_fakebin "$tmp")
+  log="$tmp/shellcheck.log"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+
+  out=$(cd "$tmp/repo" && PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
+    SKILLS_CHANGED_FILES="$(printf 'bin/with space.sh\nbin/star*.sh')" \
+    "$lint_copy" --skills-changed-files 2>&1) \
+    || fail "skills line-split lint failed"$'\n'"$out"
+  [ "$(LC_ALL=C sort "$log")" = "$(printf 'bin/star*.sh\nbin/with space.sh')" ] \
+    || fail "skills mode did not keep each listed path whole"$'\n'"logged: $(cat "$log")"
+  pass "fm-lint.sh --skills-changed-files keeps one listed path per line"
+}
+
 test_pins_an_explicit_version() {
   [ -n "$REQUIRED" ] || fail "fm-lint.sh --required-version printed nothing"
   # The captain-agreed pin: adopt ShellCheck 0.11.0's rule set consistently,
@@ -2075,3 +2179,8 @@ test_explicit_path_keeps_external_sources
 test_fast_mode_on_a_local_branch_keeps_source_following
 test_changed_mode_hides_cross_file_codes_that_ci_still_sees
 test_local_exclusion_list_covers_every_no_external_sources_code
+test_skills_mode_lints_only_the_listed_canonical_file
+test_skills_mode_passes_when_list_holds_no_lint_targets
+test_skills_mode_unset_keeps_context_selection
+test_skills_mode_refuses_partition_and_explicit_paths
+test_skills_mode_keeps_one_path_per_line

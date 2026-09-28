@@ -26,12 +26,15 @@ document:
 # default handling, which does not invoke the repository's canonical lint gate.
 # `bin/fm-lint.sh` owns the context-sensitive ShellCheck modes and GitHub
 # workflow lint via pinned actionlint in `bin/fm-lint-workflows.sh`.
+# The --skills-changed-files flag reads the verdict gate's SKILLS_CHANGED_FILES
+# list, one repo-root-relative path per line, and lints only the existing
+# canonical shell roots it names. An unset list keeps the context-selected default.
 # Invocation wiring is asserted by `tests/fm-lint.test.sh` and
 # `tests/fm-lint-workflows.test.sh`.
 #
 # Keep commands.test absent; the firstmate-coding-guidelines skill owns this policy.
 commands:
-  lint: 'bin/fm-lint.sh'
+  lint: 'bin/fm-lint.sh --skills-changed-files'
 
 # Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
 # The evidence is not committed to the feature or default branch.

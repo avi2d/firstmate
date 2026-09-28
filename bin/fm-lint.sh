@@ -716,6 +716,7 @@ ANALYSIS_MODE=full
 PARTITION=
 PARTITION_REQUESTED=0
 LIST_FILES=0
+SKILLS_MODE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --jobs)
@@ -756,6 +757,10 @@ while [ "$#" -gt 0 ]; do
       LIST_FILES=1
       shift
       ;;
+    --skills-changed-files)
+      SKILLS_MODE=1
+      shift
+      ;;
     --help|-h)
       fm_lint_usage
       exit 0
@@ -788,6 +793,17 @@ case "$PARTITION" in
     ;;
   *) printf 'fm-lint.sh: --partition must be 1of2 or 2of2, got %s.\n' "$PARTITION" >&2; exit 2 ;;
 esac
+
+if [ "$SKILLS_MODE" -eq 1 ]; then
+  if [ "$PARTITION_REQUESTED" -eq 1 ] || [ -n "$PARTITION" ]; then
+    printf 'fm-lint.sh: --skills-changed-files selects the gate file list, not a full canonical partition; omit --partition.\n' >&2
+    exit 2
+  fi
+  if [ "$#" -gt 0 ]; then
+    printf 'fm-lint.sh: --skills-changed-files takes its roots from SKILLS_CHANGED_FILES, not explicit paths.\n' >&2
+    exit 2
+  fi
+fi
 
 if [ "$FAST" -eq 1 ] && { [ "${GITHUB_ACTIONS:-}" = true ] || [ "${CI:-}" = true ]; }; then
   printf 'fm-lint.sh: --fast is local-only; CI uses full ShellCheck analysis.\n' >&2
@@ -833,7 +849,17 @@ CHANGED_MODE=0
 EXPLICIT_PATHS=0
 FOLLOW_SOURCES=1
 EXCLUDE_CODES=
-if [ "$#" -gt 0 ]; then
+SKILLS_FILTERED=0
+if [ "$SKILLS_MODE" -eq 1 ] && [ -n "${SKILLS_CHANGED_FILES+set}" ]; then
+  ROOTS=()
+  while IFS= read -r skills_path || [ -n "${skills_path:-}" ]; do
+    [ -n "${skills_path:-}" ] || continue
+    fm_lint_is_canonical_root "$skills_path" || continue
+    [ -f "$skills_path" ] || continue
+    ROOTS+=("$skills_path")
+  done <<< "$SKILLS_CHANGED_FILES"
+  SKILLS_FILTERED=1
+elif [ "$#" -gt 0 ]; then
   EXPLICIT_PATHS=1
   ROOTS=("$@")
 else
@@ -926,12 +952,23 @@ if [ "$resolved" != "$REQUIRED_SHELLCHECK" ]; then
     "$REQUIRED_SHELLCHECK" "$resolved" "$REQUIRED_SHELLCHECK" >&2
   exit 1
 fi
+if [ "$SKILLS_FILTERED" -eq 1 ] && [ "$ROOT_COUNT" -gt 0 ]; then
+  printf 'fm-lint.sh: skills changed-file mode; %s lint target(s) from SKILLS_CHANGED_FILES\n' "$ROOT_COUNT" >&2
+fi
 if [ "$FAST" -eq 1 ]; then
   printf 'fm-lint.sh: fast local mode; ShellCheck extended analysis disabled\n' >&2
 elif [ "$FOLLOW_SOURCES" -eq 0 ]; then
   printf 'fm-lint.sh: local changed-file mode; ShellCheck source following disabled\n' >&2
 else
   printf 'fm-lint.sh: full ShellCheck extended analysis enabled\n' >&2
+fi
+
+if [ "$SKILLS_FILTERED" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
+  printf 'fm-lint.sh: no skills changed-file lint targets\n'
+  overall_rc=0
+  fm_lint_run_backend_purity || overall_rc=$?
+  fm_lint_run_workflows || overall_rc=$?
+  exit "$overall_rc"
 fi
 
 if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
