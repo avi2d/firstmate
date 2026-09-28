@@ -805,6 +805,93 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
   rm -f -- "$tmp"
 }
 
+# The done archive Done retention prunes answered rows into, read from the
+# home's own tasks-axi configuration rather than assumed. Prints the path.
+captain_markdown_archive_configured() {  # <backlog-root>; prints the configured archive path
+  [ -f "$1/.tasks.toml" ] || return 1
+  LC_ALL=C awk '
+    function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+    BEGIN { inmarkdown = 0 }
+    {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      line = trim(line)
+      if (line ~ /^\[[^]]+\]$/) { inmarkdown = (line == "[markdown]"); next }
+      if (!inmarkdown) next
+      if (line ~ /^archive[[:space:]]*=/) {
+        sub(/^archive[[:space:]]*=[[:space:]]*/, "", line)
+        gsub(/^"|"$/, "", line); gsub(/^'\''|'\''$/, "", line)
+        print line
+        exit
+      }
+    }
+  ' "$1/.tasks.toml"
+}
+
+captain_archive_file() {  # prints this home's done-archive path
+  local data root configured
+  data=$(fm_backlog_data_absolute "$DATA") || return 1
+  root=$(fm_backlog_root "$data") || return 1
+  if configured=$(captain_markdown_archive_configured "$root") && [ -n "$configured" ]; then
+    case "$configured" in
+      /*) printf '%s\n' "$configured" ;;
+      *) printf '%s/%s\n' "$root" "$configured" ;;
+    esac
+  else
+    printf '%s/done-archive.md\n' "$data"
+  fi
+}
+
+# Whether the archive carries <task-id> as an answered captain call: its block
+# holds the captain-hold mark and a recorded resolution.
+archive_block_is_answered_call() {  # <archive-file> <task-id>
+  case "$2" in
+    ''|*[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  awk -v want="$2" '
+    function flush() {
+      if (current == want && held && recorded) found = 1
+      current = ""; held = 0; recorded = 0
+    }
+    /^## / { flush(); next }
+    /^- \[[ xX]\] / {
+      flush()
+      line = $0
+      sub(/^- \[[ xX]\] /, "", line)
+      current = line
+      sub(/ .*/, "", current)
+    }
+    { if (current != "") {
+        if (index($0, "(hold-kind: captain)") > 0) held = 1
+        if (index($0, "Resolution recorded by fm-captain-hold.") > 0) recorded = 1
+        if (index($0, "Resolution recorded by fm-decision-hold.") > 0) recorded = 1
+    } }
+    END { flush(); exit(!found) }
+  ' "$1"
+}
+
+# An entry retention pruned out of the live backlog still attests when the
+# configured archive carries its answered captain-call block.
+# Its origin cannot be checked there, so it reports the origin unrecorded.
+verify_archived_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> archived unrecorded"
+  local origin=$1 entry=$2 archive legacy
+  archive=$(captain_archive_file) || return 1
+  [ -f "$archive" ] || return 1
+  if archive_block_is_answered_call "$archive" "$entry"; then
+    printf '%s archived unrecorded' "$entry"
+    return 0
+  fi
+  if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
+    legacy=$(legacy_hold_id "$origin" "$entry")
+    if [ "$legacy" != "$entry" ] \
+      && archive_block_is_answered_call "$archive" "$legacy"; then
+      printf '%s archived unrecorded' "$legacy"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 # The origin a hold was recorded for lives in the held task's own body, on a
 # line of its own, so `complete` can tell a call held for this origin from one
 # held for another. Omitting --origin leaves any existing association intact.
@@ -864,21 +951,37 @@ refuse_self_inventory() {
 # resolution failure that is not the read bound keeps resolve_entry's own
 # status - its stderr already named the entry; 124 means the backend never
 # answered, which is not the same as an unknown entry and must not be spent
-# as absence. The result carries the attestation evidence and whether an
-# origin was recorded, so completion can disclose the legacy fallback.
+# as absence. Absence falls back to the configured done archive, which holds
+# answered rows retention pruned out of the live backlog. The result carries
+# the attestation evidence and whether an origin was recorded, so completion
+# can disclose the legacy fallback.
 verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origin-state>"
-  local origin=$1 entry=$2 resolved resolve_status=0 id how stored origin_state=unrecorded origin_id stored_id
+  local origin=$1 entry=$2 resolved resolve_status=0 err archived id how stored origin_state=unrecorded origin_id stored_id
   # The origin task is never its own captain-call inventory: it is the work the
   # calls were found in, so accepting it would let a refused hold look recorded.
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ] && [ "$entry" = "$origin" ]; then
     refuse_self_inventory "$origin" "$entry"
   fi
-  resolved=$(resolve_entry "$origin" "$entry") || resolve_status=$?
+  err=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-resolve.XXXXXX") \
+    || fail "cannot stage the inventory resolution diagnostics"
+  resolved=$(resolve_entry "$origin" "$entry" 2>"$err") || resolve_status=$?
   if [ "$resolve_status" -ne 0 ]; then
-    [ "$resolve_status" -ne 124 ] \
-      || fail "the backlog backend exceeded its read bound resolving $entry"
+    if [ "$resolve_status" -eq 124 ]; then
+      cat "$err" >&2
+      rm -f -- "$err"
+      fail "the backlog backend exceeded its read bound resolving $entry"
+    fi
+    if [ "$resolve_status" -eq 1 ] \
+      && archived=$(verify_archived_entry_durable "$origin" "$entry"); then
+      rm -f -- "$err"
+      printf '%s\n' "$archived"
+      return 0
+    fi
+    cat "$err" >&2
+    rm -f -- "$err"
     exit "$resolve_status"
   fi
+  rm -f -- "$err"
   id=${resolved%% *}
   how=${resolved##* }
   verify_hold_durable "$id"

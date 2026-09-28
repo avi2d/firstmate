@@ -3581,6 +3581,63 @@ test_merge_approval_releases_before_zero_done_retention() {
   pass "merge approval releases before zero-retention cleanup records completion"
 }
 
+# Done retention moves answered rounds into the configured archive, so a later
+# round's completion must still attest the pruned rounds while refusing an
+# entry that was never a captain call.
+test_complete_accepts_pruned_answered_rounds() {
+  local home id archive rc
+  home=$(make_home complete-pruned-archive)
+  id=sample-pruned-interview
+  archive="$home/data/custom-archive.md"
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/custom-archive.md"' \
+    'done_keep = 10' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the pruned interview" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the pruned-interview origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Pruned interview\n\nThree rounds remain.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id-r1" --title "Round one" --reason "round one pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not hold round one"
+  run_captain "$home" hold "$id-r2" --title "Round two" --reason "round two pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not hold round two"
+  run_captain "$home" hold "$id-r3" --title "Round three" --reason "round three pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not hold round three"
+  printf 'Captain chose one.\n' > "$home/answer-one.txt"
+  printf 'Captain chose two.\n' > "$home/answer-two.txt"
+  run_captain "$home" answer "$id-r1" --decision-file "$home/answer-one.txt" >/dev/null \
+    || fail "could not answer round one"
+  run_captain "$home" answer "$id-r2" --decision-file "$home/answer-two.txt" >/dev/null \
+    || fail "could not answer round two"
+  tasks_in "$home" add sample-plain-work "Ordinary finished work" --kind ship --repo sample >/dev/null \
+    || fail "could not create the ordinary finished task"
+  tasks_in "$home" "done" sample-plain-work >/dev/null \
+    || fail "could not close the ordinary finished task"
+  tasks_in "$home" prune --keep 0 >/dev/null \
+    || fail "could not prune answered rounds into the configured archive"
+  if tasks_in "$home" show "$id-r1" --full >/dev/null 2>&1; then
+    fail "round one survived pruning instead of moving to the archive"
+  fi
+  assert_grep "$id-r1" "$archive" "pruning did not move the answered round into the configured archive"
+  run_captain "$home" complete "$id" "$id-r1" "$id-r2" "$id-r3" >/dev/null \
+    || fail "completion refused an inventory whose answered rounds were pruned into the archive"
+  run_captain "$home" verify "$id" >/dev/null \
+    || fail "verify refused the pruned answered rounds after completion"
+  if run_captain "$home" complete "$id" "$id-r1" "$id-r2" "$id-r3" sample-plain-work \
+    > "$home/plain.out" 2> "$home/plain.err"; then
+    fail "completion accepted an archived task that was never a captain call"
+  fi
+  if run_captain "$home" complete "$id" "$id-r1" "$id-r2" "$id-r3" sample-unknown-round \
+    > "$home/unknown.out" 2> "$home/unknown.err"; then
+    fail "completion accepted an inventory entry that never existed"
+  fi
+  rc=0
+  run_captain "$home" verify "$id" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || fail "a refused completion broke the attested pruned inventory"
+  pass "completion attests answered rounds pruned into the configured archive and refuses the rest"
+}
+
 test_pr_merge_entrypoint_refuses_a_captain_held_task() {
   local home pr_id pr repo wt rc
   home=$(make_home held-merge-entrypoints)
@@ -4896,6 +4953,7 @@ test_relocated_report_does_not_wedge_an_answer_before_replay
 test_teardown_retains_captain_calls_in_a_relocated_backlog
 test_teardown_retains_a_gerrit_captain_call_with_its_change_url
 test_merge_approval_releases_before_zero_done_retention
+test_complete_accepts_pruned_answered_rounds
 test_pr_merge_entrypoint_refuses_a_captain_held_task
 test_local_merge_entrypoint_refuses_a_captain_held_task
 test_pr_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one
