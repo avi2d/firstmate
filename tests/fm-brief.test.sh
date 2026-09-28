@@ -1395,6 +1395,28 @@ test_crewmate_scaffolds_forbid_pool_administration() {
   pass "fm-brief.sh: every crewmate scaffold forbids administering the shared worktree pool"
 }
 
+# A fixed scratch name under /tmp is shared with every concurrent worker.
+test_ship_and_scout_name_the_per_task_scratch_root() {
+  local home id brief
+  home="$TMP_ROOT/scratch-root-home"
+  mkdir -p "$home/data"
+  id="brief-scratch-ship"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "ship brief was not scaffolded"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Keep every scratch file, including any file holding a no-mistakes intent, under `/tmp/fm-'"$id"'/` and never under a fixed name in `/tmp`.' "$brief" \
+    "ship brief did not pin scratch to the task's own temp root"
+  id="brief-scratch-scout"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Keep every scratch file, including any file holding a no-mistakes intent, under `/tmp/fm-'"$id"'/` and never under a fixed name in `/tmp`.' "$brief" \
+    "scout brief did not pin scratch to the task's own temp root"
+  pass "fm-brief.sh: ship and scout briefs pin scratch to /tmp/fm-<id>/"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1431,3 +1453,4 @@ test_branch_prefix_is_refused_where_it_does_not_apply
 test_branch_prefix_value_is_validated
 test_branch_prefix_command_is_shell_safe
 test_crewmate_scaffolds_forbid_pool_administration
+test_ship_and_scout_name_the_per_task_scratch_root
