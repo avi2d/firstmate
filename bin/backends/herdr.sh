@@ -396,7 +396,9 @@ fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
   # The long-lived `server` launch is exec'd straight through: buffering its
   # stderr would hold this call open for the server's whole lifetime.
   if [ "${1:-}" = server ]; then
-    HERDR_SESSION="$session" "$client_bin" "$@" --session "$session"
+    # macOS has no setsid(1); perl POSIX detaches on both.
+    HERDR_SESSION="$session" perl -MPOSIX=setsid -e 'setsid() >= 0 or exit 1; exec @ARGV' \
+      "$client_bin" "$@" --session "$session"
     return $?
   fi
   failed_bin=$client_bin
