@@ -62,7 +62,14 @@ while IFS= read -r rel; do
   esac
   source_present=$(fm_config_source_present "$source") || exit 1
   if [ "$source_present" = 1 ]; then
-    [ -f "$source" ] && [ ! -L "$source" ] || die "inherited source is unsafe: $source"
+    # A config item may be the captain's own symlink into one source of truth
+    # (crew-dispatch.json into the skills repo); follow it to the target bytes.
+    # `-f` still refuses a link that does not resolve to a regular file.
+    if [ "$rel" = data/captain-shared.md ]; then
+      [ -f "$source" ] && [ ! -L "$source" ] || die "inherited source is unsafe: $source"
+    else
+      [ -f "$source" ] || die "inherited source is unsafe: $source"
+    fi
     [ "$(file_link_count "$source")" = 1 ] || die "inherited source is hardlinked: $source"
     if [ "$rel" = data/captain-shared.md ]; then
       if ! missing=$(shared_captain_header_valid "$source"); then

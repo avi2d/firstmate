@@ -66,8 +66,15 @@ mkdir -p "$PARENT" || die "cannot create inherited destination parent"
 PARENT_REAL=$(CDPATH='' cd -- "$PARENT" && pwd -P)
 case "$PARENT_REAL" in "$HOME_REAL/config"|"$HOME_REAL/data") ;; *) die "inherited destination escapes FM_HOME" ;; esac
 DEST="$PARENT_REAL/$(basename "$REL")"
-[ ! -L "$DEST" ] || die "inherited destination is a symlink"
-if [ -e "$DEST" ]; then
+DEST_IS_SYMLINK=0
+if [ -L "$DEST" ]; then
+  # A config item the second mate owns as its own symlink stays that mate's
+  # indirection; leave it untouched rather than write through or replace it.
+  case "$REL" in
+    config/*) DEST_IS_SYMLINK=1 ;;
+    *) die "inherited destination is a symlink" ;;
+  esac
+elif [ -e "$DEST" ]; then
   [ -f "$DEST" ] || die "inherited destination is not a regular file"
   [ "$(file_link_count "$DEST")" = 1 ] || die "inherited destination is hardlinked"
 fi
@@ -160,6 +167,10 @@ case "$COMMAND" in
     ACTUAL_HASH=$(sha256_file "$TMP") || die "cannot hash inherited material"
     [ "$ACTUAL_HASH" = "$EXPECTED_HASH" ] || die "inherited material digest does not match its commitment"
     commit_generation
+    if [ "$DEST_IS_SYMLINK" = 1 ]; then
+      printf 'unchanged: %s\n' "$REL"
+      exit 0
+    fi
     if [ -f "$DEST" ] && cmp -s "$TMP" "$DEST"; then
       [ "$REL" != data/captain-shared.md ] || chmod 444 "$DEST"
       printf 'unchanged: %s\n' "$REL"
@@ -180,6 +191,10 @@ case "$COMMAND" in
     rm -f -- "$EMPTY"
     [ "$EMPTY_HASH" = "$EXPECTED_HASH" ] || die "absent inheritance digest is not the empty payload"
     commit_generation
+    if [ "$DEST_IS_SYMLINK" = 1 ]; then
+      printf 'unchanged: %s\n' "$REL"
+      exit 0
+    fi
     if [ ! -e "$DEST" ]; then
       printf 'unchanged: %s\n' "$REL"
       exit 0
