@@ -814,6 +814,42 @@ EOF
   pass "context digest distinguishes ABSENT, empty-but-present, and populated files"
 }
 
+test_context_digest_unfiled_rulings() {
+  local rec root home fakebin out
+  rec=$(new_world unfiled-rulings)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  printf '%s\n' '- 2026-09-15: Force determinism: "write the program rather than a rule".' > "$home/data/captain.md"
+  mkdir -p "$home/projects/decisions/docs/adr"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "Unfiled rulings (decisions harvest)" "digest did not surface the uncited ruling"
+  assert_contains "$out" "2026-09-15" "unfiled ruling line lost its date"
+
+  cat > "$home/projects/decisions/docs/adr/0001-first.md" <<'EOF'
+# First
+
+Date: 2026-09-15
+
+## The captain's words
+
+> write the program rather than a rule
+EOF
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "Unfiled rulings" "digest listed a ruling its record cites"
+
+  rm -rf "$home/projects/decisions"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "Unfiled rulings" "digest mentioned rulings with no decisions clone"
+
+  pass "digest surfaces uncited rulings and stays silent once filed or when the clone is absent"
+}
+
 # --- lock refusal: read-only path --------------------------------------------
 
 test_lock_refusal_read_only_path() {
@@ -3015,6 +3051,7 @@ EOF
 }
 
 test_context_digest_absent_empty_present
+test_context_digest_unfiled_rulings
 test_lock_refusal_read_only_path
 test_lock_write_failure_read_only_path
 test_trace_context_effective_state_is_frozen_after_lock
