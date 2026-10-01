@@ -96,6 +96,24 @@ test_empty_records_list_everything() {
   pass "empty records directory lists every ruling"
 }
 
+test_corrected_paraphrase_quote_still_cites() {
+  fresh_world
+  write_captain \
+    '- 2026-09-21: Testing direction: "especially interested in mutation testing".' \
+    '- 2026-09-21: Career hub: "repo should be english first".'
+  write_record 0018-testing "2026-09-21" "i'm espacially interested in mutation testing and want to integrate them"
+
+  local out
+  out=$("$CHECK" --captain "$TMP_ROOT/home/data/captain.md" \
+    --decisions "$TMP_ROOT/home/projects/decisions") \
+    || fail "check failed on a corrected-paraphrase fixture"
+  assert_not_contains "$out" "Testing direction" "corrected paraphrase was listed as unfiled"
+  assert_contains "$out" "Career hub" "same-date uncited ruling was hidden"
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ] \
+    || fail "expected exactly one listed line, got: $out"
+  pass "corrected paraphrase cites while the same-date uncited ruling is listed"
+}
+
 test_absent_clone_and_absent_captain_stay_silent() {
   fresh_world
   write_captain '- 2026-09-15: Merge authority: "I merge green work myself".'
@@ -132,6 +150,7 @@ test_same_date_filed_stays_silent_and_unfiled_is_listed
 test_record_quote_of_bullet_counts_as_cited
 test_bullet_holding_the_record_quote_counts_as_cited
 test_source_record_without_words_cites_nothing
+test_corrected_paraphrase_quote_still_cites
 test_empty_records_list_everything
 test_absent_clone_and_absent_captain_stay_silent
 test_check_writes_nothing
