@@ -3380,6 +3380,40 @@ if [ "$KIND" = secondmate ] && [ "$FORCE" = "--force" ]; then
   cleanup_firstmate_home_children "$HOME_PATH" || exit $?
 fi
 
+# A failed preserve refuses cleanup: the board must not be discarded with the scratch copy.
+preserve_scout_lavish_boards() {  # <task-id>
+  local id=$1 reg="$STATE/procevent" source artifact dest name tmp use_export=0
+  [ -d "$reg" ] || return 0
+  if command -v lavish-axi >/dev/null 2>&1 && lavish-axi export --help >/dev/null 2>&1; then
+    use_export=1
+  fi
+  for source in "$reg"/*.source; do
+    [ -e "$source" ] || continue
+    grep -qxF 'adapter=lavish' "$source" || continue
+    grep -qxF "owner_task=$id" "$source" || continue
+    artifact=$(awk '/^argv:$/ { in_argv = 1; next } in_argv && ++n == 3 { print; exit }' "$source") \
+      || { echo "error: teardown refused: cannot read the Lavish board path from $source" >&2; return 1; }
+    [ -n "$artifact" ] || { echo "error: teardown refused: $source records no board path" >&2; return 1; }
+    name=${artifact##*/}
+    dest="$DATA/$id/$name"
+    mkdir -p "$DATA/$id" || { echo "error: teardown refused: cannot create $DATA/$id to preserve $artifact" >&2; return 1; }
+    tmp=$(umask 077; mktemp "$DATA/$id/.board.XXXXXX") || { echo "error: teardown refused: cannot stage the preserved board in $DATA/$id" >&2; return 1; }
+    if [ "$use_export" = 1 ]; then
+      if ! lavish-axi export "$artifact" --out "$tmp" >/dev/null; then
+        rm -f -- "$tmp"
+        echo "error: teardown refused: lavish-axi export failed to preserve $artifact" >&2
+        return 1
+      fi
+    elif ! cp -- "$artifact" "$tmp"; then
+      rm -f -- "$tmp"
+      echo "error: teardown refused: cannot copy $artifact to $dest" >&2
+      return 1
+    fi
+    mv -f -- "$tmp" "$dest" || { rm -f -- "$tmp"; echo "error: teardown refused: cannot place the preserved board at $dest" >&2; return 1; }
+    echo "preserved: $dest"
+  done
+}
+
 if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
   REPORT="$DATA/$ID/report.md"
   if [ ! -f "$REPORT" ]; then
@@ -3568,6 +3602,11 @@ fi
 # Fix 3 (see script header): sweep remote job workers abandoned by an already
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
+
+# Preserve every Lavish board this scout armed before the scratch copy returns.
+if [ "$KIND" = scout ]; then
+  preserve_scout_lavish_boards "$ID" || exit 1
+fi
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then

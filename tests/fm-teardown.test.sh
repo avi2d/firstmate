@@ -4424,3 +4424,135 @@ test_teardown_removes_retired_task_signal_markers_and_keeps_live_task() {
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_teardown_removes_retired_task_signal_markers_and_keeps_live_task
+
+# --- scout Lavish board preservation ----------------------------------------
+
+# Stand-in for lavish-axi so the test owns whether `export` exists and succeeds.
+install_lavish_mock() {  # <case-dir>
+  local case_dir=$1
+  cat > "$case_dir/fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = export ]; then
+  if [ "${FM_FAKE_LAVISH_NO_EXPORT:-0}" = 1 ]; then
+    echo "error: unknown command: export" >&2
+    exit 2
+  fi
+  if [ "${2:-}" = --help ]; then
+    exit 0
+  fi
+  if [ "${FM_FAKE_LAVISH_EXPORT_FAIL:-0}" = 1 ]; then
+    echo "error: export failed" >&2
+    exit 1
+  fi
+  src= dst=
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --out) dst=$2; shift 2 ;;
+      *) src=$1; shift ;;
+    esac
+  done
+  printf '%s\n' '<!-- exported -->' > "$dst"
+  cat -- "$src" >> "$dst"
+fi
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/lavish-axi"
+}
+
+# A scout whose board page is armed in the process-event registry and whose
+# scratch copy holds the page. Echoes the case dir.
+make_scout_board_case() {  # <name>
+  local name=$1 case_dir artifact
+  case_dir=$(make_case "$name")
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=firstmate:fm-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=scout" \
+    "mode=local-only" \
+    "spawn_gen=teardown-test-task-x1" \
+    "decisions_reviewed=1"
+  mkdir -p "$case_dir/data/task-x1" "$case_dir/state/procevent"
+  printf '# Report\n\nThe board compared the options.\n' > "$case_dir/data/task-x1/report.md"
+  printf 'done: report complete\n' > "$case_dir/state/task-x1.status"
+  artifact="$case_dir/wt/review.html"
+  printf '<h1>Board</h1>\n' > "$artifact"
+  cat > "$case_dir/state/procevent/lavish-review.source" <<EOF
+adapter=lavish
+kind=task-owned
+owner_task=task-x1
+argc=3
+argv:
+$ROOT/bin/fm-procevent-lavish.sh
+poll
+$artifact
+EOF
+  printf '%s\n' "$case_dir"
+}
+
+test_scout_board_is_preserved_via_export() {
+  local case_dir rc out
+  case_dir=$(make_scout_board_case board-export)
+  install_lavish_mock "$case_dir"
+  printf 'stale\n' > "$case_dir/data/task-x1/review.html"
+
+  set +e
+  out=$(run_teardown "$case_dir" 2> "$case_dir/stderr")
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "board-export: teardown should succeed and preserve the board"
+  assert_contains "$out" "preserved:" "board-export: teardown did not print what it preserved"
+  assert_present "$case_dir/data/task-x1/review.html" "board-export: board was not copied into data/task-x1"
+  assert_contains "$(cat "$case_dir/data/task-x1/review.html")" "<!-- exported -->" \
+    "board-export: teardown did not use lavish-axi export when available"
+  assert_contains "$(cat "$case_dir/data/task-x1/review.html")" "<h1>Board</h1>" \
+    "board-export: the preserved board lost its content"
+  assert_not_contains "$(cat "$case_dir/data/task-x1/review.html")" "stale" \
+    "board-export: the stale copy was not replaced"
+  pass "teardown preserves an armed scout board via lavish-axi export"
+}
+
+test_scout_board_falls_back_to_plain_copy() {
+  local case_dir rc
+  case_dir=$(make_scout_board_case board-copy)
+  install_lavish_mock "$case_dir"
+
+  set +e
+  FM_FAKE_LAVISH_NO_EXPORT=1 run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "board-copy: teardown should succeed without lavish-axi export"
+  assert_present "$case_dir/data/task-x1/review.html" "board-copy: board was not copied"
+  assert_contains "$(cat "$case_dir/data/task-x1/review.html")" "<h1>Board</h1>" \
+    "board-copy: the copied board lost its content"
+  assert_not_contains "$(cat "$case_dir/data/task-x1/review.html")" "<!-- exported -->" \
+    "board-copy: plain copy should not run the export path"
+  pass "teardown preserves an armed scout board with a plain copy when export is unavailable"
+}
+
+test_scout_board_copy_failure_refuses_cleanup() {
+  local case_dir rc
+  case_dir=$(make_scout_board_case board-fail)
+  install_lavish_mock "$case_dir"
+
+  set +e
+  FM_FAKE_LAVISH_EXPORT_FAIL=1 run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "board-fail: a board copy failure must stop cleanup"
+  assert_grep "teardown refused" "$case_dir/stderr" \
+    "board-fail: cleanup did not refuse with the copy failure"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "board-fail: cleanup proceeded past the failed preserve and removed the record"
+  pass "teardown refuses cleanup when the board copy fails"
+}
+
+test_scout_board_is_preserved_via_export
+test_scout_board_falls_back_to_plain_copy
+test_scout_board_copy_failure_refuses_cleanup
+
