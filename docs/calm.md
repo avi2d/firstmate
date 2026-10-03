@@ -28,6 +28,21 @@ Streaming text and the genuine reply that ends a response remain visible.
 
 ## Pi
 
+### Collapsed Firstmate rows
+
+Firstmate's own input rows render as one line each in every Pi primary, secondmate, and worker session, whether Calm is on or off.
+The line names the row's kind and a short identity, such as `[firstmate] watcher wake · FIRSTMATE WATCHER WAKE: signal: ...` or `[firstmate] launch brief · <task>`.
+The tools-expand key (`Ctrl+O` by default) expands every such row to its complete stock text, and a click on one row in fullscreen mode toggles that row alone.
+
+A row collapses only when it is a text-only user message that `bin/fm-operational-input.sh` classifies as current operational input, the bare-marker legacy away escalation, or exactly this session's own steering doorbell line from `bin/fm-task-inbox-lib.sh`.
+Anything else a person types, including text that quotes or resembles those forms, renders as an ordinary row.
+Tool calls and their failures, pending actions, assistant prose, and working, retry, and compaction state are never collapsed.
+
+The collapse changes presentation only.
+The message, model context, saved session, and exports keep the full text.
+Workers get the same rows from the per-task extension `bin/fm-spawn.sh` writes for every Pi worker.
+A secondmate gets them from its home's own Calm extension, which Pi loads with that home's other project extensions.
+
 ### Working boat
 
 While Calm is active and an agent run is under way, Calm hides Pi's built-in `Working...` row and shows a small two-row animated boat in its place.
@@ -78,6 +93,7 @@ It remains in the message, model context, session storage, and `/export` artifac
 
 The operational inputs Calm classifies remain ordinary user-role messages.
 Pi's transcript layout renders their complete rows at zero height.
+The steering doorbell is plain text a person could also type, so Calm leaves it at its [collapsed](#collapsed-firstmate-rows) line rather than hiding it.
 The session-start nudge remains on its existing non-displayed custom-message path.
 
 ### Queued Firstmate inputs on Pi
@@ -97,7 +113,7 @@ Calm's built-in wrappers preserve Pi's execution behavior.
 Input delivery, ordering, model context, session storage, diagnostics, and `/export` and `/share` operation remain unchanged.
 Every hidden Firstmate input remains available to the model and in serialized session data and exported artifacts.
 Legacy operational custom messages remain in session data and Pi's sidebar tree; depending on the Pi version, the main HTML transcript either omits them or includes them as rows hidden by default.
-Toggling Calm off restores ordinary rendering, and `Ctrl+O` expansion state is preserved.
+Toggling Calm off restores ordinary rendering with Firstmate's own rows [collapsed](#collapsed-firstmate-rows), and `Ctrl+O` expansion state is preserved.
 
 ### What stays visible on Pi
 
@@ -157,7 +173,7 @@ How Calm handles that shared slot depends on whether Calm was already on when th
 - [`configuration.md`](configuration.md#calm-preference-configcalm) owns the persisted preference file and resolution rules.
 - `.pi/extensions/lib/fm-calm-visibility.ts` owns the visibility policy.
 - `.claude/mods/firstmate-calm/lib/fm-calm-preservation.ts` owns the shared substantive mid-turn text rule, which Pi imports through its tracked symlink.
-- `.pi/extensions/lib/fm-calm-operational-user-layout.ts` owns the zero-height operational-user row adapter.
+- `.pi/extensions/lib/fm-calm-operational-user-layout.ts` owns the operational-user row adapter, its collapsed line, and its zero height under Calm.
 - `.pi/extensions/lib/fm-calm-pending-operational-layout.ts` owns the queued-row adapter and its session capability check.
 - `.pi/extensions/lib/fm-calm-working-ship.ts` owns Pi's animated working presentation over the sprite geometry both harnesses share in `.claude/mods/firstmate-calm/lib/fm-calm-working-ship-sprite.ts`.
 
@@ -165,6 +181,7 @@ How Calm handles that shared slot depends on whether Calm was already on when th
 
 ```sh
 tests/fm-calm-pi-extension.test.sh
+tests/fm-pi-operational-row-collapse.test.sh
 tests/fm-pi-branch-extension.test.sh
 tests/fm-pi-primary-types.test.sh
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh

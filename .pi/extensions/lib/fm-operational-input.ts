@@ -2,9 +2,11 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const firstmateBin = resolve(dirname(fileURLToPath(import.meta.url)), "../../../bin");
 const operationalInputScript =
-  process.env.FM_OPERATIONAL_INPUT_SCRIPT ||
-  resolve(dirname(fileURLToPath(import.meta.url)), "../../../bin/fm-operational-input.sh");
+  process.env.FM_OPERATIONAL_INPUT_SCRIPT || resolve(firstmateBin, "fm-operational-input.sh");
+const taskInboxLibrary =
+  process.env.FM_TASK_INBOX_LIB || resolve(firstmateBin, "fm-task-inbox-lib.sh");
 
 export const FIRSTMATE_CURRENT_OPERATIONAL_KINDS = [
   "session-start",
@@ -19,7 +21,7 @@ export const FIRSTMATE_CURRENT_OPERATIONAL_KINDS = [
 export type FirstmateCurrentOperationalKind =
   (typeof FIRSTMATE_CURRENT_OPERATIONAL_KINDS)[number];
 
-type OperationalInputCommand = "encode" | "classify" | "kind";
+type OperationalInputCommand = "encode" | "classify" | "kind" | "body";
 
 export function firstmateShellInvocation(
   script: string,
@@ -46,7 +48,7 @@ function operationalInputAnswer(
   stdout: string,
 ): string | undefined {
   if (status !== 0) return undefined;
-  return command === "classify" ? stdout.replace(/\n$/, "") : stdout;
+  return command === "classify" || command === "kind" ? stdout.replace(/\n$/, "") : stdout;
 }
 
 function runOperationalInputCommand(
@@ -122,18 +124,75 @@ export function classifyFirstmateCurrentOperationalText(
   return runOperationalInputCommand("kind", content);
 }
 
+export function firstmateOperationalInputBody(content: string): string | undefined {
+  return runOperationalInputCommand("body", content);
+}
+
 // The only legacy operational shape Calm presentation hides on top of the current
 // typed kinds. The broader `classify` legacy set stays out: its bare forms are text a
 // captain can type, so hiding them would hide real input.
 const LEGACY_CALM_OPERATIONAL_PREFIX = "\u2063Supervisor escalate (";
 
-// Single owner of "may Calm presentation hide this exact input?", shared by the
+function isFirstmateCurrentOperationalKind(
+  kind: string | undefined,
+): kind is FirstmateCurrentOperationalKind {
+  return (FIRSTMATE_CURRENT_OPERATIONAL_KINDS as readonly string[]).includes(kind ?? "");
+}
+
+export type FirstmateOperationalPresentation = {
+  kind: FirstmateCurrentOperationalKind;
+  body: string;
+};
+
+// Single owner of "is this exact input Firstmate's, for presentation?", shared by the
 // transcript-row and queued-row adapters so the two can never disagree about a message.
 // Text without the U+2063 marker answers here without spawning the classifier.
+function firstmateOperationalPresentationKind(
+  text: string,
+): FirstmateCurrentOperationalKind | undefined {
+  if (!text.includes("\u2063")) return undefined;
+  const kind = classifyFirstmateCurrentOperationalText(text);
+  if (isFirstmateCurrentOperationalKind(kind)) return kind;
+  return text.startsWith(LEGACY_CALM_OPERATIONAL_PREFIX) ? "away-supervisor" : undefined;
+}
+
 export function isFirstmateOperationalPresentationText(text: string): boolean {
-  if (!text.includes("\u2063")) return false;
-  return (
-    classifyFirstmateCurrentOperationalText(text) !== undefined ||
-    text.startsWith(LEGACY_CALM_OPERATIONAL_PREFIX)
-  );
+  return firstmateOperationalPresentationKind(text) !== undefined;
+}
+
+export function firstmateOperationalPresentation(
+  text: string,
+): FirstmateOperationalPresentation | undefined {
+  const kind = firstmateOperationalPresentationKind(text);
+  if (kind === undefined) return undefined;
+  return { kind, body: firstmateOperationalInputBody(text) ?? text.replace(/^\u2063/, "") };
+}
+
+let steeringDoorbell: { inbox: string; line: string | undefined } | undefined;
+
+// The exact doorbell line bin/fm-task-inbox-lib.sh rings into this process's own pane,
+// or undefined outside a Firstmate launch. FM_TASK_INBOX is fixed for a process's life.
+export function firstmateSteeringDoorbellLine(): string | undefined {
+  const inbox = process.env.FM_TASK_INBOX;
+  if (!inbox) return undefined;
+  if (steeringDoorbell?.inbox === inbox) return steeringDoorbell.line;
+  let line: string | undefined;
+  try {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        '. "$1" && fm_task_inbox_doorbell_line "$2/doorbell.msg"',
+        "fm-steering-doorbell",
+        taskInboxLibrary,
+        inbox,
+      ],
+      { encoding: "utf8" },
+    );
+    line = result.status === 0 && result.stdout ? result.stdout : undefined;
+  } catch {
+    line = undefined;
+  }
+  steeringDoorbell = { inbox, line };
+  return line;
 }

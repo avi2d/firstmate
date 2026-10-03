@@ -1562,6 +1562,7 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-turnend-guard.test.sh
       printf '%s\n' __script__:fm-sessionstart-nudge.test.sh
       printf '%s\n' __script__:fm-pi-primary-types.test.sh
+      printf '%s\n' __script__:fm-pi-operational-row-collapse.test.sh
       printf '%s\n' live-harness-optin
       ;;
     .claude/mods/firstmate-calm/*|.pi/extensions/lib/fm-calm-working-ship.ts|\

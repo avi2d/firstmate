@@ -356,8 +356,9 @@
 #                  every other harness)
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
-#     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
-#                  written by this script; outside the worktree to avoid pi's trust gate)
+#     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi busy-state, turn-end, and
+#                  operational-row presentation extension, written by this script;
+#                  outside the worktree to avoid pi's trust gate)
 #     __PITURNEND__ absolute path to .pi/extensions/fm-primary-turnend-guard.ts in a pi secondmate home
 #     __PIWATCH__   absolute path to .pi/extensions/fm-primary-pi-watch.ts in a pi secondmate home
 #     __OMPBIN__   quoted concrete omp executable path resolved from PATH
@@ -4624,7 +4625,7 @@ const busyEvent = (state: string, event: string) =>
       "--gen", "$BUSY_GEN", "--source", "pi-ext", "--event", event,
     ], () => resolve());
   });
-export default function (pi: any) {
+export default async function (pi: any) {
   pi.on("agent_start", () => busyEvent("busy", "agent-start"));
   pi.on("agent_settled", (_event: any, ctx: any) => {
     if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
@@ -4642,6 +4643,17 @@ export default function (pi: any) {
       "progress", "$STATE_REAL", "$ID", "--gen", "$BUSY_GEN",
     ]);
   });
+  // Imported last and guarded, so busy-state reporting never depends on the
+  // presentation module that collapses the launch brief and doorbell rows.
+  try {
+    const rows = await import("$FM_ROOT/.pi/extensions/lib/fm-calm-operational-user-layout.ts");
+    rows.installCalmOperationalUserLayout();
+    pi.on("session_start", (_event: any, ctx: any) => {
+      if (ctx?.ui?.theme) rows.bindOperationalRowTheme(ctx.ui.theme);
+    });
+  } catch (error) {
+    console.error("Firstmate: operational-row presentation unavailable, skipping. " + error);
+  }
 }
 EOF
     ;;

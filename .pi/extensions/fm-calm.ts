@@ -48,7 +48,10 @@ import {
 import { Box, Container, getKeybindings, type Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { installCalmAssistantLayout } from "./lib/fm-calm-assistant-layout.ts";
-import { installCalmOperationalUserLayout } from "./lib/fm-calm-operational-user-layout.ts";
+import {
+  bindOperationalRowTheme,
+  installCalmOperationalUserLayout,
+} from "./lib/fm-calm-operational-user-layout.ts";
 import {
   installCalmPendingOperationalLayout,
   refreshCalmPendingOperationalRows,
@@ -425,6 +428,7 @@ export default function (pi: ExtensionAPI) {
     // A genuine new session lifetime starts the boat at the normal initial position.
     workingShipAnimation.reset();
     applyWorkingPresentation(ctx.ui, true);
+    bindOperationalRowTheme(ctx.ui.theme);
     ctx.ui.setHiddenThinkingLabel(calmPresentationIsActive() ? "" : undefined);
     ctx.ui.setStatus("firstmate-calm", undefined);
     removeTerminalInputHandler?.();
