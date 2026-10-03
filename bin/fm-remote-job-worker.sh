@@ -1187,6 +1187,11 @@ main() {
   WORKER_ACTIVITY=1
   while :; do
     if [ "$SECONDS" -ne "$next_heartbeat" ]; then
+      # Only the lock owner may keep advertising readiness; a replacement that
+      # took the lock means this child retires instead of racing it for jobs.
+      if ! worker_shutdown_owns_lock; then
+        worker_exit_lost_lock
+      fi
       worker_write_heartbeat || { worker_error "cannot update worker heartbeat"; exit 1; }
       next_heartbeat=$SECONDS
     fi

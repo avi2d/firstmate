@@ -29,6 +29,8 @@ QUIET_WORKER_PID=
 SCAN_LANE_PID=
 DUP_OWNER_PID=
 DUP_TOUCHER_PID=
+OUSTED_PID=
+TAKER_PID=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # worker.pid records the serving child, not its restart supervisor, so stopping
 # that pid alone leaves the supervisor to respawn - the leak
@@ -44,6 +46,8 @@ cleanup_remote_job_fixture() {
   [ -z "$SCAN_LANE_PID" ] || kill -KILL "$SCAN_LANE_PID" 2>/dev/null || true
   [ -z "$DUP_OWNER_PID" ] || kill "$DUP_OWNER_PID" 2>/dev/null || true
   [ -z "$DUP_TOUCHER_PID" ] || kill "$DUP_TOUCHER_PID" 2>/dev/null || true
+  [ -z "$OUSTED_PID" ] || kill -KILL "$OUSTED_PID" 2>/dev/null || true
+  [ -z "$TAKER_PID" ] || kill -KILL "$TAKER_PID" 2>/dev/null || true
   local stall_pid
   for stall_pid in "$STALL_WORKER_PID" "$STALL_REPLACEMENT_PID"; do
     [ -n "$stall_pid" ] || continue
@@ -859,30 +863,21 @@ done
   || fail "the ownership-loss worker did not stop"
 rm -rf -- "$LOST_STATE/worker.lock"
 kill -CONT "$LOST_TERM_PID"
-LOST_READY_BEFORE=$(file_inode "$LOST_STATE/worker.ready")
-for _ in $(seq 1 100); do
-  LOST_READY_AFTER=$(file_inode "$LOST_STATE/worker.ready")
-  [ -n "$LOST_READY_AFTER" ] && [ "$LOST_READY_AFTER" != "$LOST_READY_BEFORE" ] && break
-  sleep 0.05
-done
-[ -n "${LOST_READY_AFTER:-}" ] && [ "$LOST_READY_AFTER" != "$LOST_READY_BEFORE" ] \
-  || fail "a worker with no ownership lock stopped publishing heartbeats before TERM"
-assert_absent "$LOST_STATE/worker.lock" "the ownership lock reappeared before TERM"
-kill -TERM "$LOST_TERM_PID"
 for _ in $(seq 1 100); do
   kill -0 "$LOST_TERM_PID" 2>/dev/null || break
   sleep 0.05
 done
 if kill -0 "$LOST_TERM_PID" 2>/dev/null; then
-  fail "TERM after ownership loss left the serving worker alive"
+  fail "a worker with no ownership lock kept serving without a TERM"
 fi
 wait "$LOST_TERM_PID" 2>/dev/null || true
 LOST_TERM_PID=
+assert_absent "$LOST_STATE/worker.lock" "the ownership lock reappeared after the worker retired"
 LOST_READY_SETTLED=$(file_inode "$LOST_STATE/worker.ready")
 sleep 0.3
 [ "$(file_inode "$LOST_STATE/worker.ready")" = "$LOST_READY_SETTLED" ] \
-  || fail "a worker that lost ownership kept replacing its heartbeat after TERM"
-pass "TERM after ownership loss stops the serving worker"
+  || fail "a worker that lost ownership kept replacing its heartbeat after retiring"
+pass "a worker with no ownership lock retires on its own instead of waiting for TERM"
 
 HOLD_STARTED="$TMP_ROOT/hold-started"
 HOLD_SIDE_EFFECT="$TMP_ROOT/hold-side-effect"
@@ -1548,5 +1543,69 @@ expect_code 0 "$DUP_RC" "a serve child with an unmatched live lock owner"
 assert_no_grep "cannot acquire" "$TMP_ROOT/dup-worker.err" \
   "a serve child with an unmatched live lock owner reported cannot-acquire instead of retiring"
 pass "a serve child retires rather than spinning when a live lock owner cannot be matched"
+
+# An already-serving child whose lock is taken by a second process must notice
+# on its next pass and retire through the lost-lock path, not keep serving and
+# racing the replacement on .claim - the other half of the duplicate-worker
+# storm. The serve loop re-checks ownership at each heartbeat.
+OUSTED_HOME="$TMP_ROOT/ousted-account"
+OUSTED_STATE="$TMP_ROOT/ousted-jobs"
+mkdir -p "$OUSTED_HOME"
+chmod 700 "$OUSTED_HOME"
+HOME="$OUSTED_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$OUSTED_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/ousted.out" 2> "$TMP_ROOT/ousted.err" &
+OUSTED_PID=$!
+for _ in $(seq 1 300); do
+  [ -f "$OUSTED_STATE/worker.lock/pid" ] && break
+  sleep 0.05
+done
+assert_present "$OUSTED_STATE/worker.lock/pid" "the ousted worker did not publish its lock"
+[ "$(cat "$OUSTED_STATE/worker.lock/pid")" = "$OUSTED_PID" ] \
+  || fail "the ousted worker's lock did not name its serve child"
+kill -STOP "$OUSTED_PID"
+for _ in $(seq 1 100); do
+  [ "$(ps -o state= -p "$OUSTED_PID" 2>/dev/null | cut -c1)" = T ] && break
+  sleep 0.05
+done
+[ "$(ps -o state= -p "$OUSTED_PID" 2>/dev/null | cut -c1)" = T ] \
+  || fail "the ousted worker did not stop"
+rm -rf -- "$OUSTED_STATE/worker.lock"
+HOME="$OUSTED_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$OUSTED_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/ousted-taker.out" 2> "$TMP_ROOT/ousted-taker.err" &
+TAKER_PID=$!
+for _ in $(seq 1 300); do
+  [ -f "$OUSTED_STATE/worker.lock/pid" ] && [ "$(cat "$OUSTED_STATE/worker.lock/pid")" = "$TAKER_PID" ] && break
+  sleep 0.05
+done
+[ "$(cat "$OUSTED_STATE/worker.lock/pid" 2>/dev/null || true)" = "$TAKER_PID" ] \
+  || fail "the replacement worker did not take ownership"
+kill -CONT "$OUSTED_PID"
+for _ in $(seq 1 300); do
+  kill -0 "$OUSTED_PID" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$OUSTED_PID" 2>/dev/null; then
+  fail "a serving worker kept running after another process took its lock"
+fi
+wait "$OUSTED_PID" 2>/dev/null || true
+OUSTED_PID=
+kill -0 "$TAKER_PID" 2>/dev/null \
+  || fail "the replacement worker died when the ousted worker retired"
+[ "$(cat "$OUSTED_STATE/worker.lock/pid" 2>/dev/null || true)" = "$TAKER_PID" ] \
+  || fail "the ousted worker's retirement removed the replacement's lock"
+kill -TERM "$TAKER_PID"
+for _ in $(seq 1 100); do
+  kill -0 "$TAKER_PID" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$TAKER_PID" 2>/dev/null; then
+  fail "the replacement worker did not finish its own shutdown"
+fi
+wait "$TAKER_PID" 2>/dev/null || true
+TAKER_PID=
+assert_absent "$OUSTED_STATE/worker.lock" "the replacement's shutdown left its lock behind"
+pass "a serving worker retires when another process takes its lock"
 
 echo "ALL TESTS PASSED"
