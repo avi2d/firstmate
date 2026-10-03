@@ -1117,6 +1117,7 @@ crew_dispatch_validate() {
       | map("\(.h):\(.e)")
       | unique;
     if type != "object" then "top-level value must be an object"
+    elif has("array_order") and .array_order != "preference" then "array_order must be \"preference\" when present"
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"
@@ -1135,6 +1136,7 @@ crew_dispatch_validate() {
     elif [(.rules // [])[]? | select(has("select") and ((.select? | type) != "string" or (.select | length) == 0))] | length > 0 then "select must be a non-empty string"
     elif [(.rules // [])[]? | .select? // empty | select(. != "quota-balanced")] | length > 0 then
       "unknown select: " + ([ (.rules // [])[]? | .select? // empty | select(. != "quota-balanced") ] | unique | join(", "))
+    elif .array_order == "preference" and ([(.rules // [])[]? | select(has("select"))] | length > 0) then "select quota-balanced conflicts with array_order preference"
     elif has("default") and ((.default | type) != "object" and (.default | type) != "array") then "default must be a profile object or non-empty profile array"
     elif has("default") and ((.default | type) == "array" and (.default | length) == 0) then "default needs at least one profile"
     elif has("default") and ([profiles(.default)[]? | select(type != "object")] | length) > 0 then "each default profile must be an object"
@@ -1173,9 +1175,10 @@ crew_dispatch_validate() {
         (($selector // "quota-balanced") + "[" + ([$value[] | profile(.)] | join(", ")) + "]")
       else profile($value)
       end;
+    .array_order as $array_order |
     (["BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json"]
-      + [(.rules // [])[]? | "BOOTSTRAP_INFO: crew dispatch rule: " + (.when | tostring) + " -> " + profile_set(.use; .select?)]
-      + (if has("default") then ["BOOTSTRAP_INFO: crew dispatch default: " + profile_set(.default; null)] else [] end))
+      + [(.rules // [])[]? | "BOOTSTRAP_INFO: crew dispatch rule: " + (.when | tostring) + " -> " + profile_set(.use; .select? // $array_order)]
+      + (if has("default") then ["BOOTSTRAP_INFO: crew dispatch default: " + profile_set(.default; $array_order)] else [] end))
     | .[]
   ' "$file"
   fi

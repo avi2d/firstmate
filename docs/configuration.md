@@ -1018,6 +1018,7 @@ This section is the single owner of the canonical schema and its per-field seman
 
 ```json
 {
+  "array_order": "preference",
   "rules": [
     {
       "when": "<natural-language condition describing a kind of task>",
@@ -1041,10 +1042,18 @@ This section is the single owner of the canonical schema and its per-field seman
 | Field | Requirement |
 | --- | --- |
 | `rules` | May be absent or empty for a default-only configuration. |
+| Top-level `array_order` | Optional, with `"preference"` as its only value. Absence keeps `spendPriority` ranking (see "Array order" below). |
 | Rule `when` and `use` | Required for each rule. |
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
+
+**Array order**
+
+Without `array_order`, every profile array is ranked by `spendPriority` after the gates `quota-array-dispatch` owns.
+With `"array_order": "preference"`, every profile array, in rules and in `default`, is an ordered preference instead: the first candidate that passes those same gates against the current `quota-axi` output is chosen, and `spendPriority` does not rank the array.
+`quota-axi` still decides usability, so an `exhausted_now` or otherwise failing candidate is skipped to the next one, while unknown quota keeps a candidate eligible with disclosed uncertainty.
+Any other value is a configuration error, and so is a rule `select` in a file that declares `array_order`, because the two would disagree about how that rule's array is chosen.
 
 **Fields applied only by typed resolution**
 
@@ -1089,7 +1098,7 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 - Codex `max` is valid when the profile selects `gpt-5.6-luna`, whose installed catalog entry supports that reasoning level.
 - An omitted model or effort means the selected harness uses its own default for that axis.
 - OpenCode receives the effort as its default `build` agent's `variant`, keyed to the resolved model, inside the `OPENCODE_CONFIG_CONTENT` JSON its launch already writes (the per-model reasoning-effort field of the config schema, verified on opencode 1.18.32); with no model resolved, the effort is recorded in task metadata but omitted from the launch.
-- Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
+- Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`, in the order "Array order" above selects.
 - If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
 - Except for `ultra`, which refuses unsupported profiles under the native-effort contract above, an effort value the chosen harness does not accept is recorded as `effort=` in task meta for traceability but omitted from the launch flags.
 - Bootstrap reports unsupported harness/model/effort combinations as a `CREW_DISPATCH` diagnostic when they are visible in the file.
@@ -1100,7 +1109,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 
 - When the file exists, bootstrap validates it with `jq`.
 - Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
-- Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
+- Malformed JSON, malformed rules, an invalid `array_order`, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
 - While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those inert declarations preserve the pre-existing bootstrap behavior.
 - Missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 - While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
@@ -1167,7 +1176,7 @@ After the answer, code applies all remaining checks and ranking:
 - The confidence floor and the matched rule's `approval` and `floor`.
 - Each candidate's `provider` and `floor`.
 - Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
-- The numeric `spendPriority` argmax over candidates, using each candidate's limiting row.
+- The numeric `spendPriority` argmax over candidates, using each candidate's limiting row, or, when the file declares `array_order` preference, the first eligible candidate in array order.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
 
@@ -1190,6 +1199,8 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 
 - Any applicable `exhausted_now` row or known zero bound makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
 - Missing or nonnumeric `spendPriority` evidence is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
+- Under preference order, the first eligible candidate is chosen even when its quota is unknown, with that uncertainty printed as a note.
+  An unverifiable profile floor on it escalates instead, because the floor can be proven neither met nor missed.
 - On the opted-in path, duplicate concrete profiles with the same harness, model, and effort inside one rule or the default array are configuration errors rather than ties.
 
 **Outcomes and exit status**
@@ -1198,7 +1209,7 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 | --- | --- |
 | `clear` | A `profile:` line ready for `fm-spawn.sh`. |
 | `ambiguous` | Confidence below the floor with no runner-up taken. |
-| `escalate` | An approval-gated rule, unverifiable rule floor, nothing rankable, or a genuine tie. |
+| `escalate` | An approval-gated rule, unverifiable rule floor, nothing rankable, or a genuine tie. Under preference order, no eligible candidate or an unverifiable profile floor on the first eligible one. |
 | `error` | API, network, malformed response metadata, rendering, or quota-axi failure. |
 
 Every result above exits 0.

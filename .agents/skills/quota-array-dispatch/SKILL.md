@@ -3,7 +3,8 @@ name: quota-array-dispatch
 description: >-
   Agent-only decision procedure for resolving a matched crew-dispatch profile
   array from quota-axi's default TOON, ranking by spendPriority after three
-  orthogonal gates.
+  orthogonal gates, or taking the first candidate that passes them when the
+  dispatch file declares array_order preference.
   Load when a dispatch rule or default resolves to more than one profile candidate.
 user-invocable: false
 metadata:
@@ -60,6 +61,7 @@ For each candidate, preserve explicit `harness`, `model`, and `provider`; `harne
 Apply the three cheap orthogonal gates first.
 `spendPriority` ranks only among candidates that pass all three.
 It cannot override a hard-gate failure, and it is never hidden inside a new composite score.
+When `config/crew-dispatch.json` declares `"array_order": "preference"`, [ordered preference](#ordered-preference) replaces the ranking step for every array, and the gates stay exactly as written.
 
 ### 1. Eligibility
 
@@ -128,6 +130,21 @@ Do not read `aheadWindowIds`, `behindWindowIds`, `onPaceWindowIds`, `limitingWin
 Genuine ties: stop and report every tied candidate for captain choice.
 Do not select by array order, harness name, or another arbitrary identity ordering.
 Report duplicate concrete profiles as a configuration error.
+
+## Ordered preference
+
+This branch applies only when `config/crew-dispatch.json` declares `"array_order": "preference"`.
+[`docs/configuration.md`](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns that field.
+It covers every profile array, in rules and in `default`, and the ranking section above does not apply.
+
+Walk the candidates in array order through the three gates against the one intake snapshot, and choose the first that passes.
+`spendPriority` is still read and shown as evidence, but it neither ranks the array nor overrides the order.
+A candidate that fails a gate, such as an `exhausted_now` runway, a catalog that does not list the model, a proven-unusable credential, the wrong reasoning class, or known runway short of the completion horizon, is skipped to the next one with its reason recorded.
+Unknown quota, an unknown `spendPriority`, or unmeasurable runway keeps the candidate eligible, so it is chosen with that uncertainty stated rather than skipped.
+An explicit captain floor that cannot be verified for the first passing candidate is the one unknown that stops the walk: report it rather than choosing that candidate or skipping past it.
+Order settles every comparison, so there are no ties in this branch.
+If no candidate passes, stop and report every candidate with its failing gate.
+The duty to account for every candidate, including those after the chosen one, is unchanged.
 
 Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, `spendPriority`, and runway-versus-horizon result.
 A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
