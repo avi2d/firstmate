@@ -197,6 +197,9 @@ worker_acquire_lock() {
     rm -f -- "$WORKER_LOCK/pid" "$WORKER_LOCK/start" "$WORKER_LOCK/command" || return 1
     rmdir "$WORKER_LOCK" || return 1
   done
+  # A fresh heartbeat means a live owner is serving even when this contender
+  # could not match the recorded lock owner, so it must retire instead of spin.
+  if fm_remote_job_probe "$account_home"; then return 2; fi
   return 1
 }
 

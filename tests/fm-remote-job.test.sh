@@ -27,6 +27,8 @@ STALL_REPLACEMENT_PID=
 STALL_JOB_GROUP=
 QUIET_WORKER_PID=
 SCAN_LANE_PID=
+DUP_OWNER_PID=
+DUP_TOUCHER_PID=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # worker.pid records the serving child, not its restart supervisor, so stopping
 # that pid alone leaves the supervisor to respawn - the leak
@@ -40,6 +42,8 @@ cleanup_remote_job_fixture() {
   [ -z "$REPLACEMENT_OWNER_PID" ] || kill -KILL "$REPLACEMENT_OWNER_PID" 2>/dev/null || true
   [ -z "$QUIET_WORKER_PID" ] || kill -KILL "$QUIET_WORKER_PID" 2>/dev/null || true
   [ -z "$SCAN_LANE_PID" ] || kill -KILL "$SCAN_LANE_PID" 2>/dev/null || true
+  [ -z "$DUP_OWNER_PID" ] || kill "$DUP_OWNER_PID" 2>/dev/null || true
+  [ -z "$DUP_TOUCHER_PID" ] || kill "$DUP_TOUCHER_PID" 2>/dev/null || true
   local stall_pid
   for stall_pid in "$STALL_WORKER_PID" "$STALL_REPLACEMENT_PID"; do
     [ -n "$stall_pid" ] || continue
@@ -1508,5 +1512,41 @@ RESTART_SUPERVISOR_PID=
 assert_grep "remote job worker exited 3 times; stopping the supervisor" "$TMP_ROOT/restart-supervisor.err" \
   "the restart guard did not explain why it stopped"
 pass "barely healthy worker failures remain bounded by the restart guard"
+
+# A serve child that finds a live lock owner it cannot match must retire, not
+# spin to loop exhaustion and report cannot-acquire. The supervisor restarts a
+# failed child up to FM_REMOTE_JOB_SUPERVISOR_MAX_RESTARTS, so the old result
+# turned one duplicate start into minutes of competing workers (the winwsl
+# storm). A heartbeat that stays fresh past the loop window can only come from
+# a live owner, so the contender retires through the same path it uses when the
+# owner matches.
+DUP_HOME="$TMP_ROOT/dup-account"
+DUP_STATE="$TMP_ROOT/dup-state"
+mkdir -p "$DUP_HOME" "$DUP_STATE/worker.lock"
+sleep 600 &
+DUP_OWNER_PID=$!
+printf '%s\n' "$DUP_OWNER_PID" > "$DUP_STATE/worker.lock/pid"
+printf 'not the recorded start\n' > "$DUP_STATE/worker.lock/start"
+printf 'not the recorded command\n' > "$DUP_STATE/worker.lock/command"
+printf 'fresh\n' > "$DUP_STATE/worker.ready"
+( while :; do printf 'fresh\n' > "$DUP_STATE/worker.ready"; sleep 1; done ) &
+DUP_TOUCHER_PID=$!
+set +e
+HOME="$DUP_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$DUP_STATE" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/dup-worker.out" 2> "$TMP_ROOT/dup-worker.err"
+DUP_RC=$?
+set -e
+kill "$DUP_TOUCHER_PID" 2>/dev/null || true
+wait "$DUP_TOUCHER_PID" 2>/dev/null || true
+DUP_TOUCHER_PID=
+kill "$DUP_OWNER_PID" 2>/dev/null || true
+wait "$DUP_OWNER_PID" 2>/dev/null || true
+DUP_OWNER_PID=
+expect_code 0 "$DUP_RC" "a serve child with an unmatched live lock owner"
+assert_no_grep "cannot acquire" "$TMP_ROOT/dup-worker.err" \
+  "a serve child with an unmatched live lock owner reported cannot-acquire instead of retiring"
+pass "a serve child retires rather than spinning when a live lock owner cannot be matched"
 
 echo "ALL TESTS PASSED"
