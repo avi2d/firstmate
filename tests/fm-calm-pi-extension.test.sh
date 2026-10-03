@@ -310,7 +310,8 @@ test_pi_compat_missing_adapter_exports() {
   fixture="$TMP_ROOT/missing-adapter-exports"
   mkdir -p \
     "$fixture/project/.pi/extensions/lib" \
-    "$fixture/project/node_modules/@earendil-works/pi-coding-agent"
+    "$fixture/project/node_modules/@earendil-works/pi-coding-agent" \
+    "$fixture/project/node_modules/@earendil-works/pi-tui"
   cp "$ASSISTANT_LAYOUT" "$fixture/project/.pi/extensions/lib/fm-calm-assistant-layout.ts"
   cp "$PRESERVATION" "$fixture/project/.pi/extensions/lib/fm-calm-preservation.ts"
   cp "$OPERATIONAL_USER_LAYOUT" "$fixture/project/.pi/extensions/lib/fm-calm-operational-user-layout.ts"
@@ -327,6 +328,13 @@ test_pi_compat_missing_adapter_exports() {
     'export function getMarkdownTheme() { return {}; }' \
     'export class UserMessageComponent {}' \
     >"$fixture/project/node_modules/@earendil-works/pi-coding-agent/index.js"
+  printf '%s\n' \
+    '{"name":"@earendil-works/pi-tui","type":"module","exports":"./index.js"}' \
+    >"$fixture/project/node_modules/@earendil-works/pi-tui/package.json"
+  printf '%s\n' \
+    'export function truncateToWidth(text) { return text; }' \
+    'export function visibleWidth(text) { return text.length; }' \
+    >"$fixture/project/node_modules/@earendil-works/pi-tui/index.js"
 
   out=$(cd "$fixture/project" && node --input-type=module 2>&1 <<'JS'
 const assistant = await import("./.pi/extensions/lib/fm-calm-assistant-layout.ts");
@@ -1210,10 +1218,20 @@ InteractiveMode.prototype.addMessageToChat.call(
 const operationalComponent = operationalChat.children[1];
 const legacyOperationalComponent = operationalChat.children[2];
 const stockOperationalComponent = new UserMessageComponent(watcherMessage, undefined, 1);
-const expectedCalmOffOperationalRows = ["", ...stockOperationalComponent.render(100)];
-if (JSON.stringify(operationalComponent.render(100)) !== JSON.stringify(expectedCalmOffOperationalRows)) {
-  throw new Error("Calm-off operational user rendering changed from Pi stock rows");
+const expandedCalmOffOperationalRows = ["", ...stockOperationalComponent.render(100)];
+const expectedCalmOffOperationalRows = operationalComponent.render(100);
+if (
+  expectedCalmOffOperationalRows.length !== 2 ||
+  expectedCalmOffOperationalRows[0] !== "" ||
+  !expectedCalmOffOperationalRows[1].includes("[firstmate] watcher wake")
+) {
+  throw new Error("Calm-off operational user row did not collapse to its spacer and one summary line");
 }
+operationalComponent.setExpanded(true);
+if (JSON.stringify(operationalComponent.render(100)) !== JSON.stringify(expandedCalmOffOperationalRows)) {
+  throw new Error("expanded Calm-off operational user rendering changed from Pi stock rows");
+}
+operationalComponent.setExpanded(false);
 if (operationalHistory.length !== 1 || operationalHistory[0] !== watcherMessage) {
   throw new Error("operational user presentation changed Pi input history behavior");
 }
@@ -1635,7 +1653,7 @@ if (
   throw new Error("turning Calm off did not restore a legacy synthetic presentation row");
 }
 if (JSON.stringify(operationalComponent.render(100)) !== JSON.stringify(expectedCalmOffOperationalRows)) {
-  throw new Error("turning Calm off did not restore byte-identical operational user rows and spacing");
+  throw new Error("turning Calm off did not restore byte-identical collapsed operational user rows and spacing");
 }
 if (!legacyOperationalComponent.render(100).join("\n").includes("legacy presentation compatibility")) {
   throw new Error("turning Calm off did not restore the supported legacy operational row");
