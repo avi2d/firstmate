@@ -752,6 +752,69 @@ assert_contains "$out" '  reason: no rankable eligible candidate' "no-candidate 
 assert_contains "$out" '-> not eligible: runway exhausted_now' "exhausted candidates keep their reason"
 pass "no rankable candidate: the tool escalates instead of guessing"
 
+# --- array_order preference: first candidate passing the gates wins ------------
+PREFERENCE_RULES="$TMP_ROOT/preference-rules.json"
+jq '. + {array_order: "preference"}' "$BASE_RULES" > "$PREFERENCE_RULES"
+cp "$PREFERENCE_RULES" "$RULES"
+
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+expect_code 0 "$code" "preference order exits 0"
+assert_contains "$out" '  status: clear' "a usable first candidate resolves"
+assert_contains "$out" '  array_order: preference (first eligible candidate in array order)' "the ordering mode is printed"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "the usable first candidate wins despite a lower spendPriority than cursor"
+assert_contains "$out" 'candidate: cursor:cursor-grok-4.6-medium  provider=cursor  scope=all_models  remaining=91%  spendPriority=0.7597' "later candidates stay accounted for"
+assert_not_contains "$out" 'unranked (kimi)' "a candidate after the chosen one raises no uncertainty note"
+
+reset_log
+CLAUDE_EXHAUSTED="$TMP_ROOT/claude-exhausted.json"
+jq '(.providers[] | select(.provider == "claude") | .quotaSemantics.effectiveAvailability[]) |= (.effectivePercentRemaining = 0 | .runway.status = "exhausted_now")' "$QUOTA" > "$CLAUDE_EXHAUSTED"
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$CLAUDE_EXHAUSTED" run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "an exhausted first candidate falls to the next"
+assert_contains "$out" 'candidate: claude:sonnet  provider=claude  scope=all_models  remaining=0%' "the exhausted first candidate keeps its evidence"
+assert_contains "$out" '-> not eligible: runway exhausted_now at all_models' "the exhausted first candidate is named ineligible"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the second candidate is chosen"
+
+reset_log
+KIMI_FIRST="$TMP_ROOT/kimi-first-rules.json"
+jq '.rules[3].use |= [.[2], .[0], .[1]]' "$PREFERENCE_RULES" > "$KIMI_FIRST"
+cp "$KIMI_FIRST" "$RULES"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "an unmeasured first candidate stays eligible"
+assert_contains "$out" "  profile: --harness 'kimi' --model 'kimi-code/k3'" "unknown quota does not skip the preferred candidate"
+assert_contains "$out" 'candidate: kimi:kimi-code/k3  provider=kimi  -> eligible, uncertain: provider kimi unmeasured (unknown): disclosed uncertainty' "the uncertainty is disclosed on the candidate"
+assert_contains "$out" '  note: chosen candidate quota uncertain: provider kimi unmeasured (unknown)' "the uncertainty is disclosed on the choice"
+
+reset_log
+FLOOR_FIRST="$TMP_ROOT/floor-first-rules.json"
+jq '.rules[3].use[0].floor = {scope: "model:sonnet", min_percent: 10}' "$PREFERENCE_RULES" > "$FLOOR_FIRST"
+cp "$FLOOR_FIRST" "$RULES"
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" '  status: escalate' "an unverifiable floor on the preferred candidate escalates"
+assert_contains "$out" '  reason: preferred candidate claude:sonnet profile floor model:sonnet is unverifiable' "the unverifiable floor is named"
+assert_not_contains "$out" '  profile:' "an unverifiable floor neither picks nor skips the preferred candidate"
+
+reset_log
+cp "$PREFERENCE_RULES" "$RULES"
+write_response "$RESPONSE" default 0.88
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$NONE" run code out err "$BRIEF"
+assert_contains "$out" '  status: escalate' "no eligible preferred candidate escalates"
+assert_contains "$out" '  reason: no eligible candidate in preference order' "the empty preference walk is named"
+
+reset_log
+TYPESAFE_API_KEY=$KEY QUOTA_AXI_FIXTURE="$TIE" run code out err "$BRIEF"
+assert_contains "$out" '  status: clear' "equal spendPriority is no tie under preference order"
+assert_contains "$out" "  profile: --harness 'claude' --model 'opus'" "the default array is ordered too"
+
+reset_log
+cp "$BASE_RULES" "$RULES"
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "without array_order the spendPriority argmax still ranks"
+assert_not_contains "$out" 'array_order' "without array_order no ordering line is printed"
+pass "array_order preference: the first candidate passing the gates wins, and its absence keeps the spendPriority ranking"
+
 # --- schema 6: rows keyed by provider + accountKey bind per account ----------------
 # quota-axi emits schema 6 once a provider expands to several accounts; every
 # row then carries accountKey and one provider id may appear on several rows.
@@ -979,6 +1042,9 @@ assert_contains "$err" 'not JSON' "non-JSON rules is named"
 for bad in \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"approval":"firstmate"}]}|approval must be "captain" when present' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"select":"mystery"}]}|unknown select: mystery' \
+  '{"array_order":"spend","rules":[{"when":"x","use":{"harness":"claude"}}]}|array_order must be "preference" when present' \
+  '{"array_order":true,"rules":[{"when":"x","use":{"harness":"claude"}}]}|array_order must be "preference" when present' \
+  '{"array_order":"preference","rules":[{"when":"x","use":[{"harness":"claude"},{"harness":"codex"}],"select":"quota-balanced"}]}|select quota-balanced conflicts with array_order preference' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"min_confidence":"high"}]}|min_confidence must be a number from 0 through 1 when present' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"min_confidence":1.5}]}|min_confidence must be a number from 0 through 1 when present' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"floor":{"scope":"model:fable","min_percent":20}}]}|rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\z' \
