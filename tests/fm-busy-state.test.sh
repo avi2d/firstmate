@@ -56,6 +56,39 @@ test_apply_advances_seq_and_source() {
   pass "apply advances seq under the armed gen and attributes the writing source"
 }
 
+test_provider_limit_is_a_bounded_pause_and_busy_clears_it() {
+  local state gen out future past
+  state=$(new_state_dir provider-limit)
+  gen=$("$EV" arm "$state" t1)
+  future=$(( $(date +%s) + 3600 ))
+  "$EV" apply "$state" t1 idle --gen "$gen" --source pi-ext --event provider-limit \
+    --reset-epoch "$future" || fail "provider-limit event was refused"
+  out=$(fm_busy_classify tmux w1 pi t1 "$state")
+  [ "$out" = "paused pi-ext" ] || fail "provider-limit stop should classify as a declared wait, got '$out'"
+  "$EV" apply "$state" t1 idle --gen "$gen" --source pi-ext --event provider-limit \
+    || fail "provider-limit event without a reset was refused"
+  out=$(fm_busy_classify tmux w1 pi t1 "$state")
+  [ "$out" = "paused pi-ext" ] || fail "provider-limit without reset should use its bounded fallback, got '$out'"
+  sed 's/ts=[0-9][0-9]*/ts=1/' "$state/t1.busy-state" > "$state/t1.busy-state.old"
+  mv "$state/t1.busy-state.old" "$state/t1.busy-state"
+  out=$(fm_busy_classify tmux w1 pi t1 "$state")
+  [ "$out" = "idle pi-ext" ] || fail "provider-limit fallback should expire after 30 minutes, got '$out'"
+  "$EV" apply "$state" t1 idle --gen "$gen" --source pi-ext --event provider-limit \
+    --reset-epoch "$future" || fail "future provider-limit event was refused"
+  past=$(( $(date +%s) - 1 ))
+  "$EV" apply "$state" t1 idle --gen "$gen" --source pi-ext --event provider-limit \
+    --reset-epoch "$past" || fail "expired provider-limit event was refused"
+  out=$(fm_busy_classify tmux w1 pi t1 "$state")
+  [ "$out" = "idle pi-ext" ] || fail "expired reset should restore idle classification, got '$out'"
+  "$EV" apply "$state" t1 idle --gen "$gen" --source pi-ext --event provider-limit \
+    --reset-epoch "$future" || fail "second provider-limit event was refused"
+  "$EV" apply "$state" t1 busy --gen "$gen" --source pi-ext --event agent-start \
+    || fail "busy event after provider-limit was refused"
+  out=$(fm_busy_classify tmux w1 pi t1 "$state")
+  [ "$out" = "busy pi-ext" ] || fail "later busy event must clear the provider wait, got '$out'"
+  pass "provider-limit records pause through reset or a 30-minute fallback, then clear on later work"
+}
+
 test_apply_current_gen_reset() {
   local state out
   state=$(new_state_dir apply-current)
@@ -596,6 +629,7 @@ test_progress_is_generation_bound_and_not_semantic_state() {
 test_progress_is_generation_bound_and_not_semantic_state
 
 test_arm_seeds_busy_spawn
+test_provider_limit_is_a_bounded_pause_and_busy_clears_it
 test_apply_advances_seq_and_source
 test_apply_current_gen_reset
 test_apply_unarmed_refused

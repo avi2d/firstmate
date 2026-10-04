@@ -261,7 +261,7 @@ fm_busy_source_trusted() {  # <harness> <source>
 #   gen-mismatch a record from a stale incarnation
 fm_busy_record_read() {  # <state-dir> <id>
   local state=$1 id=$2 rec gen line extra ver f
-  local r_gen='' r_seq='' r_state='' r_source='' r_event='' r_ts=''
+  local r_gen='' r_seq='' r_state='' r_source='' r_event='' r_ts='' r_reset=0
   rec=$(fm_busy_record_path "$state" "$id")
   if [ ! -f "$rec" ]; then
     printf 'missing'
@@ -291,6 +291,7 @@ fm_busy_record_read() {  # <state-dir> <id>
       source=*) r_source=${f#source=} ;;
       event=*) r_event=${f#event=} ;;
       ts=*) r_ts=${f#ts=} ;;
+      reset=*) r_reset=${f#reset=} ;;
       *) printf 'malformed'; return 1 ;;
     esac
   done
@@ -299,12 +300,13 @@ fm_busy_record_read() {  # <state-dir> <id>
   fm_busy_token_valid "$r_event" || { printf 'malformed'; return 1; }
   case "$r_seq" in ''|*[!0-9]*) printf 'malformed'; return 1 ;; esac
   case "$r_ts" in ''|*[!0-9]*) printf 'malformed'; return 1 ;; esac
+  case "$r_reset" in ''|*[!0-9]*) printf 'malformed'; return 1 ;; esac
   case "$r_state" in busy|idle|unknown) : ;; *) printf 'malformed'; return 1 ;; esac
   if [ "$r_gen" != "$gen" ]; then
     printf 'gen-mismatch'
     return 1
   fi
-  printf '%s %s %s %s' "$r_state" "$r_source" "$r_event" "$r_seq"
+  printf '%s %s %s %s %s %s' "$r_state" "$r_source" "$r_event" "$r_seq" "$r_reset" "$r_ts"
 }
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1010,19 @@ fm_busy_launch_prompt_parked() {  # <harness>
   esac
 }
 
+fm_busy_provider_wait_until() {  # <state-dir> <id> -> active wait's clearing epoch
+  local record state source event seq reset ts until now
+  record=$(fm_busy_record_read "$1" "$2") || return 1
+  IFS=' ' read -r state source event seq reset ts <<EOF
+$record
+EOF
+  [ "$state" = idle ] && [ "$source" = pi-ext ] && [ "$event" = provider-limit ] || return 1
+  if [ "$reset" -gt 0 ]; then until=$reset; else until=$((ts + 1800)); fi
+  now=$(date +%s)
+  [ "$now" -lt "$until" ] || return 1
+  printf '%s' "$until"
+}
+
 # fm_busy_classify: semantic classification for a task whose endpoint the
 # caller has already established as present. Prints "<verdict> <source>":
 # busy|idle|unknown plus the producing source (see header). Never probes
@@ -1019,7 +1034,7 @@ fm_busy_launch_prompt_parked() {  # <harness>
 # at the fm-spawn seed keeps reading busy fm-spawn, unchanged.
 fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
   local backend=$1 target=$2 harness=$3 id=$4 state=$5 tail40=${6-}
-  local out rc r_state r_source native log
+  local out rc r_state r_source r_event native log provider_harness
   case "$harness" in
     kimi*)
       if ! fm_busy_kimi_verified; then
@@ -1057,8 +1072,17 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
     r_state=${out%% *}
     out=${out#* }
     r_source=${out%% *}
+    out=${out#* }
+    r_event=${out%% *}
     if fm_busy_source_trusted "$harness" "$r_source"; then
-      if [ "$r_state" = busy ] && [ "$r_source" = fm-spawn ] && [ -n "$tail40" ] \
+      case "$harness" in
+        pi|pi-signed) provider_harness=1 ;;
+        *) provider_harness=0 ;;
+      esac
+      if [ "$provider_harness" = 1 ] && [ "$r_event" = provider-limit ] && \
+        fm_busy_provider_wait_until "$state" "$id" >/dev/null; then
+        printf 'paused %s' "$r_source"
+      elif [ "$r_state" = busy ] && [ "$r_source" = fm-spawn ] && [ -n "$tail40" ] \
         && printf '%s' "$tail40" | fm_busy_launch_prompt_parked "$harness"; then
         printf 'unknown launch-prompt'
       else

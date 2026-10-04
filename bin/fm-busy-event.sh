@@ -44,7 +44,7 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   fm-busy-event.sh arm <state-dir> <id> [--state busy|idle|unknown] [--source S] [--event E]
-  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E
+  fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E [--reset-epoch EPOCH]
   fm-busy-event.sh progress <state-dir> <id> --gen G
   fm-busy-event.sh retire <state-dir> <id> (--gen G | --current-gen)
 See the header comment for the full contract.
@@ -74,6 +74,7 @@ GEN=
 USE_CURRENT_GEN=0
 SOURCE=
 EVENT=
+RESET_EPOCH=0
 if [ "$CMD" = apply ]; then
   NEW_STATE=${1:-}
   case "$NEW_STATE" in busy|idle|unknown) shift ;; *) usage ;; esac
@@ -89,6 +90,7 @@ while [ $# -gt 0 ]; do
     --current-gen) USE_CURRENT_GEN=1; shift ;;
     --source) SOURCE=${2:-}; shift 2 || usage ;;
     --event) EVENT=${2:-}; shift 2 || usage ;;
+    --reset-epoch) RESET_EPOCH=${2:-}; shift 2 || usage ;;
     *) usage ;;
   esac
 done
@@ -97,6 +99,11 @@ if [ "$CMD" = apply ] || [ "$CMD" = arm ]; then
   fm_busy_token_valid "$SOURCE" || { echo "error: invalid --source" >&2; exit 1; }
   fm_busy_token_valid "$EVENT" || { echo "error: invalid --event" >&2; exit 1; }
 fi
+case "$RESET_EPOCH" in ''|*[!0-9]*) echo "error: invalid --reset-epoch" >&2; exit 1 ;; esac
+if [ "$EVENT" = provider-limit ]; then
+  [ "$NEW_STATE" = idle ] && [ "$SOURCE" = pi-ext ] || usage
+fi
+[ "$RESET_EPOCH" = 0 ] || { [ "$EVENT" = provider-limit ] && [ "$NEW_STATE" = idle ] || usage; }
 
 [ "$CMD" != progress ] || [ "$USE_CURRENT_GEN" = 0 ] || usage
 
@@ -147,8 +154,8 @@ lock_release() { rmdir "$LOCK" 2>/dev/null || true; }
 write_record() {  # <gen> <seq>
   local tmp
   tmp="$REC.tmp.$$"
-  printf 'v1 gen=%s seq=%s state=%s source=%s event=%s ts=%s\n' \
-    "$1" "$2" "$NEW_STATE" "$SOURCE" "$EVENT" "$(date +%s)" > "$tmp" || return 1
+  printf 'v1 gen=%s seq=%s state=%s source=%s event=%s ts=%s reset=%s\n' \
+    "$1" "$2" "$NEW_STATE" "$SOURCE" "$EVENT" "$(date +%s)" "$RESET_EPOCH" > "$tmp" || return 1
   mv -f "$tmp" "$REC"
 }
 
