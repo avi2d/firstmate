@@ -429,6 +429,73 @@ EOF
 # closes while the watcher finishes durable cleanup. The still-open predecessor
 # must never be mistaken for the successor merely because its readiness promise
 # already settled.
+test_pi_actionable_closes_coalesce_until_consumed() {
+  local repo home plugin log stop out status
+  repo="$TMP_ROOT/pi-coalesced-wakes-root"
+  home="$TMP_ROOT/pi-coalesced-wakes-home"
+  log="$TMP_ROOT/pi-coalesced-wakes.log"
+  stop="$TMP_ROOT/pi-coalesced-wakes.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then
+  printf 'confirmed\n' >> "${FM_ARM_LOG:?}"
+  exit 0
+fi
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+if [ "$count" -le 3 ]; then
+  printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+  printf 'signal: synthetic actionable close %s\n' "$count"
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+const prompts = [];
+let tool = null;
+const pi = {
+  on(name, handler) { handlers.set(name, handler); },
+  registerCommand() {},
+  registerTool(candidate) { if (candidate.name === "fm_watch_arm_pi") tool = candidate; },
+  sendUserMessage: async (message) => { prompts.push(message); },
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-coalescing", {}, undefined, undefined, {});
+for (let i = 0; i < 500; i += 1) {
+  const rows = existsSync(process.env.FM_ARM_LOG) ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n") : [];
+  if (rows.filter((row) => row.startsWith("arm=")).length >= 4 && rows.filter((row) => row === "confirmed").length >= 3) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
+if (rows.filter((row) => row.startsWith("arm=")).length < 4) throw new Error(`three closes did not occur: ${rows.join(" | ")}`);
+if (prompts.length !== 1) throw new Error(`expected one queued follow-up, got ${prompts.length}`);
+await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "new" }, {});
+const handoff = `${process.env.FM_HOME}/state/extensions/pi-primary-watch/session-replacement-actionable.json`;
+const pending = JSON.parse(readFileSync(handoff, "utf8")).pending;
+if (pending.length !== 3) throw new Error(`expected all three closes in replacement handoff, got ${pending.length}`);
+handlers.get("before_agent_start")?.({ prompt: prompts[0] }, {});
+if (existsSync(handoff)) throw new Error(`consuming the follow-up did not settle all closes: ${readFileSync(handoff, "utf8")}`);
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi actionable closes must share one follow-up and settle together when consumed"
+  [ -z "$out" ] || fail "Pi coalesced-followups test printed output: $out"
+  pass "Pi actionable closes coalesce and settle together"
+}
+
 test_pi_actionable_output_waits_for_predecessor_close() {
   local repo home plugin log stop out status
   repo="$TMP_ROOT/pi-actionable-before-close-root"
@@ -2659,10 +2726,8 @@ for (let i = 0; i < 500; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 10));
 }
 if (rows().length !== 3) throw new Error(`late close did not restore one successor: ${rows().join(" | ")}`);
-if (process.env.FM_LATE_KIND === "actionable") {
-  if (prompts.length !== 2 || !prompts[1].includes("late wake")) throw new Error(`late actionable close was not delivered: ${prompts.join(" | ")}`);
-} else if (prompts.length !== 1) {
-  throw new Error(`late non-actionable close sent an extra wake: ${prompts.join(" | ")}`);
+if (prompts.length !== 1) {
+  throw new Error(`late close queued an extra follow-up: ${prompts.join(" | ")}`);
 }
 writeFileSync(process.env.FM_STOP_FILE, "stop\n");
 await new Promise((resolve) => setTimeout(resolve, 80));
@@ -3558,6 +3623,7 @@ streaming = true;
 writeFileSync(`${process.env.FM_TRIGGER_FILE}.1`, "close\n");
 await waitFor(() => prompts.length === 1, "first wake delivered while main streams");
 if (wakes("signal: streaming chain wake 1") !== 1) throw new Error(`wrong first wake: ${prompts.join(" | ")}`);
+consumeQueued(prompts[0]);
 await waitFor(() => arms() === 2, "successor after the streaming-time delivery");
 writeFileSync(`${process.env.FM_TRIGGER_FILE}.2`, "close\n");
 await waitFor(() => prompts.length === 2, "second wake delivered while main still streams");
@@ -3565,9 +3631,6 @@ if (wakes("signal: streaming chain wake 2") !== 1) throw new Error(`wrong second
 await waitFor(() => arms() === 3, "successor after the second streaming-time delivery");
 if (beforeAgentStarts !== 0) throw new Error(`streaming follow-ups raised before_agent_start ${beforeAgentStarts} times`);
 
-// The run reaches the first queued follow-up; the second is still queued when
-// the captain replaces the session, so only the second rides the handoff.
-consumeQueued(prompts[0]);
 await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "new" }, {});
 const handoffPath = `${process.env.FM_HOME}/state/extensions/pi-primary-watch/session-replacement-actionable.json`;
 const handoff = JSON.parse(readFileSync(handoffPath, "utf8"));
@@ -5186,6 +5249,7 @@ test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
 test_pi_actionable_close_starts_single_successor_before_delivery
+test_pi_actionable_closes_coalesce_until_consumed
 test_pi_actionable_output_waits_for_predecessor_close
 test_pi_branch_offer_owns_actionable_wake
 test_pi_branch_offer_flags_heartbeat
