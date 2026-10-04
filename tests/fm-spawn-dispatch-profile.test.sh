@@ -39,6 +39,7 @@ make_spawn_fakebin() {
   fakebin=$(fm_test_make_spawn_fakebin "$dir")
   cat > "$fakebin/timeout" <<'SH'
 #!/usr/bin/env bash
+while [ "${1:-}" = -k ]; do shift 2; done
 shift
 exec "$@"
 SH
@@ -135,6 +136,136 @@ assert_meta_profile() {
   assert_grep "harness=$harness" "$meta" "meta missing harness=$harness"
   assert_grep "model=$model" "$meta" "meta missing model=$model"
   assert_grep "effort=$effort" "$meta" "meta missing effort=$effort"
+}
+
+make_quota_axi_fixture() {
+  cat > "$FAKEBIN_DIR/quota-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) printf '%s\n' 'quota-axi 0.1.51' ;;
+  --json)
+    provider_reset=${FM_FAKE_QUOTA_RESET_JSON:-null}
+    weekly_reset=${FM_FAKE_QUOTA_WEEKLY_RESET_JSON:-'"2030-01-02T03:04:05Z"'}
+    monthly_reset=${FM_FAKE_QUOTA_MONTHLY_RESET_JSON:-'"2030-01-03T03:04:05Z"'}
+    limiting_ids=${FM_FAKE_QUOTA_LIMITING_IDS_JSON:-'["weekly"]'}
+    limiting_id=${FM_FAKE_QUOTA_LIMITING_ID_JSON:-'"weekly"'}
+    printf '{"schemaVersion":5,"providers":[{"provider":"codex","resetsAt":%s,"windows":[{"id":"weekly","percentRemaining":%s,"resetsAt":%s},{"id":"monthly","percentRemaining":8,"resetsAt":%s}],"quotaSemantics":{"status":"known","effectiveAvailability":[{"scope":"all_models","status":"known","effectivePercentRemaining":%s,"runway":{"status":"%s","limitingWindowId":%s},"limitingWindowIds":%s}]}}]}\n' "$provider_reset" "${FM_FAKE_QUOTA_REMAINING:-10}" "$weekly_reset" "$monthly_reset" "${FM_FAKE_QUOTA_REMAINING:-10}" "${FM_FAKE_QUOTA_RUNWAY:-through_reset}" "$limiting_id" "$limiting_ids" ;;
+esac
+SH
+  chmod +x "$FAKEBIN_DIR/quota-axi"
+}
+
+test_quota_gate_refuses_profile_below_floor_with_reset() {
+  local rec id out status
+  id=quota-floor-z1
+  rec=$(make_spawn_case quota-floor codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"default":{"harness":"codex","model":"gpt-5","floor":{"scope":"all_models","min_percent":20}}}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_quota_axi_fixture
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn below its matched profile floor should refuse: $out"
+  assert_contains "$out" 'below 20%' "quota refusal should name the configured floor"
+  assert_contains "$out" '2030-01-02T03:04:05Z' "quota refusal should name the reset time"
+  pass "quota gate refuses a matched profile below its floor and names the reset"
+}
+
+test_quota_gate_uses_strictest_matching_floor() {
+  local rec id out status
+  id=quota-strict-floor-z2
+  rec=$(make_spawn_case quota-strict-floor codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"rules":[{"when":"first","use":{"harness":"codex","model":"gpt-5","floor":{"scope":"all_models","min_percent":20}}},{"when":"second","use":{"harness":"codex","model":"gpt-5","floor":{"scope":"all_models","min_percent":30}}}]}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_quota_axi_fixture
+  FM_FAKE_QUOTA_REMAINING=25 out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn below the strictest matching floor should refuse"
+  assert_contains "$out" 'below 30%' "quota refusal should use the strictest matching floor"
+  pass "quota gate applies the strictest floor across matching profiles"
+}
+
+test_quota_gate_refuses_exhausted_now() {
+  local rec id out status
+  id=quota-exhausted-z3
+  rec=$(make_spawn_case quota-exhausted codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"default":{"harness":"codex","model":"gpt-5"}}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_quota_axi_fixture
+  out=$(FM_FAKE_QUOTA_RUNWAY=exhausted_now run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn with exhausted_now quota should refuse"
+  assert_contains "$out" 'quota exhausted now' "quota refusal should name exhaustion"
+  assert_contains "$out" '2030-01-02T03:04:05Z' "exhaustion refusal should name the reset time"
+
+  id=quota-exhausted-multiple-z8
+  rec=$(make_spawn_case quota-exhausted-multiple codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"default":{"harness":"codex","model":"gpt-5"}}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_quota_axi_fixture
+  out=$(FM_FAKE_QUOTA_RUNWAY=exhausted_now FM_FAKE_QUOTA_LIMITING_ID_JSON=null FM_FAKE_QUOTA_LIMITING_IDS_JSON='["weekly","monthly"]' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn with multiple exhausted windows should refuse"
+  assert_contains "$out" '2030-01-03T03:04:05Z' "quota refusal should name the latest reset among all limiting windows"
+  pass "quota gate refuses exhausted windows at their own reset, choosing the latest when several limit"
+}
+
+test_quota_gate_uses_the_named_clauth_account() {
+  local rec id out status
+  id=quota-cla-account-z6
+  rec=$(make_spawn_case quota-cla-account claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"default":{"harness":"claude","model":"sonnet","provider":"claude","claude_account":"work","floor":{"scope":"all_models","min_percent":20}}}' > "$HOME_DIR/config/crew-dispatch.json"
+  mkdir -p "$CASE_DIR/claude-work"
+  printf '%s\n' "work $CASE_DIR/claude-work" > "$HOME_DIR/config/claude-accounts"
+  cat > "$FAKEBIN_DIR/claude" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$FAKEBIN_DIR/claude"
+  cat > "$FAKEBIN_DIR/clauth" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"active_profile":"work","profiles":[{"name":"work","auth_status":"ok","fetch_status":"OK","stale":false,"windows":[{"label":"5h","utilization_pct":10},{"label":"7d","utilization_pct":95}]}]}'
+SH
+  chmod +x "$FAKEBIN_DIR/clauth"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness claude --model sonnet --claude-account work)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn below the named clauth account floor should refuse"
+  assert_contains "$out" 'below 20%' "quota gate should assess the named clauth account"
+  pass "quota gate uses the configured Claude account reading"
+}
+
+test_quota_gate_records_override_and_unmatched_skip() {
+  local rec id out status
+  id=quota-override-z4
+  rec=$(make_spawn_case quota-override codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"default":{"harness":"codex","model":"gpt-5","floor":{"scope":"all_models","min_percent":20}}}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_quota_axi_fixture
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5 --quota-override-reason 'usage feed misses purchased credits')
+  status=$?
+  expect_code 0 "$status" "explicit quota override should proceed: $out"
+  assert_grep 'quota_gate=overridden:usage feed misses purchased credits' "$HOME_DIR/state/$id.meta" "override reason must be recorded in task metadata"
+
+  id=quota-unmatched-z5
+  rec=$(make_spawn_case quota-unmatched codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"default":{"harness":"grok","model":"grok-4"}}' > "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  status=$?
+  expect_code 0 "$status" "unmatched profile should skip the quota gate: $out"
+  assert_contains "$out" 'quota gate skipped: no dispatch profile matches' "unmatched launch should explain the skip"
+  assert_grep 'quota_gate=skipped:no matching dispatch profile' "$HOME_DIR/state/$id.meta" "skip reason must be recorded in task metadata"
+
+  id=quota-config-absent-z7
+  rec=$(make_spawn_case quota-config-absent codex "$id")
+  read_case_record "$rec"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  status=$?
+  expect_code 0 "$status" "a missing dispatch config should skip the quota gate: $out"
+  assert_contains "$out" 'quota gate skipped: config/crew-dispatch.json is absent' "missing config should explain the skip"
+  assert_grep 'quota_gate=skipped:no dispatch profile file' "$HOME_DIR/state/$id.meta" "missing config skip must be recorded in task metadata"
+  pass "quota override is recorded, and unmatched or unconfigured launches explain and record their skips"
 }
 
 test_no_profile_keeps_claude_profile_defaults() {
@@ -1887,6 +2018,11 @@ test_non_claude_harness_ignores_claude_permission_mode() {
 
 test_worker_launch_delivers_role_scope
 test_no_profile_keeps_claude_profile_defaults
+test_quota_gate_refuses_profile_below_floor_with_reset
+test_quota_gate_uses_strictest_matching_floor
+test_quota_gate_refuses_exhausted_now
+test_quota_gate_uses_the_named_clauth_account
+test_quota_gate_records_override_and_unmatched_skip
 test_claude_launch_brief_publishes_record_doorbell
 test_claude_secondmate_launch_brief_publishes_into_its_own_home
 test_claude_spawn_refuses_when_the_brief_record_cannot_publish
