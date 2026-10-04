@@ -409,6 +409,14 @@ test_no_mistakes_dod_wording() {
     "no-mistakes DOD still states the --yes ban as a preference"
   assert_no_grep "no-mistakes refuses" "$brief" \
     "no-mistakes DOD must not claim the tool itself refuses --yes"
+  id="brief-wording-gerrit-b1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes --forge gerrit >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "After committing, immediately start" "$brief" "Gerrit no-mistakes DOD must start validation without a firstmate handoff"
+  assert_grep 'Pass `--skip push,pr,ci` on every `no-mistakes axi run`' "$brief" "Gerrit no-mistakes DOD must preserve its skipped publishing steps"
+  assert_grep 'ends at a ready branch' "$brief" "Gerrit no-mistakes DOD must preserve its ready-branch result"
+  assert_no_grep 'Firstmate will then instruct you to run /no-mistakes' "$brief" "Gerrit no-mistakes DOD still waits for a firstmate validation instruction"
+  assert_no_grep 'That first `done:` is the handoff' "$brief" "Gerrit no-mistakes DOD still reports committed work as done"
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
 }
 
