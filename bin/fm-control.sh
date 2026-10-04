@@ -76,6 +76,9 @@
 #              worker account pin (bin/fm-worker-account-lib.sh) here, so a pin
 #              that no longer resolves or is signed out refuses before the old
 #              agent stops.
+#              A recorded Claude account (claude_account=) follows a relaunch
+#              that keeps the same harness and model, under the same pre-stop
+#              sign-in check; any other profile relaunches without it.
 #              --note is required for a ship or scout, whose replacement
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
@@ -681,6 +684,7 @@ PRIOR_EFFORT=
 TARGET_HARNESS=$HARNESS
 TARGET_MODEL=
 TARGET_EFFORT=
+TARGET_CLAUDE_ACCOUNT=
 
 journal_write() {  # <phase> [extra-line]...
   local phase=$1
@@ -856,6 +860,15 @@ resolve_relaunch_profile() {
   # signed out must refuse here, while nothing has changed yet.
   local account_model=$TARGET_MODEL
   [ "$account_model" != default ] || account_model=
+  TARGET_CLAUDE_ACCOUNT=
+  if [ "$TARGET_HARNESS" = "$PRIOR_HARNESS" ] && [ "$TARGET_MODEL" = "$PRIOR_MODEL" ]; then
+    TARGET_CLAUDE_ACCOUNT=$(fm_meta_get "$META" claude_account)
+  fi
+  if [ -n "$TARGET_CLAUDE_ACCOUNT" ]; then
+    fm_claude_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
+      "$account_model" "$TARGET_CLAUDE_ACCOUNT" >/dev/null || return 1
+    [ "$TARGET_HARNESS" = claude ] && return 0
+  fi
   fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
     "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
 }
@@ -1008,6 +1021,7 @@ do_relaunch() {
   spawn_args=("$ID" --relaunch --harness "$TARGET_HARNESS")
   [ "$TARGET_MODEL" = default ] || spawn_args+=(--model "$TARGET_MODEL")
   [ "$TARGET_EFFORT" = default ] || spawn_args+=(--effort "$TARGET_EFFORT")
+  [ -z "$TARGET_CLAUDE_ACCOUNT" ] || spawn_args+=(--claude-account "$TARGET_CLAUDE_ACCOUNT")
   if FM_CONTROL_RELAUNCH_TX="$RELAUNCH_TX" \
       "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" >/dev/null; then
     RELAUNCH_META_PUBLISHED=1

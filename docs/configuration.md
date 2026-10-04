@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [Claude accounts](#claude-accounts-configclaude-accounts), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -894,6 +894,67 @@ A remote secondmate is launched on its host from its own home's configuration, s
 
 [`bin/fm-worker-account-lib.sh`](../bin/fm-worker-account-lib.sh) owns parsing, the sign-in check, and the full list of credentials a Claude launch unsets; [runtime backend verification](verification/runtime-backends.md#worker-account-pin-sign-in-check) records the check against the real runners.
 
+## Claude accounts (config/claude-accounts)
+
+A home with several Claude subscriptions managed by the `clauth` account manager can list each account as its own candidate in a dispatch profile array, so the array spends one account before another.
+A profile names its account with `claude_account`, the clauth profile name, such as `main` for a Max plan and `second` for a Pro plan.
+A profile without `claude_account` resolves and launches exactly as before.
+
+### Map each account to a login
+
+`config/claude-accounts` is local and gitignored, and maps each account to the login its workers launch on, one account per line:
+
+```text
+# clauth profile  login
+main    ordinary
+second  /Users/me/.claude-accounts/second
+```
+
+- `ordinary` is the machine's default Claude login, launched with `CLAUDE_CONFIG_DIR` unset.
+  It counts as that account only while `clauth status --json` reports the profile active, so a candidate or launch refuses when clauth reports another profile or cannot answer.
+- An absolute path is a Claude config directory signed in to that account.
+  Create it once with `CLAUDE_CONFIG_DIR=<path> claude`, then `/login` as that account.
+- Blank lines and `#` comment lines are ignored.
+  A duplicate account, a relative path, or a control character is a configuration error that names the line.
+
+A mapped directory holds its own login rather than clauth's stored token.
+Claude Code refreshes and rotates its token, and on macOS keys its Keychain entry to the config directory, so a worker sharing clauth's token would sign clauth and its sessions out.
+Firstmate only reads clauth and never runs `clauth switch`, which would move the machine's login under every running session.
+
+### Runners an account reaches
+
+| Runner | What the launch receives |
+| --- | --- |
+| `claude` | `CLAUDE_CONFIG_DIR` set to the mapped directory, or unset for `ordinary`, replacing `config/claude-account` for that launch |
+| `pi`, `pi-signed` with a `claude-bridge/<id>` model | The same `CLAUDE_CONFIG_DIR`, which the bridge passes to the Claude SDK; Pi's own root and any `config/pi-account` pin are unchanged |
+
+Both shed the environment credentials Claude ranks above a stored login, as a [worker account pin](#worker-account-pin-configclaude-account-configpi-account) does.
+Any other harness, a Pi model on another provider, or a raw launch command refuses `claude_account`.
+A Claude worker on a mapped directory reads that directory's settings, memory, and skills instead of `~/.claude`.
+
+### How resolution reads an account
+
+[Typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key) takes one `clauth status --json` snapshot when any profile names an account, and reads the account's own windows instead of quota-axi's `claude` row, which measures only the active login.
+
+- `all_models` remaining is 100 minus the larger of the 5-hour and 7-day utilization, and a per-model weekly window such as `7d fable` adds `model:fable`.
+- A profile `floor`, such as `{ "scope": "all_models", "min_percent": 30 }`, makes the account ineligible below 30% remaining, and 0% remaining is exhausted.
+- An account is ineligible, with the reason on its candidate line, when clauth is missing or fails, has no such profile, reports its sign-in or usage reading as failed, or reports the reading stale; when `config/claude-accounts` does not map it; or when an `ordinary` account is not the active profile.
+  An unverifiable account is never treated as available.
+- clauth projects no `spendPriority`, so under `spendPriority` ranking an account candidate stays eligible but unranked; order accounts with `"array_order": "preference"`.
+- A chosen account rides on the profile line as `--claude-account <name>`.
+
+### Launch checks, records, and inheritance
+
+`fm-spawn.sh --claude-account <name>` refuses before any worker endpoint, local copy, or task record exists unless the map declares the account, an `ordinary` account is the active clauth profile, and `claude auth status` says its login is signed in.
+That check runs with the same cleared environment as the worker account pin check.
+The spawn prints and records `claude_account=<name>`.
+A relaunch that keeps the same harness and model keeps the account under the same check before the running worker stops, and a relaunch onto another profile drops it.
+
+`config/claude-accounts` is not inherited into secondmate homes, because its directories belong to one machine.
+A secondmate whose inherited dispatch file names accounts treats them as ineligible until its own home maps them.
+
+[`bin/fm-worker-account-lib.sh`](../bin/fm-worker-account-lib.sh) owns the map and the launch check, and [`bin/fm-clauth-lib.sh`](../bin/fm-clauth-lib.sh) owns how a clauth reading becomes a quota row.
+
 ## Lavish server address (config/lavish-axi-host)
 
 The optional local, gitignored `config/lavish-axi-host` contains one non-empty address without whitespace for the per-machine Lavish server.
@@ -1026,7 +1087,7 @@ This section is the single owner of the canonical schema and its per-field seman
       "min_confidence": 0.85,
       "floor": { "scope": "<quota-axi scope>", "min_percent": 20, "provider": "<quota-axi provider>" },
       "use": [
-        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max|ultra, optional>", "provider": "<optional quota-axi provider>", "floor": { "scope": "<quota-axi scope>", "min_percent": 50 } }
+        { "harness": "<adapter>", "model": "<optional model>", "effort": "<low|medium|high|xhigh|max|ultra, optional>", "provider": "<optional quota-axi provider>", "claude_account": "<optional clauth profile>", "floor": { "scope": "<quota-axi scope>", "min_percent": 50 } }
       ],
       "why": "<optional rationale that helps firstmate choose>"
     }
@@ -1047,6 +1108,7 @@ This section is the single owner of the canonical schema and its per-field seman
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
+| Profile `claude_account` | Optional clauth profile name that launches the profile on that Claude account, so one array can hold one account per candidate; see [Claude accounts](#claude-accounts-configclaude-accounts). |
 
 **Array order**
 

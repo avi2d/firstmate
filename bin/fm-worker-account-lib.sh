@@ -55,6 +55,8 @@
 
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-clauth-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-clauth-lib.sh"
 
 FM_WORKER_ACCOUNT_CHECK_SECONDS=${FM_WORKER_ACCOUNT_CHECK_SECONDS:-30}
 
@@ -166,20 +168,34 @@ fm_worker_account_pi_provider() {
   esac
 }
 
-# fm_worker_account_check <harness> <declared> <root> <executable> [<provider>]
-# Returns 0 only when the runner's own check says the selected root is signed
-# in for this launch; otherwise prints one error and returns 1.
-fm_worker_account_check() {
-  local harness=$1 declared=$2 root=$3 executable=$4 provider=${5:-} out verdict name
+# fm_worker_account_run_clean <VAR=value or empty> <command...>
+# Runs a sign-in check with only the selected root and the login basics in its
+# environment, so a caller's credential variable cannot answer for the root.
+fm_worker_account_run_clean() {
+  local assignment=$1 name
+  shift
   local -a clean=(env -i "HOME=${HOME:-}" "PATH=${PATH:-}")
   for name in TMPDIR USER LOGNAME; do
     [ -z "${!name:-}" ] || clean+=("$name=${!name}")
   done
+  [ -z "$assignment" ] || clean+=("$assignment")
+  fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" "$@" </dev/null
+}
+
+# fm_worker_account_claude_signed_in <root> <executable>
+# An empty root means CLAUDE_CONFIG_DIR unset, the ordinary login.
+fm_worker_account_claude_signed_in() {
+  fm_worker_account_run_clean "${1:+CLAUDE_CONFIG_DIR=$1}" "$2" auth status >/dev/null 2>&1
+}
+
+# fm_worker_account_check <harness> <declared> <root> <executable> [<provider>]
+# Returns 0 only when the runner's own check says the selected root is signed
+# in for this launch; otherwise prints one error and returns 1.
+fm_worker_account_check() {
+  local harness=$1 declared=$2 root=$3 executable=$4 provider=${5:-} out verdict
   case "$harness" in
   claude)
-    [ -z "$root" ] || clean+=("CLAUDE_CONFIG_DIR=$root")
-    if fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" \
-      "$executable" auth status >/dev/null 2>&1 </dev/null; then
+    if fm_worker_account_claude_signed_in "$root" "$executable"; then
       return 0
     fi
     if [ -n "$root" ]; then
@@ -190,9 +206,8 @@ fm_worker_account_check() {
     return 1
     ;;
   pi | pi-signed)
-    clean+=("PI_CODING_AGENT_DIR=$root")
-    out=$(fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" \
-      "$executable" auth check --provider "$provider" --json --no-refresh 2>/dev/null </dev/null)
+    out=$(fm_worker_account_run_clean "PI_CODING_AGENT_DIR=$root" \
+      "$executable" auth check --provider "$provider" --json --no-refresh 2>/dev/null)
     verdict=$(printf '%s\n' "$out" | jq -r '
       if type != "object" or (has("status") | not) then "list"
       elif .status == "ready" then "ready"
@@ -202,8 +217,8 @@ fm_worker_account_check() {
     case "${verdict:-list}" in
     ready) return 0 ;;
     list)
-      if out=$(fm_run_timed "$FM_WORKER_ACCOUNT_CHECK_SECONDS" "${clean[@]}" \
-        "$executable" --list-models "$provider" 2>/dev/null </dev/null) &&
+      if out=$(fm_worker_account_run_clean "PI_CODING_AGENT_DIR=$root" \
+        "$executable" --list-models "$provider" 2>/dev/null) &&
         printf '%s\n' "$out" | awk -v p="$provider" 'NR > 1 && $1 == p { found = 1; exit } END { exit !found }'; then
         return 0
       fi
@@ -278,4 +293,114 @@ fm_worker_account_claude_shed() {
     prefix="$prefix -u $var"
   done
   printf '%s\n' "$prefix"
+}
+
+FM_CLAUDE_ACCOUNT_NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+
+# fm_claude_accounts_read <config-dir>
+# Prints "name<TAB>login" for each account config/claude-accounts declares, and
+# nothing when the file is absent. On refusal prints one error and returns 1.
+fm_claude_accounts_read() {
+  perl -MErrno=ENOENT -e '
+    my ($f) = @ARGV;
+    unless (lstat $f) {
+      exit 0 if $! == ENOENT;
+      print STDERR "error: cannot inspect config/claude-accounts at $f: $!\n";
+      exit 1;
+    }
+    my $fh;
+    unless (-f $f && -r _ && open($fh, "<", $f)) {
+      print STDERR "error: config/claude-accounts must be a readable regular file: $f\n";
+      exit 1;
+    }
+    my $body = do { local $/; <$fh> } // "";
+    $body =~ s/\n\z//;
+    my ($n, %seen) = (0);
+    for my $line (split /\n/, $body, -1) {
+      $n++;
+      next if $line =~ /\A[ \t]*(?:#[^\x00-\x08\x0a-\x1f\x7f]*)?\z/;
+      unless ($line =~ /\A([A-Za-z0-9][A-Za-z0-9._-]*)[ \t]+(ordinary|\/[^\x00-\x1f\x7f]*?)[ \t]*\z/) {
+        print STDERR "error: config/claude-accounts line $n must be \"<clauth profile> ordinary\" or \"<clauth profile> /absolute/claude/config/dir\": $f\n";
+        exit 1;
+      }
+      if ($seen{$1}++) {
+        print STDERR "error: config/claude-accounts line $n declares account $1 twice: $f\n";
+        exit 1;
+      }
+      print "$1\t$2\n";
+    }
+  ' -- "$1/claude-accounts"
+}
+
+fm_claude_accounts_json() {
+  local entries
+  entries=$(fm_claude_accounts_read "$1") || return 1
+  printf '%s' "$entries" | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]}) | from_entries'
+}
+
+# fm_claude_account_select <harness> <config-dir> <model> <account> [<raw-command>]
+# The whole launch-time decision for a launch naming a clauth account. Prints
+# "login<TAB>root", where root is empty for the ordinary login, meaning
+# CLAUDE_CONFIG_DIR unset. On refusal prints one error and returns 1.
+fm_claude_account_select() {
+  local harness=$1 config=$2 model=$3 account=$4 raw=${5:-} entries login root status active
+  case "$harness" in
+  claude) ;;
+  pi | pi-signed)
+    case "$model" in
+    claude-bridge/?*) ;;
+    *)
+      echo "error: --claude-account reaches a Pi worker only through its claude-bridge provider, so it needs --model claude-bridge/<id>; '${model:-none}' is not one" >&2
+      return 1
+      ;;
+    esac
+    ;;
+  *)
+    echo "error: --claude-account applies to the claude harness and to Pi claude-bridge models, not $harness" >&2
+    return 1
+    ;;
+  esac
+  [[ $account =~ $FM_CLAUDE_ACCOUNT_NAME_RE ]] || {
+    echo "error: --claude-account '$account' is not a clauth profile name" >&2
+    return 1
+  }
+  [ -z "$raw" ] || {
+    echo "error: a raw launch command runs verbatim, so it cannot carry --claude-account; launch with --harness $harness instead" >&2
+    return 1
+  }
+  entries=$(fm_claude_accounts_read "$config") || return 1
+  login=$(printf '%s\n' "$entries" | awk -F '\t' -v a="$account" '$1 == a { print $2; exit }')
+  [ -n "$login" ] || {
+    echo "error: --claude-account $account needs a login declared for it in config/claude-accounts: $config/claude-accounts" >&2
+    return 1
+  }
+  root=$login
+  if [ "$login" = ordinary ]; then
+    root=
+    status=$(fm_clauth_status 2>&1) || {
+      echo "error: config/claude-accounts maps account $account to the ordinary login, and $status, so the ordinary login cannot be confirmed as $account" >&2
+      return 1
+    }
+    active=$(printf '%s\n' "$status" | jq -r '.active_profile // ""')
+    [ "$active" = "$account" ] || {
+      echo "error: config/claude-accounts maps account $account to the ordinary login, which clauth reports is profile '${active:-none}'; map $account to its own Claude config directory instead" >&2
+      return 1
+    }
+  elif [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; then
+    echo "error: config/claude-accounts must map account $account to a readable, searchable existing directory: $config/claude-accounts -> $root" >&2
+    return 1
+  fi
+  command -v claude >/dev/null 2>&1 || {
+    echo "error: --claude-account $account needs the claude CLI on PATH to check the account's sign-in" >&2
+    return 1
+  }
+  fm_worker_account_claude_signed_in "$root" claude || {
+    if [ -n "$root" ]; then
+      echo "error: config/claude-accounts maps account $account to $root, which is not signed in (claude auth status); sign in with CLAUDE_CONFIG_DIR=$root claude, then /login as $account" >&2
+    else
+      echo "error: config/claude-accounts maps account $account to the ordinary login, which is not signed in (claude auth status)" >&2
+    fi
+    return 1
+  }
+  printf '%s\t%s\n' "$login" "$root"
 }
