@@ -699,7 +699,11 @@ test_remote_poll_probe_unreachable_preserves_route() {
   out=$(probe_remote "$w" poll FM_FAKE_REMOTE_RC=1)
   [ "$out" = 'skipped|unknown|0|||remote endpoint probe unreadable on lab-host' ] \
     || fail "a non-transport remote probe failure must stay inconclusive, got: $out"
-  pass "poll probe: unreachable or inconclusive remote reads preserve the route"
+
+  out=$(probe_remote "$w" poll FM_FAKE_REMOTE_REPLY=host-unavailable)
+  [ "$out" = 'skipped|host-unavailable|0|||remote host heartbeat is stale on lab-host; route preserved' ] \
+    || fail "a stale remote heartbeat should identify an unavailable host, got: $out"
+  pass "poll probe: unreachable, stale-heartbeat, and inconclusive reads preserve the route"
 }
 
 test_tmux_agent_state_classifies

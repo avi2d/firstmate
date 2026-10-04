@@ -120,7 +120,20 @@ remote_endpoint_require() {
 }
 
 state_value() { # <id>; prints recovery-grade state
-  local id=$1 meta
+  local id=$1 meta heartbeat heartbeat_value now
+  heartbeat="$TARGET_HOME/state/.remote-home-heartbeat"
+  if [ ! -f "$heartbeat" ] || [ -L "$heartbeat" ]; then
+    printf 'host-unavailable\n'
+    return 0
+  fi
+  IFS= read -r heartbeat_value < "$heartbeat" || heartbeat_value=
+  case "$heartbeat_value" in ''|*[!0-9]*) printf 'host-unavailable\n'; return 0 ;; esac
+  [ "${#heartbeat_value}" -le 12 ] || { printf 'host-unavailable\n'; return 0; }
+  now=$(date +%s)
+  if [ "$((now - 10#$heartbeat_value))" -gt 180 ]; then
+    printf 'host-unavailable\n'
+    return 0
+  fi
   meta=$(meta_path "$id")
   [ -f "$meta" ] && [ ! -L "$meta" ] || { printf 'missing\n'; return 0; }
   if ! remote_endpoint_load "$id"; then

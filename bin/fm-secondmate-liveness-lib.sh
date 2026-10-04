@@ -200,6 +200,9 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
         FM_SM_LIVE_CAUSE="remote endpoint $agent_state on its configured host"
         FM_SM_LIVE_WHERE="host=$remote_host"
         ;;
+      host-unavailable)
+        FM_SM_LIVE_REASON="remote host heartbeat is stale on $remote_host; route preserved"
+        ;;
       ambiguous|unreadable|unverified)
         FM_SM_LIVE_REASON="remote endpoint state is $agent_state on $remote_host"
         ;;
