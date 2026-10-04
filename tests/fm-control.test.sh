@@ -985,6 +985,172 @@ test_grok_idle_footer_does_not_confirm_cancellation() {
   pass "fm-control interrupt: grok's idle footer does not confirm cancellation"
 }
 
+# --- 5b. a Pi secondmate on Herdr finishing its turn ------------------------
+#
+# A canned, stateful Herdr fake modelling one Pi pane. Herdr's registry is the
+# Pi composer's identity and state authority, so the model is that registry:
+#   herdr-status        working | idle | gone (the agent exited)
+#   herdr-working-reads `agent get` reads left before a working turn ends on
+#                       its own and the registry reports idle
+#   herdr-composer      the text Pi's editor holds between its two rules
+#   herdr-escape-queue  text Pi restores into its editor when Escape aborts a
+#                       turn that has a queued follow-up
+# Escape leaves the registry reporting `working` until the remaining reads run
+# out, the lag Pi's integration has between an abort and its idle report.
+make_herdr_pi_stub() {  # <case-dir>
+  local fb="$1/fakebin"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+D=$FM_FAKE_DIR
+status=$(cat "$D/herdr-status")
+case "${1:-} ${2:-}" in
+  'status --json')
+    printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":true}}\n'
+    exit 0 ;;
+  'pane get')
+    printf '{"result":{"pane":{"pane_id":"%s","foreground_cwd":"%s"}}}\n' "${3:-}" "$(cat "$D/cwd")"
+    exit 0 ;;
+  'agent get')
+    if [ "$status" = gone ]; then
+      printf '{"error":{"code":"agent_not_found"}}\n'
+      exit 0
+    fi
+    if [ "$status" = working ]; then
+      left=$(cat "$D/herdr-working-reads")
+      if [ "$left" -le 0 ]; then
+        status=idle
+        printf idle > "$D/herdr-status"
+      else
+        printf '%s' "$((left - 1))" > "$D/herdr-working-reads"
+      fi
+    fi
+    printf '{"result":{"agent":{"agent":"pi","agent_status":"%s"}}}\n' "$status"
+    exit 0 ;;
+  'pane process-info')
+    if [ "$status" = gone ]; then
+      printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":4242,"foreground_processes":[]}}}\n' "${4:-}"
+    else
+      printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":4242,"foreground_processes":[{"pid":4243,"name":"pi","argv":["pi"],"cmdline":"pi"}]}}}\n' "${4:-}"
+    fi
+    exit 0 ;;
+  'pane read')
+    printf 'transcript\n────────────────────────\n%s\n────────────────────────\n footer\n' \
+      "$(cat "$D/herdr-composer")"
+    exit 0 ;;
+  'pane send-keys')
+    printf '%s\n' "${4:-}" >> "$D/keys"
+    if [ "${4:-}" = escape ] && [ "$status" = working ] && [ -s "$D/herdr-escape-queue" ]; then
+      cat "$D/herdr-escape-queue" > "$D/herdr-composer"
+    fi
+    exit 0 ;;
+  'pane send-text')
+    printf '%s\n' "${4:-}" >> "$D/literal"
+    [ "${4:-}" != /quit ] || printf gone > "$D/herdr-status"
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  cat > "$fb/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  '-axo pid=,ppid=,comm=') printf '4242 1 bash\n' ;;
+  '-p 4242 -o args=') printf 'bash\n' ;;
+  *) exec /bin/ps "$@" ;;
+esac
+SH
+  chmod +x "$fb/ps"
+}
+
+# add_herdr_pi_secondmate <case-dir> <id> <working-reads>: a Pi secondmate on
+# Herdr whose turn is still running and ends after <working-reads> reads.
+add_herdr_pi_secondmate() {  # <case-dir> <id> <working-reads>
+  local dir=$1 id=$2 meta
+  add_task "$dir" "$id" pi secondmate herdr "fmlab:%7"
+  printf '%s\n' "$id" > "$dir/wt-$id/.fm-secondmate-home"
+  meta="$dir/home/state/$id.meta"
+  {
+    echo "herdr_session=fmlab"
+    echo "herdr_workspace_id=ws1"
+    echo "herdr_tab_id=tab1"
+    echo "herdr_pane_id=%7"
+  } >> "$meta"
+  printf working > "$dir/fake/herdr-status"
+  printf '%s' "$3" > "$dir/fake/herdr-working-reads"
+  : > "$dir/fake/herdr-composer"
+  : > "$dir/fake/herdr-escape-queue"
+  make_herdr_pi_stub "$dir"
+}
+
+run_herdr_control() {  # <case-dir> <settle-wait> <args...>
+  local dir=$1 settle=$2
+  shift 2
+  (
+    unset HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH HERDR_TAB_ID HERDR_WORKSPACE_ID
+    export FM_CONTROL_SECONDMATE_SETTLE_WAIT="$settle" FM_BACKEND_HERDR_SUBMIT_POLLS=1 \
+      FM_BACKEND_HERDR_SUBMIT_MIN_SLEEP=0
+    run_control "$dir" "$@"
+  )
+}
+
+# The restart that follows a second mate's persist answer reaches it while that
+# turn is still finishing; an interrupt there leaves Herdr reporting the turn as
+# running when the composer is read.
+test_secondmate_exit_lets_a_finishing_turn_end_before_quitting() {
+  local dir out rc
+  command -v jq >/dev/null 2>&1 || { echo "skip - the herdr adapter needs jq"; return 0; }
+  dir=$(new_case sm-settle)
+  add_herdr_pi_secondmate "$dir" mate 8
+  out=$(run_herdr_control "$dir" 5 mate exit); rc=$?
+  expect_code 0 "$rc" "a secondmate finishing its turn should stop once the turn ends"$'\n'"$out"
+  assert_contains "$out" "stopped mate harness=pi backend=herdr" "the exit should report the stop"
+  [ -z "$(grep -x escape "$dir/fake/keys" || true)" ] \
+    || fail "a secondmate finishing its turn must not be interrupted, keys: $(cat "$dir/fake/keys")"
+  [ "$(literals "$dir")" = /quit ] \
+    || fail "the exit command should be typed exactly once onto the empty composer, got: $(literals "$dir")"
+  pass "fm-control exit: a Pi secondmate on Herdr finishes its turn before the exit command, uninterrupted"
+}
+
+# Past the settle bound the ordinary interrupt-first exit applies, and Pi's
+# Escape moves a queued follow-up into the editor: that text is preserved and
+# the exit command is never typed onto it.
+test_secondmate_exit_past_the_settle_bound_never_types_onto_restored_text() {
+  local dir out rc
+  command -v jq >/dev/null 2>&1 || { echo "skip - the herdr adapter needs jq"; return 0; }
+  dir=$(new_case sm-settle-bound)
+  add_herdr_pi_secondmate "$dir" mate 1000
+  printf 'FIRSTMATE WATCHER WAKE: signal' > "$dir/fake/herdr-escape-queue"
+  out=$(run_herdr_control "$dir" 0.05 mate exit); rc=$?
+  expect_code 1 "$rc" "a turn that outlasts the bound must not be quit onto restored text"$'\n'"$out"
+  assert_contains "$(cat "$dir/fake/keys")" escape "past the bound the busy secondmate is interrupted"
+  assert_contains "$out" "refusing to type the /quit exit command" "the refusal should name the exit command"
+  [ -z "$(literals "$dir")" ] \
+    || fail "nothing may be typed onto the restored follow-up, got: $(literals "$dir")"
+  [ "$(cat "$dir/fake/herdr-composer")" = 'FIRSTMATE WATCHER WAKE: signal' ] \
+    || fail "the restored follow-up must stay in the composer"
+  pass "fm-control exit: past the settle bound a secondmate is interrupted and restored text is never typed onto"
+}
+
+# Pending text never settles on its own, so it refuses at once rather than
+# holding the exit for the whole bound.
+test_secondmate_exit_refuses_pending_text_without_waiting_out_the_bound() {
+  local dir out rc start elapsed
+  command -v jq >/dev/null 2>&1 || { echo "skip - the herdr adapter needs jq"; return 0; }
+  dir=$(new_case sm-settle-pending)
+  add_herdr_pi_secondmate "$dir" mate 0
+  printf idle > "$dir/fake/herdr-status"
+  printf 'a draft the captain typed' > "$dir/fake/herdr-composer"
+  start=$(date +%s)
+  out=$(run_herdr_control "$dir" 60 mate exit); rc=$?
+  elapsed=$(( $(date +%s) - start ))
+  expect_code 1 "$rc" "a composer holding text must refuse the exit"$'\n'"$out"
+  assert_contains "$out" "visibly holds pending text" "the refusal should name the pending text"
+  [ -z "$(literals "$dir")" ] || fail "nothing may be typed onto pending text, got: $(literals "$dir")"
+  [ "$elapsed" -lt 30 ] || fail "pending text should refuse at once, not after the settle bound (${elapsed}s)"
+  pass "fm-control exit: a secondmate composer holding text refuses at once"
+}
+
 # --- 6. marker non-regression -----------------------------------------------
 
 test_secondmate_control_command_carries_no_marker() {
@@ -1107,5 +1273,8 @@ test_exit_accepts_agent_stopped_by_busy_interrupt
 test_agent_that_does_not_stop_fails_closed
 test_grok_interrupt_without_acknowledgement_reports_unconfirmed
 test_grok_idle_footer_does_not_confirm_cancellation
+test_secondmate_exit_lets_a_finishing_turn_end_before_quitting
+test_secondmate_exit_past_the_settle_bound_never_types_onto_restored_text
+test_secondmate_exit_refuses_pending_text_without_waiting_out_the_bound
 test_secondmate_control_command_carries_no_marker
 test_fm_send_still_marks_the_same_secondmate_task
