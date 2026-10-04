@@ -303,6 +303,15 @@ test_retired_task_id_starts_new_status_unread() {
     mkdir -p "$ledger.lock" || exit 1
     printf "%s\n" 2147483646 > "$ledger.lock/pid" || exit 1
     status_retire_presentation_task "$STATE" reused || exit 1
+    [ ! -e "$STATE/reused.status" ] || exit 1
+    archived=$(find "$STATE/status-archive/reused" -type f -name '*.status' -print -quit 2>/dev/null)
+    [ -n "$archived" ] && grep -Fxq "note: old reused-task history" "$archived" || exit 1
+    printf "expired history\\n" > "$STATE/status-archive/reused/expired.status"
+    touch -t 200001010000 "$STATE/status-archive/reused/expired.status" || exit 1
+    printf "note: prune trigger\\n" > "$STATE/prune-trigger.status"
+    status_retire_presentation_task "$STATE" prune-trigger || exit 1
+    [ ! -e "$STATE/status-archive/reused/expired.status" ] || exit 1
+    [ -f "$archived" ] || exit 1
     for marker in \
       "$(status_signal_seen_marker_path "$STATE" reused)" \
       "$(status_heartbeat_seen_marker_path "$STATE" reused)" \
@@ -332,6 +341,9 @@ test_retired_task_id_starts_new_status_unread() {
     || fail "drain failed after reusing a retired task id"
   grep -F 'reused note: first event from reused task id' "$out" >/dev/null \
     || fail "the retired manifest row skipped the new task prefix: $(cat "$out")"
+  if grep -F 'old reused-task history' "$out" >/dev/null; then
+    fail "archived history appeared as live status: $(cat "$out")"
+  fi
   if grep -F 'stable neighboring history' "$out" >/dev/null; then
     fail "retiring one task replayed a neighboring task's handled history: $(cat "$out")"
   fi

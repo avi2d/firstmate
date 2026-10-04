@@ -1701,7 +1701,7 @@ status_presentation_marker_commit() {
 
 status_retire_presentation_task() {  # <state> <task-id>
   local state=$1 task=$2 lock manifest tmp data row_task ident offset backstop extra rc=0 found=0
-  local signal_marker heartbeat_marker daemon_marker home_appends home_appends_lock
+  local signal_marker heartbeat_marker daemon_marker home_appends home_appends_lock archive archive_file archive_stamp archive_suffix
   lock="$state/.status-presentation-lock"
   manifest="$state/.status-presentation-cursor"
   tmp="$manifest.tmp.$$"
@@ -1769,9 +1769,39 @@ EOF
     fi
   fi
   if [ "$rc" -eq 0 ]; then
-    rm -f -- "$state/$task.status" "$state/.$task.open-decisions-cursor" \
-      "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
-    fm_lock_remove_path "$home_appends_lock" 2>/dev/null || true
+    archive="$state/status-archive"
+    if [ -L "$archive" ] || { [ -e "$archive" ] && [ ! -d "$archive" ]; } \
+      || ! mkdir -p "$archive"; then
+      rc=1
+    fi
+    if [ "$rc" -eq 0 ] && { [ -e "$state/$task.status" ] || [ -L "$state/$task.status" ]; }; then
+      if [ ! -f "$state/$task.status" ] || [ -L "$state/$task.status" ] \
+        || [ -L "$archive/$task" ] \
+        || { [ -e "$archive/$task" ] && [ ! -d "$archive/$task" ]; } \
+        || ! mkdir -p "$archive/$task"; then
+        rc=1
+      else
+        archive_stamp=$(date +%s) || rc=1
+        archive_file="$archive/$task/$archive_stamp.$$.status"
+        archive_suffix=0
+        while [ "$rc" -eq 0 ] && { [ -e "$archive_file" ] || [ -L "$archive_file" ]; }; do
+          archive_suffix=$((archive_suffix + 1))
+          archive_file="$archive/$task/$archive_stamp.$$.$archive_suffix.status"
+        done
+        if [ "$rc" -eq 0 ]; then
+          touch "$state/$task.status" \
+            && mv -- "$state/$task.status" "$archive_file" || rc=1
+        fi
+      fi
+    fi
+    if [ "$rc" -eq 0 ]; then
+      find "$archive" -type f -name '*.status' -mtime +14 -exec rm -f -- {} + || rc=1
+    fi
+    if [ "$rc" -eq 0 ]; then
+      rm -f -- "$state/.$task.open-decisions-cursor" \
+        "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
+      fm_lock_remove_path "$home_appends_lock" 2>/dev/null || true
+    fi
   fi
   fm_lock_release "$lock" || rc=1
   return "$rc"
