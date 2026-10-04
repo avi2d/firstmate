@@ -494,23 +494,69 @@ test_outcome_rejects_landed_wording_for_open_recorded_pr() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   printf 'branch=fm/task-x\nproject=%s\npr=https://github.com/example/repo/pull/7\n' "$ROOT" > "$state/task-x.meta"
-  cat > "$fakebin/gh-axi" <<'SH'
+  cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' 'pull_request:' '  state: open'
+printf '%s\n' open
 SH
-  chmod +x "$fakebin/gh-axi"
+  chmod +x "$fakebin/gh"
 
-  set +e
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
-    --task task-x --verdict captain --summary 'work landed and task cleaned up' \
-    > "$dir/append.out" 2> "$dir/append.err"
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "an open recorded PR received a landed outcome"
-  grep -F 'recorded PR https://github.com/example/repo/pull/7 is not merged' "$dir/append.err" >/dev/null \
-    || fail "open-PR refusal did not explain the merge requirement: $(cat "$dir/append.err")"
-  [ ! -s "$state/branch-outcomes.jsonl" ] || fail "landed outcome for an open PR was appended"
+  for summary in landed 'cleaned up'; do
+    set +e
+    PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
+      --task task-x --verdict captain --summary "$summary" \
+      > "$dir/append.out" 2> "$dir/append.err"
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "an open recorded PR received a '$summary' outcome"
+    grep -F 'recorded PR https://github.com/example/repo/pull/7 is not merged' "$dir/append.err" >/dev/null \
+      || fail "open-PR refusal did not explain the merge requirement: $(cat "$dir/append.err")"
+  done
+  [ ! -s "$state/branch-outcomes.jsonl" ] || fail "a landing outcome for an open PR was appended"
   pass "an open recorded PR blocks landed and cleanup outcomes"
+}
+
+test_outcome_without_recorded_branch_can_mention_child_pr() {
+  local dir state fakebin
+  dir=$(make_case winbox-pr-outcome)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  printf 'project=%s\n' "$ROOT" > "$state/winbox.meta"
+  cat > "$fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *'pr list'*) printf '%s\n' '241' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/gh"
+
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
+    --task winbox --verdict captain \
+    --summary 'child PR https://github.com/avi2d/skills/pull/242 is ready' > "$dir/append.out" \
+    || fail "a task without branch metadata could not report its child PR: $(cat "$dir/append.out")"
+  grep -F '"task":"winbox"' "$state/branch-outcomes.jsonl" >/dev/null \
+    || fail "the no-branch PR outcome was not recorded"
+  pass "a task without a recorded branch can report a child PR"
+}
+
+test_negated_landing_wording_does_not_claim_pr_merged() {
+  local dir state fakebin summary
+  dir=$(make_case negated-pr-outcome)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  printf 'branch=fm/task-x\nproject=%s\npr=https://github.com/example/repo/pull/7\n' "$ROOT" > "$state/task-x.meta"
+  cat > "$fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' open
+SH
+  chmod +x "$fakebin/gh"
+
+  for summary in 'not yet landed' 'cleanup refused' 'safe cleanup could not proceed'; do
+    PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
+      --task task-x --verdict captain --summary "$summary" > "$dir/append.out" 2> "$dir/append.err" \
+      || fail "honest non-landing wording '$summary' was refused: $(cat "$dir/append.err")"
+  done
+  pass "negated landing and cleanup wording is accepted for an open PR"
 }
 
 test_outcome_rejects_pr_for_another_recorded_branch() {
@@ -519,13 +565,14 @@ test_outcome_rejects_pr_for_another_recorded_branch() {
   state="$dir/state"
   fakebin="$dir/fakebin"
   printf 'branch=fm/session-names\nproject=%s\n' "$ROOT" > "$state/model-icons.meta"
-  cat > "$fakebin/gh-axi" <<'SH'
+  cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
-  *--head*) printf '%s\n' 'count: 0 (showing first 0)' 'pull_requests[]: []' ;;
+  *'pr list'*) printf '%s\n' '242' ;;
+  *) exit 1 ;;
 esac
 SH
-  chmod +x "$fakebin/gh-axi"
+  chmod +x "$fakebin/gh"
 
   set +e
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
@@ -585,3 +632,5 @@ test_overbound_routine_event_stays_silent
 test_backstop_output_is_bounded
 test_outcome_rejects_pr_for_another_recorded_branch
 test_outcome_rejects_landed_wording_for_open_recorded_pr
+test_outcome_without_recorded_branch_can_mention_child_pr
+test_negated_landing_wording_does_not_claim_pr_merged

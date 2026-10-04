@@ -1531,7 +1531,7 @@ EOF
 # current work is not contained in the PR head, no PR is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
-  local branch=$1 target number axi_view view state remainder head resolved_url current landed=0
+  local branch=$1 target view state remainder head resolved_url current landed=0
   PR_MERGE_LOOKUP=error
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
@@ -1539,13 +1539,6 @@ pr_is_merged() {
     target=$(pr_number_from_branch "$branch") || return 1
   fi
   [ -n "$target" ] || return 1
-  number=$(pr_number_from_target "$target") || return 1
-  axi_view=$(cd "$WT" && gh-axi pr view "$number" 2>&1) || return 1
-  state=$(printf '%s\n' "$axi_view" | sed -n 's/^[[:space:]]*state: *//p' | head -1)
-  case "$state" in
-    MERGED|merged) ;;
-    *) PR_MERGE_LOOKUP=open; return 1 ;;
-  esac
   view=$(cd "$WT" && gh pr view "$target" --json state,headRefOid,url -q '.state + "\t" + .headRefOid + "\t" + .url' 2>/dev/null) || return 1
   state=${view%%$'\t'*}
   remainder=${view#*$'\t'}

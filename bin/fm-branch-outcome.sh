@@ -353,8 +353,16 @@ EOF
   publish_outcome_index_ready "$(last_seq)"
 }
 
+outcome_claims_landing() {
+  local summary=$1
+  if printf '%s\n' "$summary" | grep -Eiq 'not([[:space:]]+yet)?[[:space:]]+landed|did not land|failed to land|cleanup (refused|could not|cannot|did not|failed|blocked|unable)|cleaned up (was not|could not|did not)'; then
+    return 1
+  fi
+  printf '%s\n' "$summary" | grep -Eiq 'landed|clean(ed)?[ -]?up|cleanup[[:space:]]+(complete(d)?|finished|succeeded|done|successful)'
+}
+
 validate_outcome_pr_branches() {
-  local task=$1 summary=$2 meta branch url head recorded_pr state project number pr_list
+  local task=$1 summary=$2 meta branch url recorded_pr state project number pr_list
   meta="$STATE/$task.meta"
   [ -f "$meta" ] || return 0
   branch=$(sed -n 's/^branch=//p' "$meta" | tail -1)
@@ -363,12 +371,11 @@ validate_outcome_pr_branches() {
   case "$recorded_pr" in
     https://github.com/*/pull/[0-9]*)
       number=${recorded_pr##*/pull/}
-      if printf '%s\n' "$summary" | grep -Eiq 'landed|clean(ed)?[- ]?up'; then
-        if ! view=$(cd "$project" && gh-axi pr view "$number" 2>&1); then
-          echo "error: cannot reach GitHub to verify recorded PR $recorded_pr for task $task: $view" >&2
+      if outcome_claims_landing "$summary"; then
+        if ! state=$(cd "$project" && gh pr view "$number" --json state -q .state 2>&1); then
+          echo "error: cannot reach GitHub to verify recorded PR $recorded_pr for task $task: $state" >&2
           return 1
         fi
-        state=$(printf '%s\n' "$view" | sed -n 's/^[[:space:]]*state: *//p' | head -1)
         case "$state" in
           MERGED|merged) ;;
           *) echo "error: refusing landed or cleanup outcome for task $task because recorded PR $recorded_pr is not merged" >&2; return 1 ;;
@@ -379,16 +386,13 @@ validate_outcome_pr_branches() {
   printf '%s\n' "$summary" | grep -Eo 'https://github\.com/[^[:space:]]+/pull/[0-9]+' | sort -u \
     | while IFS= read -r url; do
         [ -n "$url" ] || continue
-        [ -n "$branch" ] || {
-          echo "error: cannot verify PR $url because task $task has no recorded branch" >&2
-          exit 1
-        }
+        [ -n "$branch" ] || continue
         number=${url##*/pull/}
-        if ! pr_list=$(cd "$project" && gh-axi pr list --state all --head "$branch" --limit 100 2>&1); then
+        if ! pr_list=$(cd "$project" && gh pr list --state all --head "$branch" --limit 100 --json number --jq '.[].number' 2>&1); then
           echo "error: cannot reach GitHub to verify PR $url for task $task: $pr_list" >&2
           exit 1
         fi
-        printf '%s\n' "$pr_list" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\),.*/\1/p' | grep -qxF "$number" || {
+        printf '%s\n' "$pr_list" | grep -qxF "$number" || {
           echo "error: refusing PR $url for task $task: GitHub does not list it under recorded branch '$branch'" >&2
           exit 1
         }
