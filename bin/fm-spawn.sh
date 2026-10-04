@@ -1239,6 +1239,7 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
+SPAWN_HOME_SNAPSHOT=
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -1394,6 +1395,10 @@ spawn_abort_cleanup() {
     fm_lock_release "$SPAWN_CONTROL_LOCK" || true
   fi
   [ -z "$SPAWN_META_TMP" ] || rm -f "$SPAWN_META_TMP" 2>/dev/null || true
+  if [ "$status" -ne 0 ] && [ -n "$SPAWN_HOME_SNAPSHOT" ] &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
+    rm -f "$SPAWN_HOME_SNAPSHOT" 2>/dev/null || true
+  fi
   if [ "$CONFIG_INHERIT_LOCK_HELD" = 1 ]; then
     CONFIG_INHERIT_LOCK_HELD=0
     fm_lock_release "$CONFIG_INHERIT_LOCK" || true
@@ -4972,6 +4977,11 @@ else
   SPAWN_FRESH_COMMIT_PENDING=1
 fi
 SPAWN_META_PATH=$SPAWN_META_TMP
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+  SPAWN_HOME_SNAPSHOT="$STATE/$ID.home-snapshot"
+  "$SCRIPT_DIR/fm-home-write-diff.sh" snapshot "$SPAWN_HOME_SNAPSHOT" "$WT" ||
+    echo "warning: could not record the state of ~/.claude and ~/.pi/agent for $ID; cleanup will not report its writes there" >&2
+fi
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {

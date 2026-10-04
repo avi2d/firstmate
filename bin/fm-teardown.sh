@@ -3346,11 +3346,27 @@ cleanup_firstmate_home_children() {
       "$sub_state/$child_id.grok-turnend-token" "$sub_state/$child_id.kimi-turnend-token" \
       "$sub_state/$child_id.muse-session" "$sub_state/$child_id.muse-session-current" \
       "$sub_state/$child_id.cursor-session" "$sub_state/$child_id.reconcile-nudged" \
-      "$sub_state/$child_id.devin-config.json" \
+      "$sub_state/$child_id.devin-config.json" "$sub_state/$child_id.home-snapshot" \
       "$sub_state/.$child_id.branch-outcome-index"
     chmod u+w "$sub_state/$child_id.git-hooks" 2>/dev/null || true
     rm -rf "$sub_state/$child_id.git-hooks"
   done
+}
+
+report_home_writes() {  # <snapshot> <saved-report>
+  local snapshot=$1 saved=$2 writes
+  [ -e "$snapshot" ] || return 0
+  if ! writes=$("$SCRIPT_DIR/fm-home-write-diff.sh" report "$snapshot"); then
+    echo "warning: could not compare ~/.claude and ~/.pi/agent with their state when $ID was spawned" >&2
+    return 0
+  fi
+  [ -n "$writes" ] || return 0
+  if mkdir -p "${saved%/*}" && printf '%s\n' "$writes" >"$saved"; then
+    echo "warning: ~/.claude or ~/.pi/agent changed while $ID was live; nothing was reverted (saved to $saved):" >&2
+  else
+    echo "warning: ~/.claude or ~/.pi/agent changed while $ID was live; nothing was reverted:" >&2
+  fi
+  printf '%s\n' "$writes" | sed 's/^/  /' >&2
 }
 
 remove_secondmate_registry_entry() {
@@ -3851,7 +3867,8 @@ retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
 [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
 status_retire_presentation_task "$STATE" "$ID" || exit 1
 fm_wake_queue_prune_task "$STATE" "$ID" "$T" 2>/dev/null || true
-rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
+report_home_writes "$STATE/$ID.home-snapshot" "$DATA/$ID/home-writes.txt"
+rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" "$STATE/$ID.home-snapshot" \
   "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.omp-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.muse-session" \

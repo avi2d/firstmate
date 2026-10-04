@@ -705,6 +705,40 @@ test_local_only_fork_remote_allows() {
   pass "local-only worktree with HEAD on a fork remote is torn down and the home summary is refreshed"
 }
 
+test_teardown_reports_home_writes_since_spawn() {
+  local case_dir rc home
+  case_dir=$(make_case home-writes)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  home="$case_dir/home"
+  mkdir -p "$home/.claude" "$home/.pi/agent" "$case_dir/live"
+  printf '{}\n' > "$case_dir/live/settings.json"
+  ln -s "$case_dir/live/settings.json" "$home/.claude/settings.json"
+  HOME="$home" "$ROOT/bin/fm-home-write-diff.sh" snapshot "$case_dir/state/task-x1.home-snapshot" "$case_dir/wt" \
+    || fail "home-writes: snapshot failed"
+  ln -sfn "$case_dir/wt/settings.json" "$home/.claude/settings.json"
+  printf '{}\n' > "$home/.pi/agent/keybindings.json"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "home-writes: a home write is reported, never a reason to refuse cleanup"
+  assert_grep "nothing was reverted" "$case_dir/stderr" "home-writes: teardown did not warn about the home writes"
+  assert_grep "relinked .claude/settings.json: $case_dir/live/settings.json -> $case_dir/wt/settings.json (into the task's worktree)" \
+    "$case_dir/stderr" "home-writes: teardown did not name the relinked config link"
+  assert_grep "created .pi/agent/keybindings.json (file)" "$case_dir/stderr" \
+    "home-writes: teardown did not name the copied file"
+  assert_grep "relinked .claude/settings.json" "$case_dir/data/task-x1/home-writes.txt" \
+    "home-writes: the report was not kept with the task's durable records"
+  assert_absent "$case_dir/state/task-x1.home-snapshot" "home-writes: teardown left the spawn snapshot behind"
+  assert_equals "$case_dir/wt/settings.json" "$(readlink "$home/.claude/settings.json")" \
+    "home-writes: teardown reverted a link it should only report"
+  pass "teardown reports what changed in the real home since spawn without reverting it"
+}
+
 test_teardown_closes_the_backlog_item_itself() {
   local case_dir out
   case_dir=$(make_case tasks-axi-close)
@@ -4300,6 +4334,7 @@ test_forced_child_missing_adapter_sibling_refuses_before_cleanup
 test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
+test_teardown_reports_home_writes_since_spawn
 test_teardown_closes_the_backlog_item_itself
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
