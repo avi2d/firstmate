@@ -1049,6 +1049,61 @@ test_merged_pr_with_later_local_commit_refuses() {
   pass "merged PR does not allow teardown after a later local commit"
 }
 
+# A partial cleanup pruned the task branch and left the copy clean and detached
+# at the default branch tip, which already holds the squash of the merged PR.
+# Args: case_dir. Echoes: <pr_head>
+setup_copy_detached_at_default_after_squash() {
+  local case_dir=$1 pr_head
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  append_pr_meta_url "$case_dir"
+  land_on_origin_main "$case_dir" feature.txt hello
+  git -C "$case_dir/wt" fetch -q origin
+  git -C "$case_dir/wt" checkout -q --detach origin/main
+  git -C "$case_dir/wt" branch -q -D fm/task-x1
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  printf '%s\n' "$pr_head"
+}
+
+test_merged_pr_allows_copy_detached_at_default_tip() {
+  local case_dir rc
+  case_dir=$(make_case detached-at-default)
+  write_meta "$case_dir" no-mistakes ship
+  setup_copy_detached_at_default_after_squash "$case_dir" >/dev/null
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "detached-at-default: teardown should succeed when HEAD is already in the default branch"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "detached-at-default: teardown printed a REFUSED line"
+  [ ! -e "$case_dir/state/task-x1.meta" ] || fail "detached-at-default: cleanup kept the task record"
+  pass "merged PR accepts a copy left detached at the default branch tip that holds the squash"
+}
+
+test_merged_pr_refuses_unlanded_commit_on_default_tip() {
+  local case_dir rc local_head
+  case_dir=$(make_case detached-at-default-unlanded)
+  write_meta "$case_dir" no-mistakes ship
+  setup_copy_detached_at_default_after_squash "$case_dir" >/dev/null
+  wt_commit_file "$case_dir" later.txt local-only "local follow-up"
+  local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "detached-at-default-unlanded: teardown should refuse a commit the default branch lacks"
+  grep -q REFUSED "$case_dir/stderr" || fail "detached-at-default-unlanded: no REFUSED line in stderr"
+  [ "$(git -C "$case_dir/wt" rev-parse HEAD 2>/dev/null)" = "$local_head" ] \
+    || fail "detached-at-default-unlanded: refusal lost the unlanded commit"
+  [ -e "$case_dir/state/task-x1.meta" ] \
+    || fail "detached-at-default-unlanded: refusal erased the durable task record"
+  pass "merged PR still refuses an unlanded commit on top of the default branch tip"
+}
+
 test_squash_merged_rebased_branch_allows() {
   local case_dir rc pr_head
   case_dir=$(make_case squash-rebased)
@@ -4390,6 +4445,8 @@ test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows
 test_squash_merged_pr_allows_replayed_unpushed_patch
 test_merged_pr_with_later_local_commit_refuses
+test_merged_pr_allows_copy_detached_at_default_tip
+test_merged_pr_refuses_unlanded_commit_on_default_tip
 test_squash_merged_rebased_branch_allows
 test_squash_merged_same_file_different_content_refuses
 test_squash_merged_rebased_local_with_unlanded_commit_refuses

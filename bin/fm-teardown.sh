@@ -1528,7 +1528,8 @@ EOF
 # Is the worktree's PR merged for local work contained in that PR? Resolves the
 # PR from the recorded pr= URL first, then from the branch name, and asks GitHub
 # for both the PR state and head. Returns non-zero when the PR is not merged, the
-# current work is not contained in the PR head, no PR is found, or any gh error
+# current work is in neither the PR head nor the up-to-date default branch, no PR
+# is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
   local branch=$1 target view state remainder head resolved_url current landed=0
@@ -1557,6 +1558,8 @@ pr_is_merged() {
     landed=1
   elif unpushed_patches_are_in_pr_head "$head"; then
     landed=1
+  elif head_in_default; then
+    landed=1
   fi
   [ "$landed" = 1 ] || return 1
   if [ -z "$PR_URL" ]; then
@@ -1583,6 +1586,25 @@ open_pr_for_branch() {
   printf '%s\n' "$url"
 }
 
+up_to_date_default_ref() {
+  local name
+  name=$(default_branch) || return 1
+  if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
+    git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
+    printf '%s\n' "refs/remotes/origin/$name"
+  elif git -C "$WT" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
+    printf '%s\n' "refs/heads/$name"
+  else
+    return 1
+  fi
+}
+
+head_in_default() {
+  local ref
+  ref=$(up_to_date_default_ref) || return 1
+  git -C "$WT" merge-base --is-ancestor HEAD "$ref" 2>/dev/null
+}
+
 # Is the branch's content already present in the up-to-date default branch? Fetches
 # first, then 3-way merges the default branch with HEAD: when HEAD introduces nothing
 # the default branch does not already contain (e.g. its change landed via squash) the
@@ -1591,16 +1613,8 @@ open_pr_for_branch() {
 # "added". Returns non-zero when inconclusive (no default ref, or a merge conflict),
 # so the caller refuses rather than guesses.
 content_in_default() {
-  local name ref default_tree merged_tree
-  name=$(default_branch) || return 1
-  if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
-    git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
-    ref="refs/remotes/origin/$name"
-  elif git -C "$WT" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
-    ref="refs/heads/$name"
-  else
-    return 1
-  fi
+  local ref default_tree merged_tree
+  ref=$(up_to_date_default_ref) || return 1
   default_tree=$(git -C "$WT" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
   [ -n "$default_tree" ] || return 1
   merged_tree=$(git -C "$WT" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
