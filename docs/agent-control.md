@@ -51,6 +51,10 @@ The clear is refused before anything is sent when the recorded backend cannot de
 
 `exit` reads the composer's state before typing the exit command and requires the exact `empty` verdict; a `pending` verdict refuses by naming the pending text, and any other verdict (`unknown`, `pending-unproven`, or an unreadable read) refuses as not proven empty, matching the fail-safe contract every other consumer that can overwrite composer input follows.
 
+A `kind=secondmate` agent is first given a bounded wait to finish its turn on its own, set by `FM_CONTROL_SECONDMATE_SETTLE_WAIT` and 180 seconds by default.
+The exit goes ahead as soon as the agent is not busy and its composer reads `empty`, refuses at once when the composer holds text, and past the bound takes the ordinary interrupt-first path.
+The restart that follows a second mate's persist answer reaches it while that turn is still finishing, and interrupting it there cannot prove the composer: Pi's Escape moves any queued follow-up into its composer, and Herdr keeps reporting the aborted turn as running for a moment afterwards.
+
 **Teardown and discard are not verbs and will not become verbs.**
 `exit` stops an agent and preserves everything else.
 Removing a worktree, closing an endpoint, or discarding work stays with [`bin/fm-teardown.sh`](../bin/fm-teardown.sh), which owns the landed-work test.

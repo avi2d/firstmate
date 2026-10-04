@@ -34,7 +34,11 @@
 #              otherwise reports `cancel=not-running` having sent one press.
 #   exit       Stop the agent, preserving its terminal endpoint, worktree, and
 #              every uncommitted change. Interrupts first when the task reads
-#              busy, then submits the harness's exit command. Postcondition:
+#              busy, then submits the harness's exit command. A secondmate is
+#              first given up to FM_CONTROL_SECONDMATE_SETTLE_WAIT to finish
+#              its turn on its own, so the restart that follows its persist
+#              answer stops an idle agent rather than cutting that turn off.
+#              Postcondition:
 #              the backend's recovery-grade classifier reports the agent gone.
 #              Already-stopped is success (idempotent). An endpoint that reads
 #              `missing` is put through the control plane's per-backend absence
@@ -132,6 +136,8 @@
 #   FM_CONTROL_EXIT_WAIT         alive->dead wait after the exit command (30)
 #   FM_CONTROL_LAUNCH_WAIT       dead->alive wait after a relaunch (90)
 #   FM_CONTROL_EXIT_RETRIES      Enter retries for the exit command (3)
+#   FM_CONTROL_SECONDMATE_SETTLE_WAIT  wait for a secondmate's turn to end
+#                                before stopping it (180)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -186,6 +192,7 @@ ARM_WAIT=${FM_CONTROL_ARM_WAIT:-1.5}
 EXIT_WAIT=${FM_CONTROL_EXIT_WAIT:-30}
 LAUNCH_WAIT=${FM_CONTROL_LAUNCH_WAIT:-90}
 EXIT_RETRIES=${FM_CONTROL_EXIT_RETRIES:-3}
+SECONDMATE_SETTLE_WAIT=${FM_CONTROL_SECONDMATE_SETTLE_WAIT:-180}
 
 die() {  # <message>
   echo "error: $1" >&2
@@ -365,6 +372,36 @@ agent_state() {
 
 busy_verdict() {
   fm_busy_classify_meta "$META" "$ID" "$STATE"
+}
+
+composer_state() {
+  local verdict
+  verdict=$(fm_backend_composer_state "$BACKEND" "$T" "$LABEL" 2>/dev/null) || verdict=unknown
+  printf '%s' "$verdict"
+}
+
+# settle_secondmate_turn: wait, bounded, until the secondmate is not busy and
+# its composer is proven empty, its composer holds text, or its agent is gone.
+# Interrupting a Pi turn instead moves its queued follow-ups into the composer
+# and leaves Herdr reporting the turn as running for a moment afterwards, so
+# the exit could prove neither that the composer was empty nor what it held.
+settle_secondmate_turn() {
+  local elapsed=0
+  while :; do
+    [ "$(agent_state)" = alive ] || return 0
+    case "$(composer_state)" in
+      pending|pending-unproven) return 0 ;;
+      empty)
+        case "$(busy_verdict)" in
+          busy*) ;;
+          *) return 0 ;;
+        esac
+        ;;
+    esac
+    awk -v e="$elapsed" -v t="$SECONDMATE_SETTLE_WAIT" 'BEGIN{exit !(e < t)}' || return 0
+    sleep "$POLL"
+    elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
+  done
 }
 
 # wait_agent_state <wanted...> <timeout>: poll until agent_state prints one of
@@ -560,7 +597,7 @@ retire_busy_incarnation() {
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped`, `endpoint-gone`, or `stopped`.
 do_exit() {
-  local state cmd hazard verdict composer_state cancel absence interrupt_result=not-needed
+  local state cmd hazard verdict composer cancel absence interrupt_result=not-needed
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -605,6 +642,7 @@ do_exit() {
       ;;
     *) die "task $ID's endpoint reads '$state' rather than a positively classified state; refusing to send a lifecycle command into an unattributed endpoint" ;;
   esac
+  [ "$KIND" != secondmate ] || settle_secondmate_turn
   # A busy agent is interrupted first before the exit command is submitted.
   case "$(busy_verdict)" in
     busy*)
@@ -627,15 +665,14 @@ do_exit() {
   if [ -n "$hazard" ] && rendered_matches "$hazard"; then
     die "task $ID shows the $HARNESS revert picker, where typed text becomes a search and Enter reverts file changes; refusing to type the $cmd exit command. Close it with $(fm_control_interrupt_key "$HARNESS"), never Enter, then retry '$VERB'"
   fi
-  composer_state=$(fm_backend_composer_state "$BACKEND" "$T" "$LABEL" 2>/dev/null) \
-    || composer_state=unknown
-  case "$composer_state" in
+  composer=$(composer_state)
+  case "$composer" in
     empty) ;;
     pending)
       die "task $ID's composer visibly holds pending text; refusing to type the $cmd exit command because it would concatenate onto that text. Clear or submit the pending text, then retry '$VERB'"
       ;;
     *)
-      die "task $ID's composer state is '$composer_state', not proven empty; refusing to type the $cmd exit command because it could concatenate onto existing text. Clear the composer, then retry '$VERB'"
+      die "task $ID's composer state is '$composer', not proven empty; refusing to type the $cmd exit command because it could concatenate onto existing text. Clear the composer, then retry '$VERB'"
       ;;
   esac
   # The submit verdict is NOT the postcondition here: a successful exit command
