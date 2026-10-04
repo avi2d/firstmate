@@ -323,23 +323,18 @@ secondmate_update_reconcile_clear() { # <state> <id>
   rm -f -- "$marker"
 }
 
-# Prove that merging LOCAL into TARGET from their real merge base adds no tree
-# change to TARGET. A temporary index performs the three-way comparison without
-# touching the worktree or writing a merge commit. Conflicts or any remaining
-# content difference are not redundant and therefore stay diverged.
+# Prove that a content-level merge of LOCAL into TARGET is clean and yields
+# exactly TARGET's tree, so moving to TARGET discards nothing. A trivial
+# read-tree three-way leaves any file edited on both lines unmerged even when
+# TARGET already holds the local edit. merge-tree --write-tree writes only
+# objects, never the worktree or a ref; a git without it fails here, which
+# refuses the divergence.
 divergence_is_redundant() { # <dir> <local-commit> <target-commit>
-  local dir=$1 local_commit=$2 target_commit=$3 ancestor scratch index result=1
-  ancestor=$(git -C "$dir" merge-base "$local_commit" "$target_commit" 2>/dev/null) || return 1
-  scratch=$(mktemp -d "${TMPDIR:-/tmp}/fm-ff-redundant.XXXXXX" 2>/dev/null) || return 1
-  index="$scratch/index"
-  if GIT_INDEX_FILE="$index" git -C "$dir" read-tree -m \
-      "$ancestor" "$target_commit" "$local_commit" 2>/dev/null \
-    && ! GIT_INDEX_FILE="$index" git -C "$dir" ls-files -u | grep -q . \
-    && GIT_INDEX_FILE="$index" git -C "$dir" diff --cached --quiet "$target_commit" --; then
-    result=0
-  fi
-  rm -rf -- "$scratch"
-  return "$result"
+  local dir=$1 local_commit=$2 target_commit=$3 merged_tree target_tree
+  target_tree=$(git -C "$dir" rev-parse --verify --quiet "$target_commit^{tree}" 2>/dev/null) || return 1
+  merged_tree=$(git -C "$dir" merge-tree --write-tree "$target_commit" "$local_commit" 2>/dev/null) || return 1
+  merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
+  [ -n "$target_tree" ] && [ "$merged_tree" = "$target_tree" ]
 }
 
 # List this home's LIVE secondmate direct reports from state/<id>.meta records.
@@ -378,12 +373,17 @@ live_secondmate_meta_records() {
 # Guards are identical in both modes: never force/merge/stash; skip a dirty or
 # wrong-branch target and leave its work untouched. An optional secondmate id
 # enables the content-equivalent divergence proof and durable marker described
-# in this file's header.
+# in this file's header; reconcile_redundant=yes enables only the proof.
 FF_STATUS=""
 FF_INSTR=""
 ff_target() {
   local dir=$1 label=$2 base_mode=$3 allow_detached=${4:-no} ignore_seed_marker=${5:-no}
-  local secondmate_id=${6:-} reconciliation_state=${7:-}
+  local secondmate_id=${6:-} reconciliation_state=${7:-} reconcile_redundant=${8:-no}
+  local records_divergence=no
+  if [ -n "$secondmate_id" ] && [ -n "$reconciliation_state" ]; then
+    records_divergence=yes
+    reconcile_redundant=yes
+  fi
   FF_STATUS="skipped"
   FF_INSTR=""
 
@@ -452,7 +452,7 @@ ff_target() {
     return 0
   fi
   if ! git -C "$dir" merge-base --is-ancestor HEAD "$base" 2>/dev/null; then
-    if [ -n "$secondmate_id" ] && [ -n "$reconciliation_state" ] \
+    if [ "$reconcile_redundant" = yes ] \
       && divergence_is_redundant "$dir" "$local_rev" "$base_rev"; then
       instr=$(changed_instr "$dir" "$base")
       before=$(git -C "$dir" rev-parse --short HEAD)
@@ -460,7 +460,7 @@ ff_target() {
         after=$(git -C "$dir" rev-parse --short HEAD)
         FF_STATUS="updated"
         FF_INSTR="$instr"
-        secondmate_update_reconcile_clear "$reconciliation_state" "$secondmate_id" || true
+        [ "$records_divergence" = no ] || secondmate_update_reconcile_clear "$reconciliation_state" "$secondmate_id" || true
         if [ -n "$instr" ]; then
           echo "$label: reconciled redundant divergence $before..$after (instructions changed: $instr)"
         else
@@ -471,7 +471,7 @@ ff_target() {
       echo "$label: skipped: redundant divergence could not be reconciled with reset --keep"
       return 0
     fi
-    if [ -n "$secondmate_id" ] && [ -n "$reconciliation_state" ]; then
+    if [ "$records_divergence" = yes ]; then
       local marker
       if marker=$(secondmate_update_reconcile_record "$reconciliation_state" "$secondmate_id" "$local_rev" "$base_rev" "$base"); then
         echo "$label: skipped: diverged from $base; reconciliation required (record: $marker)"

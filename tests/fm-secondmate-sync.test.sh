@@ -1209,6 +1209,74 @@ test_remote_sync_without_target_follows_host_copy() {
   pass "R7 a sync with no target still follows the host's own refreshed Firstmate copy"
 }
 
+# set_agents_lines <checkout> <message> <line>=<text>...: commit those line edits.
+set_agents_lines() {
+  local dir=$1 msg=$2 edit
+  shift 2
+  for edit in "$@"; do
+    sed -i.bak "${edit%%=*}s/.*/${edit#*=}/" "$dir/AGENTS.md"
+    rm -f "$dir/AGENTS.md.bak"
+  done
+  git -C "$dir" add AGENTS.md
+  git -C "$dir" commit -qm "$msg"
+}
+
+# rewritten_mirror_world <name> <local-edit>...: a host code root holding a local
+# AGENTS.md line edit, while the forge carries a rewritten line that edits the
+# same file and does not descend from it. Echoes the world dir.
+rewritten_mirror_world() {
+  local name=$1 w
+  shift
+  w=$(new_remote_world "$name")
+  printf 'L%s\n' 1 2 3 4 5 6 7 8 9 10 > "$w/main/AGENTS.md"
+  git -C "$w/main" add AGENTS.md
+  git -C "$w/main" commit -qm ten-lines
+  git -C "$w/main" push -q origin main
+  git -C "$w/coderoot" pull -q --ff-only
+  add_remote_home "$w" sm "$w/coderoot" "$(head_of "$w/coderoot")"
+  set_agents_lines "$w/coderoot" old-line "$@"
+  set_agents_lines "$w/main" rewritten-line 2=L2-local 9=L9-upstream
+  git -C "$w/main" push -q origin main
+  printf '%s\n' "$w"
+}
+
+remote_update() { # <w> <id>
+  REMOTE_SYNC_RC=0
+  REMOTE_SYNC_OUT=$(FM_HOME="$1/$2" FM_ROOT_OVERRIDE="$1/coderoot" \
+    "$ROOT/bin/fm-remote-secondmate-control.sh" update "$2" 2>&1) || REMOTE_SYNC_RC=$?
+}
+
+# --- R7b: a code root on a rewritten mirror moves when the target contains it --
+test_remote_update_moves_code_root_off_rewritten_mirror() {
+  local w target
+  w=$(rewritten_mirror_world remote-rewritten 2=L2-local)
+  target=$(head_of "$w/main")
+
+  remote_update "$w" sm
+
+  [ "$REMOTE_SYNC_RC" -eq 0 ] || fail "the update refused a code root its target fully contains: $REMOTE_SYNC_OUT"
+  [ "$(head_of "$w/coderoot")" = "$target" ] || fail "the code root did not reach the rewritten line"
+  [ "$(git -C "$w/coderoot" symbolic-ref --short HEAD)" = main ] || fail "the code root left main"
+  assert_contains "$REMOTE_SYNC_OUT" "synced: $target" "the home did not follow the moved code root"
+  [ "$(head_of "$w/sm")" = "$target" ] || fail "the home did not reach the rewritten line"
+  pass "R7b a code root on a rewritten mirror moves when its local line is contained in the target"
+}
+
+# --- R7c: a code root holding unique content stays refused ---------------------
+test_remote_update_keeps_code_root_with_unique_content() {
+  local w before
+  w=$(rewritten_mirror_world remote-rewritten-unique 2=L2-local 5=L5-only-here)
+  before=$(head_of "$w/coderoot")
+
+  remote_update "$w" sm
+
+  [ "$REMOTE_SYNC_RC" -ne 0 ] || fail "the update moved a code root holding unique content"
+  assert_contains "$REMOTE_SYNC_OUT" "remote code root did not complete a safe origin update" \
+    "the refusal does not name the code root"
+  [ "$(head_of "$w/coderoot")" = "$before" ] || fail "a code root holding unique content was moved"
+  pass "R7c a code root holding content the target lacks stays refused"
+}
+
 # --- R8: session start hands the remote host the PRIMARY's commit --------------
 # The deferred network stage is the only startup path that reaches a remote home,
 # so this drives the real bin/fm-bootstrap.sh network phase across the real
@@ -1371,6 +1439,8 @@ test_remote_sync_uses_present_objects
 test_remote_sync_skips_unimportable_target
 test_remote_sync_skips_dirty_diverged_and_feature_branch
 test_remote_sync_without_target_follows_host_copy
+test_remote_update_moves_code_root_off_rewritten_mirror
+test_remote_update_keeps_code_root_with_unique_content
 test_bootstrap_syncs_remote_home_to_primary_commit
 test_bootstrap_reports_outdated_host_actionably
 test_remote_launch_does_not_retarget_host_copy

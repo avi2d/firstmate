@@ -77,18 +77,27 @@ SECONDMATES_MD="$FM_HOME/data/secondmates.md"
 
 "$SCRIPT_DIR/fm-guard.sh" || true
 
-usage() { echo "usage: fm-update.sh [--help]" >&2; }
+usage() {
+  cat >&2 <<'EOF'
+usage: fm-update.sh [--reconcile-redundant-root] [--help]
+  --reconcile-redundant-root  move this firstmate repo off a diverged line with
+                              reset --keep when a content merge into origin's
+                              default branch is clean and equals its tree, as on
+                              a remote code root whose mirror was rewritten
+EOF
+}
 
-if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  usage
-  exit 0
-fi
+reconcile_redundant_root=no
+case "${1:-}" in
+  --help|-h) usage; exit 0 ;;
+  --reconcile-redundant-root) reconcile_redundant_root=yes; shift ;;
+esac
 [ $# -eq 0 ] || { usage; exit 1; }
 
 # --- main firstmate repo ---------------------------------------------------
 
 reread_firstmate="no"
-ff_target "$FM_ROOT" "firstmate" origin no no
+ff_target "$FM_ROOT" "firstmate" origin no no "" "" "$reconcile_redundant_root"
 if [ "$FF_STATUS" = "updated" ]; then
   if [ -n "$FF_INSTR" ]; then
     reread_firstmate="yes"

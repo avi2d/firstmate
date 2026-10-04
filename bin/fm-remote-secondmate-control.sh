@@ -419,13 +419,13 @@ cmd_update() {
   validate_id "$id"
   validate_home "$id"
   if ! update_out=$(FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
-    "$SCRIPT_DIR/fm-update.sh" 2>&1); then
+    "$SCRIPT_DIR/fm-update.sh" --reconcile-redundant-root 2>&1); then
     [ -z "$update_out" ] || printf '%s\n' "$update_out" >&2
     die "remote code root update failed"
   fi
   root_status=$(printf '%s\n' "$update_out" | grep '^firstmate:' | tail -1)
   case "$root_status" in
-    'firstmate: updated '*|'firstmate: already current'*) ;;
+    'firstmate: updated '*|'firstmate: reconciled redundant divergence '*|'firstmate: already current'*) ;;
     *)
       [ -z "$update_out" ] || printf '%s\n' "$update_out" >&2
       die "remote code root did not complete a safe origin update"

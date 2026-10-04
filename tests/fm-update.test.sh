@@ -135,9 +135,10 @@ bump_origin() {
 
 run_update() {
   local w=$1
+  shift
   PATH="$w/fakebin:$PATH" FM_FAKE_DIR="$w/fake" \
     FM_SSH_BIN="${FM_TEST_SSH_BIN:-ssh}" \
-    FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" "$UPDATE" 2>/dev/null
+    FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" "$UPDATE" "$@" 2>/dev/null
 }
 
 # --- T1: main + secondmate behind, instruction change; FF, not a merge ------
@@ -381,6 +382,153 @@ test_squash_merged_divergence_reconciles() {
   pass "T5b squash-merged divergence heals and rejoins live convergence"
 }
 
+# Give origin and main a ten-line AGENTS.md so two lines can move independently.
+seed_ten_line_agents() {
+  local w=$1
+  printf 'L%s\n' 1 2 3 4 5 6 7 8 9 10 > "$w/seed/AGENTS.md"
+  git -C "$w/seed" add AGENTS.md
+  git -C "$w/seed" commit -qm ten-lines
+  git -C "$w/seed" push -q origin main
+  git -C "$w/main" pull -q --ff-only origin main
+}
+
+# commit_line_edits <checkout> <message> <line>=<text>...
+commit_line_edits() {
+  local dir=$1 msg=$2 edit line text
+  shift 2
+  for edit in "$@"; do
+    line=${edit%%=*}
+    text=${edit#*=}
+    sed -i.bak "${line}s/.*/${text}/" "$dir/AGENTS.md"
+    rm -f "$dir/AGENTS.md.bak"
+  done
+  git -C "$dir" add AGENTS.md
+  git -C "$dir" commit -qm "$msg"
+}
+
+# Origin lands L2 as the local line has it, plus its own L9, in one commit that
+# does not descend from the local line: the shape of a rewritten upstream.
+push_rewritten_upstream() {
+  local w=$1
+  commit_line_edits "$w/seed" rewritten-upstream 2=L2-local 9=L9-upstream
+  git -C "$w/seed" push -q origin main
+}
+
+# --- T5c: a file edited on both lines still reconciles when content proves it
+test_both_sides_edited_divergence_reconciles() {
+  local w out marker
+  w=$(new_world t5c)
+  seed_ten_line_agents "$w"
+  add_sm "$w" sm1
+  commit_line_edits "$w/sm1" local-line 2=L2-local
+  push_rewritten_upstream "$w"
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "secondmate sm1: reconciled redundant divergence" \
+    "a divergence whose content merge equals the target did not reconcile"
+  [ "$(git -C "$w/sm1" rev-parse HEAD)" = "$(git -C "$w/sm1" rev-parse origin/main)" ] \
+    || fail "reconciled secondmate did not reach origin/main"
+  marker="$w/home/state/.secondmate-update-reconcile/sm1.pending"
+  assert_absent "$marker" "a reconciled divergence left its marker behind"
+  pass "T5c a both-sides-edited divergence reconciles when the content merge equals the target"
+}
+
+# --- T5d: a local change the target lacks is never discarded ----------------
+test_both_sides_edited_unique_change_refused() {
+  local w out before marker
+  w=$(new_world t5d)
+  seed_ten_line_agents "$w"
+  add_sm "$w" sm1
+  commit_line_edits "$w/sm1" local-line 2=L2-local 5=L5-only-here
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  push_rewritten_upstream "$w"
+
+  out=$(run_update "$w")
+
+  assert_contains "$out" "secondmate sm1: skipped: diverged from origin/main" \
+    "a local line with unique content was not refused"
+  [ "$(git -C "$w/sm1" rev-parse HEAD)" = "$before" ] \
+    || fail "a secondmate holding unique content was moved"
+  marker="$w/home/state/.secondmate-update-reconcile/sm1.pending"
+  assert_present "$marker" "the refused divergence left no durable record"
+  pass "T5d a local line holding content the target lacks stays refused"
+}
+
+# --- T5e: a git without merge-tree --write-tree refuses rather than crashes --
+test_missing_write_tree_refuses() {
+  local w out before real_git
+  w=$(new_world t5e)
+  seed_ten_line_agents "$w"
+  add_sm "$w" sm1
+  commit_line_edits "$w/sm1" local-line 2=L2-local
+  before=$(git -C "$w/sm1" rev-parse HEAD)
+  push_rewritten_upstream "$w"
+  real_git=$(command -v git)
+  cat > "$w/fakebin/git" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = merge-tree ]; then
+    echo "usage: git merge-tree <base-tree> <branch1> <branch2>" >&2
+    exit 129
+  fi
+done
+exec "$real_git" "\$@"
+SH
+  chmod +x "$w/fakebin/git"
+
+  out=$(run_update "$w") || fail "the update crashed without merge-tree --write-tree: $out"
+
+  assert_contains "$out" "secondmate sm1: skipped: diverged from origin/main" \
+    "a git lacking merge-tree --write-tree did not refuse"
+  [ "$(git -C "$w/sm1" rev-parse HEAD)" = "$before" ] \
+    || fail "the secondmate moved without a content proof"
+  pass "T5e a git lacking merge-tree --write-tree refuses the divergence"
+}
+
+# --- T5f: the code root reconciles a contained divergence only when asked ----
+test_code_root_redundant_divergence() {
+  local w out before
+  w=$(new_world t5f)
+  seed_ten_line_agents "$w"
+  commit_line_edits "$w/main" local-line 2=L2-local
+  before=$(git -C "$w/main" rev-parse HEAD)
+  push_rewritten_upstream "$w"
+
+  out=$(run_update "$w")
+  assert_contains "$out" "firstmate: skipped: diverged from origin/main" \
+    "an ordinary update moved a diverged code root"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$before" ] \
+    || fail "an ordinary update moved a diverged code root"
+
+  out=$(run_update "$w" --reconcile-redundant-root)
+  assert_contains "$out" "firstmate: reconciled redundant divergence" \
+    "the code root did not reconcile a divergence its target fully contains"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$(git -C "$w/main" rev-parse origin/main)" ] \
+    || fail "the reconciled code root did not reach origin/main"
+  [ "$(git -C "$w/main" symbolic-ref --short HEAD)" = main ] \
+    || fail "the reconciled code root left its default branch"
+  pass "T5f the code root reconciles a contained divergence only when asked"
+}
+
+# --- T5g: the code root keeps a line holding unique content -----------------
+test_code_root_unique_change_refused() {
+  local w out before
+  w=$(new_world t5g)
+  seed_ten_line_agents "$w"
+  commit_line_edits "$w/main" local-line 2=L2-local 5=L5-only-here
+  before=$(git -C "$w/main" rev-parse HEAD)
+  push_rewritten_upstream "$w"
+
+  out=$(run_update "$w" --reconcile-redundant-root)
+
+  assert_contains "$out" "firstmate: skipped: diverged from origin/main" \
+    "a code root holding unique content was not refused"
+  [ "$(git -C "$w/main" rev-parse HEAD)" = "$before" ] \
+    || fail "a code root holding unique content was moved"
+  pass "T5g a code root holding content the target lacks stays refused"
+}
+
 # --- T6: the git side is idempotent; the restart set is not -----------------
 # This is the SSHHIP case: that mate's home was already at the target commit, so
 # the old classifier skipped it entirely and its agent kept running the launch-time
@@ -565,6 +713,11 @@ test_legacy_remote_advance_restarts
 test_dirty_secondmate_skipped
 test_diverged_secondmate_skipped
 test_squash_merged_divergence_reconciles
+test_both_sides_edited_divergence_reconciles
+test_both_sides_edited_unique_change_refused
+test_missing_write_tree_refuses
+test_code_root_redundant_divergence
+test_code_root_unique_change_refused
 test_already_current_secondmate_still_restarts
 test_already_current_unprovable_mate_is_nudged
 test_registry_backstop_dedup_and_self_exclusion
