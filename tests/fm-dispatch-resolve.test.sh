@@ -815,6 +815,132 @@ assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-m
 assert_not_contains "$out" 'array_order' "without array_order no ordering line is printed"
 pass "array_order preference: the first candidate passing the gates wins, and its absence keeps the spendPriority ranking"
 
+# --- claude_account: a Claude account's own clauth windows gate its candidate ----
+cat > "$FAKEBIN/clauth" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "${CLAUTH_CALLS:?}"
+[ "${FAKE_CLAUTH_FAIL:-0}" = 1 ] && exit 1
+[ "$*" = 'status --json' ] || exit 2
+cat "${CLAUTH_FIXTURE:?}"
+SH
+chmod +x "$FAKEBIN/clauth"
+CLAUTH="$TMP_ROOT/clauth.json"
+export CLAUTH_CALLS="$LOG/clauth.calls" CLAUTH_FIXTURE="$CLAUTH"
+
+write_clauth() {  # <path> <main 5h utilization> <second 5h utilization> [<main stale>] [<active profile>]
+  cat > "$1" <<JSON
+{ "schema": 2, "active_profile": "${5:-main}", "profiles": [
+  { "name": "main", "active": true, "tier": "Max 20x", "auth_status": "ok", "fetch_status": "Fresh", "stale": ${4:-false},
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": $2 }, { "label": "7d", "utilization_pct": 22.0 }, { "label": "7d fable", "utilization_pct": 90.0 } ] },
+  { "name": "second", "active": false, "tier": "Pro", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": $3 }, { "label": "7d", "utilization_pct": 10.0 } ] } ] }
+JSON
+}
+
+ACCOUNT_RULES="$TMP_ROOT/account-rules.json"
+cat > "$ACCOUNT_RULES" <<'JSON'
+{
+  "array_order": "preference",
+  "rules": [
+    { "when": "Small implementation work.",
+      "use": [
+        { "harness": "pi", "model": "claude-bridge/claude-opus-5-5", "effort": "high", "provider": "claude", "claude_account": "main", "floor": { "scope": "all_models", "min_percent": 30 } },
+        { "harness": "pi", "model": "claude-bridge/claude-opus-5-5", "effort": "high", "provider": "claude", "claude_account": "second", "floor": { "scope": "all_models", "min_percent": 30 } },
+        { "harness": "cursor", "model": "cursor-grok-4.6-medium" }
+      ] }
+  ],
+  "default": [ { "harness": "cursor", "model": "cursor-grok-4.6-high" } ]
+}
+JSON
+ACCOUNT_RESPONSE="$TMP_ROOT/account-response.json"
+cat > "$ACCOUNT_RESPONSE" <<'JSON'
+{ "model": "jev-1.13.0",
+  "answers": { "rule": { "type": "choice", "choice": "rule_1", "confidence": 0.93,
+    "probabilities": { "rule_1": 0.93, "default": 0.07 } } },
+  "usage": { "input_tokens": 400, "output_tokens": 20 } }
+JSON
+printf '%s\n' '# clauth profile -> login' 'main ordinary' "second $TMP_ROOT/claude-second" > "$HOME_DIR/config/claude-accounts"
+cp "$ACCOUNT_RULES" "$RULES"
+
+reset_log
+write_clauth "$CLAUTH" 24.0 0.0
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+expect_code 0 "$code" "account candidates resolve"
+assert_contains "$out" '  status: clear' "a usable main account resolves"
+assert_contains "$out" 'candidate: pi:claude-bridge/claude-opus-5-5  account=main  provider=claude  scope=all_models  remaining=76%' "main is measured from its own clauth windows"
+assert_contains "$out" "  profile: --harness 'pi' --model 'claude-bridge/claude-opus-5-5' --effort 'high' --claude-account 'main'" "the chosen account rides on the profile line"
+assert_contains "$out" 'candidate: pi:claude-bridge/claude-opus-5-5  account=second  provider=claude  scope=all_models  remaining=90%' "second is measured from its own clauth windows"
+assert_not_contains "$out" 'uncertain' "a fresh clauth reading is not quota uncertainty"
+assert_equals 'status --json' "$(cat "$LOG/clauth.calls")" "one clauth snapshot serves every account candidate"
+
+reset_log
+write_clauth "$CLAUTH" 75.0 0.0
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  scope=all_models  remaining=25%' "main below its floor keeps its evidence"
+assert_contains "$out" '-> not eligible: profile floor all_models below 30%' "main below its floor is ineligible"
+assert_contains "$out" "  profile: --harness 'pi' --model 'claude-bridge/claude-opus-5-5' --effort 'high' --claude-account 'second'" "the next account in order is chosen"
+
+reset_log
+write_clauth "$CLAUTH" 100.0 0.0
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  scope=all_models  remaining=0%' "a spent window reads as 0% remaining"
+assert_contains "$out" '-> not eligible: runway exhausted_now at all_models' "a spent account is exhausted now"
+
+reset_log
+write_clauth "$CLAUTH" 24.0 0.0 true
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'candidate: pi:claude-bridge/claude-opus-5-5  account=main  provider=claude  -> not eligible: clauth reading for account main is stale (fetched 2030-01-01T00:00:00+00:00)' "a stale reading is named, never treated as available"
+assert_contains "$out" "--claude-account 'second'" "a stale first account falls to the next"
+
+reset_log
+write_clauth "$CLAUTH" 24.0 0.0 false second
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  -> not eligible: the ordinary Claude login is clauth profile second, not main' "an ordinary login is only its account while clauth reports it active"
+
+reset_log
+write_clauth "$CLAUTH" 24.0 0.0
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" FAKE_CLAUTH_FAIL=1 run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  -> not eligible: clauth status --json failed, so account main is unverified' "a failing clauth is named on every account candidate"
+assert_contains "$out" 'account=second  provider=claude  -> not eligible: clauth status --json failed, so account second is unverified' "no account is treated as available without clauth"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "the walk continues past unverifiable accounts"
+
+NO_CLAUTH_PATH=$(printf '%s' "$BASE_PATH" | tr ':' '\n' | while IFS= read -r dir; do [ -x "$dir/clauth" ] || printf '%s:' "$dir"; done)
+reset_log
+_out=$(PATH="$FAKEBIN-no-clauth:${NO_CLAUTH_PATH%:}" FM_HOME="$HOME_DIR" TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" bash -c '
+  mkdir -p "$1"; for f in "$2"/*; do [ "${f##*/}" = clauth ] || ln -sf "$f" "$1/"; done; "$3" "$4"' _ "$FAKEBIN-no-clauth" "$FAKEBIN" "$TOOL" "$BRIEF" 2>/dev/null)
+assert_contains "$_out" 'account=main  provider=claude  -> not eligible: clauth is not installed, so account main is unverified' "a missing clauth is named plainly"
+
+reset_log
+printf '%s\n' 'main ordinary' > "$HOME_DIR/config/claude-accounts"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=second  provider=claude  -> not eligible: config/claude-accounts declares no login for account second' "an account this home cannot launch is ineligible"
+rm "$HOME_DIR/config/claude-accounts"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  -> not eligible: config/claude-accounts declares no login for account main' "a home without the account map launches no account"
+printf '%s\n' 'main relative/root' > "$HOME_DIR/config/claude-accounts"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+expect_code 2 "$code" "a malformed account map is a configuration error"
+assert_contains "$err" 'config/claude-accounts line 1' "the malformed account map line is named"
+printf '%s\n' 'main ordinary' "second $TMP_ROOT/claude-second" > "$HOME_DIR/config/claude-accounts"
+
+reset_log
+jq 'del(.array_order)' "$ACCOUNT_RULES" > "$RULES"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  scope=all_models  remaining=76%  spendPriority=-  runway=unknown  -> eligible, unranked: clauth measures windows, not spendPriority: not rankable: disclosed uncertainty' "spendPriority ranking discloses that an account is unranked"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "ranking picks among rankable candidates"
+
+reset_log
+cp "$PREFERENCE_RULES" "$RULES"
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "a file without accounts resolves exactly as before"
+assert_absent "$LOG/clauth.calls" "a file without accounts never reads clauth"
+assert_not_contains "$out" 'account=' "a file without accounts prints no account"
+pass "claude_account: each account's clauth windows gate its candidate, a missing or stale reading is never available, and files without accounts are unchanged"
+
 # --- schema 6: rows keyed by provider + accountKey bind per account ----------------
 # quota-axi emits schema 6 once a provider expands to several accounts; every
 # row then carries accountKey and one provider id may appear on several rows.
@@ -1055,6 +1181,12 @@ for bad in \
   '{"rules":[{"when":"x","use":{"harness":"codex","floor":{"scope":"all_models","min_percent":20,"provider":"claude"}}}]}|each use profile needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present' \
   '{"rules":[{"when":"x","use":[{"harness":"codex","model":"gpt-5.5","effort":"high"},{"harness":"codex","model":"gpt-5.5","effort":"high"}]}]}|each rule use must not contain duplicate harness, model, and effort profiles' \
   '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":[{"harness":"claude","model":"opus"},{"harness":"claude","model":"opus"}]}|default must not contain duplicate harness, model, and effort profiles' \
+  '{"rules":[{"when":"x","use":{"harness":"codex","claude_account":"main"}}]}|claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude' \
+  '{"rules":[{"when":"x","use":{"harness":"pi","model":"openai-codex/gpt-6-luna","provider":"codex","claude_account":"main"}}]}|claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude' \
+  '{"rules":[{"when":"x","use":{"harness":"pi","model":"claude-bridge/claude-opus-5-5","provider":"codex","claude_account":"main"}}]}|claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude' \
+  '{"rules":[{"when":"x","use":{"harness":"claude","claude_account":"two words"}}]}|claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude' \
+  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"claude","claude_account":""}}|claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude' \
+  '{"rules":[{"when":"x","use":[{"harness":"claude","claude_account":"main"},{"harness":"claude","claude_account":"main"}]}]}|each rule use must not contain duplicate harness, model, and effort profiles' \
   '{"rules":[{"when":"x","use":{"harness":"spaceship"}}]}|each use profile must name a verified harness' \
   '{"rules":[{"when":"x","use":{"harness":"grok","effort":"max"}}]}|each use profile effort must be supported by its harness and model' \
   '{"rules":[{"when":"x","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5"}}]}|use profiles whose harness lacks one authoritative provider family require provider: opencode' \

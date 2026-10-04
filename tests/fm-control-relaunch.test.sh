@@ -815,6 +815,35 @@ test_worker_account_pin_follows_the_relaunch() {
   pass "fm-control relaunch: the replacement follows the home's current worker account pin"
 }
 
+test_claude_account_follows_a_same_profile_relaunch() {
+  local dir out rc id=rl-cacct
+  dir=$(new_case cacct "$id")
+  add_ship_task "$dir" "$id" claude
+  make_claude_auth_stub "$dir"
+  echo "claude_account=second" >> "$dir/home/state/$id.meta"
+  mkdir -p "$dir/home/config" "$dir/second"
+  printf 'second %s\n' "$dir/second" > "$dir/home/config/claude-accounts"
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+  out=$(run_control "$dir" "$id" relaunch --note "account signed out"); rc=$?
+  expect_code 1 "$rc" "a relaunch whose recorded account is signed out must refuse"
+  assert_contains "$out" "maps account second to $dir/second, which is not signed in" \
+    "the refusal should name the account and its signed-out login"
+  [ ! -s "$dir/fake/literal" ] || fail "a signed-out account must refuse before any lifecycle input is sent"
+  cmp -s "$dir/meta-before" "$dir/home/state/$id.meta" || fail "a refused relaunch must leave the task record untouched"
+  : > "$dir/second/.credentials.json"
+  out=$(run_control "$dir" "$id" relaunch --note "same account"); rc=$?
+  expect_code 0 "$rc" "a same-profile relaunch on a signed-in account should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" "$id" claude_account)" = second ] || fail "the relaunched record should keep the account"
+  assert_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR='$dir/second'" \
+    "the replacement should launch on the account's login"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --model sonnet --note "new profile"); rc=$?
+  expect_code 0 "$rc" "a relaunch onto another model should succeed"$'\n'"$out"
+  assert_no_grep "claude_account=" "$dir/home/state/$id.meta" "an account chosen for one profile must not carry to another"
+  assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" "the new profile must launch without the account"
+  pass "fm-control relaunch: the recorded Claude account follows a same-profile relaunch and refuses signed out before the stop"
+}
+
 test_explicit_model_wins_over_the_recorded_one() {
   local dir out rc
   dir=$(new_case explicit rl7)
@@ -2404,6 +2433,7 @@ test_same_harness_relaunch_keeps_the_profile_axes
 test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
+test_claude_account_follows_a_same_profile_relaunch
 test_explicit_model_wins_over_the_recorded_one
 test_relaunch_onto_an_unverified_harness_is_refused
 test_prior_harness_turnend_registry_entry_is_cleared

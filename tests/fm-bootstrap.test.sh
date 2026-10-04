@@ -1107,10 +1107,10 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   expect=$'BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json\nBOOTSTRAP_INFO: crew dispatch rule: fresh news -> grok\nBOOTSTRAP_INFO: crew dispatch rule: big feature -> quota-balanced[claude/claude-sonnet-5/high, codex/gpt-5.5/high]\nBOOTSTRAP_INFO: crew dispatch rule: legacy feature -> quota-balanced[claude, codex]\nBOOTSTRAP_INFO: crew dispatch default: quota-balanced[pi/anthropic/claude-sonnet-5/high, grok/grok-4.5/high]'
   [ "$out" = "$expect" ] || fail "active dispatch verbose info block mismatch"$'\n'"expected: $expect"$'\n'"actual:   $out"
 
-  printf '%s\n' '{"array_order":"preference","rules":[{"when":"workhorse","use":[{"harness":"muse"},{"harness":"codex","model":"gpt-5.6-luna"}]},{"when":"fresh news","use":{"harness":"grok"}}],"default":[{"harness":"claude","model":"opus"},{"harness":"codex"}]}' > "$case_dir/home/config/crew-dispatch.json"
+  printf '%s\n' '{"array_order":"preference","rules":[{"when":"workhorse","use":[{"harness":"muse"},{"harness":"codex","model":"gpt-5.6-luna"}]},{"when":"fresh news","use":{"harness":"grok"}}],"default":[{"harness":"claude","model":"opus","claude_account":"main"},{"harness":"claude","model":"opus","claude_account":"second"},{"harness":"codex"}]}' > "$case_dir/home/config/crew-dispatch.json"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_BOOTSTRAP_VERBOSE_FACTS=1 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  expect=$'BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json\nBOOTSTRAP_INFO: crew dispatch rule: workhorse -> preference[muse, codex/gpt-5.6-luna]\nBOOTSTRAP_INFO: crew dispatch rule: fresh news -> grok\nBOOTSTRAP_INFO: crew dispatch default: preference[claude/opus, codex]'
+  expect=$'BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json\nBOOTSTRAP_INFO: crew dispatch rule: workhorse -> preference[muse, codex/gpt-5.6-luna]\nBOOTSTRAP_INFO: crew dispatch rule: fresh news -> grok\nBOOTSTRAP_INFO: crew dispatch default: preference[claude/opus@main, claude/opus@second, codex]'
   [ "$out" = "$expect" ] || fail "preference dispatch verbose info block mismatch"$'\n'"expected: $expect"$'\n'"actual:   $out"
   pass "bootstrap surfaces active crew-dispatch rules only as verbose BOOTSTRAP_INFO"
 }
@@ -1185,6 +1185,9 @@ whitespace profile provider is flagged^{"rules":[{"when":"images","use":[{"harne
 newline profile provider is flagged^{"rules":[{"when":"images","use":[{"harness":"pi","model":"openai-codex/gpt-5.6-sol","provider":"claude\n"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
 profile floor without scope is flagged^{"rules":[{"when":"images","use":[{"harness":"codex","floor":{"min_percent":50}}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile floor needs scope and min_percent 0..100
 profile floor provider override is flagged^{"rules":[{"when":"images","use":{"harness":"codex","floor":{"scope":"all_models","min_percent":50,"provider":"claude"}}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile floor needs scope and min_percent 0..100
+claude_account on a Pi claude-bridge profile is accepted^{"array_order":"preference","rules":[{"when":"workhorse","use":[{"harness":"pi","model":"claude-bridge/claude-opus-5-5","provider":"claude","claude_account":"main"},{"harness":"pi","model":"claude-bridge/claude-opus-5-5","provider":"claude","claude_account":"second"}]}]}^empty^
+claude_account on codex is flagged^{"rules":[{"when":"workhorse","use":{"harness":"codex","claude_account":"main"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude
+claude_account on another Pi provider is flagged^{"default":{"harness":"pi","model":"openai-codex/gpt-6-luna","provider":"codex","claude_account":"main"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude
 array_order preference is accepted^{"array_order":"preference","rules":[{"when":"workhorse","use":[{"harness":"muse"},{"harness":"codex","model":"gpt-5.6-luna"}]}]}^empty^
 unknown array_order is flagged^{"array_order":"spend","rules":[{"when":"workhorse","use":[{"harness":"muse"},{"harness":"codex"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - array_order must be "preference" when present
 non-string array_order is flagged^{"array_order":true,"default":{"harness":"codex"}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - array_order must be "preference" when present
@@ -1226,6 +1229,11 @@ ROWS
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
   [ "$out" = 'CREW_DISPATCH: invalid config/crew-dispatch.json - array_order must be "preference" when present' ] \
     || fail "array_order governs firstmate intake, so it is validated without the typed key, got: $out"
+  printf '%s\n' '{"default":{"harness":"claude","claude_account":"two words"}}' > "$case_dir/home/config/crew-dispatch.json"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ "$out" = 'CREW_DISPATCH: invalid config/crew-dispatch.json - claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude' ] \
+    || fail "claude_account names the login a launch spends, so it is validated without the typed key, got: $out"
   printf '%s\n' '{"rules":[{"when":"legacy metadata","approval":"firstmate","floor":{"scope":"all_models","min_percent":200,"provider":"CLAUDE"},"use":{"harness":"claude","provider":"Anthropic","floor":{"scope":"all_models"}}}]}' > "$case_dir/home/config/crew-dispatch.json"
   printf '%s\n' 'TYPESAFE_API_KEY=test-key' > "$case_dir/home/.env"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
