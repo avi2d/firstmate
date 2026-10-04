@@ -132,17 +132,19 @@ state_value() { # <id>; prints recovery-grade state
     return 0
   fi
   heartbeat=$(fm_remote_job_worker_host_heartbeat_path)
-  if [ ! -f "$heartbeat" ] || [ -L "$heartbeat" ]; then
-    printf 'host-unavailable\n'
-    return 0
-  fi
-  IFS= read -r heartbeat_value < "$heartbeat" || heartbeat_value=
-  case "$heartbeat_value" in ''|*[!0-9]*) printf 'host-unavailable\n'; return 0 ;; esac
-  [ "${#heartbeat_value}" -le 12 ] || { printf 'host-unavailable\n'; return 0; }
-  now=$(date +%s)
-  if [ "$((now - 10#$heartbeat_value))" -gt 180 ]; then
-    printf 'host-unavailable\n'
-    return 0
+  if [ -e "$heartbeat" ] || [ -L "$heartbeat" ]; then
+    if [ ! -f "$heartbeat" ] || [ -L "$heartbeat" ]; then
+      printf 'host-unavailable\n'
+      return 0
+    fi
+    IFS= read -r heartbeat_value < "$heartbeat" || heartbeat_value=
+    case "$heartbeat_value" in ''|*[!0-9]*) printf 'host-unavailable\n'; return 0 ;; esac
+    [ "${#heartbeat_value}" -le 12 ] || { printf 'host-unavailable\n'; return 0; }
+    now=$(date +%s)
+    if [ "$((now - 10#$heartbeat_value))" -gt 180 ]; then
+      printf 'host-unavailable\n'
+      return 0
+    fi
   fi
   meta=$(meta_path "$id")
   [ -f "$meta" ] && [ ! -L "$meta" ] || { printf 'missing\n'; return 0; }

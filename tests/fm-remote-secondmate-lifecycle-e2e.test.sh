@@ -264,6 +264,13 @@ publish_healthy_watcher_identity() { # <state> <home> <watch-script>
   touch "$state/.last-watcher-beat"
 }
 
+remote_control_state() {
+  HOME="$REMOTE_HOME" FM_HOME="$REMOTE_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+    FM_REMOTE_JOB_STATE_ROOT="$TMP_ROOT/heartbeat-probe" \
+    PATH="$REMOTE_ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$REMOTE_ROOT/bin/fm-remote-secondmate-control.sh" state ios
+}
+
 remote_env() {
   FM_HOME="$PARENT" \
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
@@ -855,11 +862,14 @@ assert_no_grep '--session default' "$HERDR_LOG" "remote launch targeted the inte
 assert_grep 'window=remote:ios' "$PARENT/state/ios.meta" "parent metadata pretended the endpoint was local"
 assert_present "$PARENT/state/procevent/remote-reply-ios.source" "remote spawn did not arm its reply source"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$ROOT/bin/fm-watch.sh"
-printf '1\n' > "$TMP_ROOT/remote-jobs/host.heartbeat"
-[ "$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state ios)" = host-unavailable ] \
+rm -f "$TMP_ROOT/heartbeat-probe/host.heartbeat"
+[ "$(remote_control_state)" = alive ] \
+  || fail "a missing account heartbeat did not fall through to endpoint probing"
+printf '1\n' > "$TMP_ROOT/heartbeat-probe/host.heartbeat"
+[ "$(remote_control_state)" = host-unavailable ] \
   || fail "a stale account heartbeat did not identify the host as unavailable"
-printf '%s\n' "$(date +%s)" > "$TMP_ROOT/remote-jobs/host.heartbeat"
-[ "$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state ios)" = alive ] \
+printf '%s\n' "$(date +%s)" > "$TMP_ROOT/heartbeat-probe/host.heartbeat"
+[ "$(remote_control_state)" = alive ] \
   || fail "a fresh remote-home heartbeat did not permit endpoint probing"
 # Herdr reports a native agent state, so the delivery observation resolves
 # without the rendered-output fallback a tmux endpoint needs.
