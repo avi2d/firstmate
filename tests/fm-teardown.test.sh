@@ -710,6 +710,7 @@ test_teardown_closes_the_backlog_item_itself() {
   case_dir=$(make_case tasks-axi-close)
   write_meta "$case_dir" no-mistakes ship
   printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$(git -C "$case_dir/wt" rev-parse HEAD)"
   seed_backlog_in_flight "$case_dir"
 
   out=$(run_teardown "$case_dir") || fail "teardown failed with a real backlog"
@@ -764,6 +765,7 @@ SH
   case_dir=$(make_case tasks-axi-close-github-under-refusal)
   write_meta "$case_dir" no-mistakes ship
   printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$(git -C "$case_dir/wt" rev-parse HEAD)"
   seed_backlog_in_flight "$case_dir"
   cp "$TMP_ROOT/tasks-axi-close-gerrit/fakebin/tasks-axi" "$case_dir/fakebin/tasks-axi"
   out=$(run_teardown "$case_dir" 2>&1) || fail "teardown of a landed GitHub task failed: $out"
@@ -778,6 +780,7 @@ test_teardown_manual_backend_leaves_the_backlog_to_the_operator() {
   case_dir=$(make_case tasks-axi-manual-optout)
   write_meta "$case_dir" no-mistakes ship
   printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$case_dir/state/task-x1.meta"
+  add_gh_pr_merged_for_head "$case_dir" "$(git -C "$case_dir/wt" rev-parse HEAD)"
   printf '%s\n' manual > "$case_dir/config/backlog-backend"
   seed_backlog_in_flight "$case_dir"
 
@@ -4534,6 +4537,35 @@ test_scout_board_falls_back_to_plain_copy() {
   pass "teardown preserves an armed scout board with a plain copy when export is unavailable"
 }
 
+test_recorded_open_pr_is_not_landed_even_when_content_is_in_default() {
+  local case_dir rc
+  case_dir=$(make_case recorded-open-pr)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt landed-content "feature"
+  land_on_origin_main "$case_dir" feature.txt landed-content
+  add_fork_with_pushed_branch "$case_dir"
+  append_pr_meta_url "$case_dir"
+  cat > "$case_dir/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+printf 'OPEN\tdeadbeef\thttps://github.com/example/repo/pull/7\n'
+SH
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' 'pull_request:' '  state: open'
+SH
+  chmod +x "$case_dir/fakebin/gh" "$case_dir/fakebin/gh-axi"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "recorded-open-pr: open PR must block cleanup despite matching default content"
+  assert_grep "recorded PR https://github.com/example/repo/pull/7 is not merged" "$case_dir/stderr" \
+    "recorded-open-pr: refusal did not explain the required merge"
+  assert_present "$case_dir/state/task-x1.meta" "recorded-open-pr: refusal removed task metadata"
+  pass "a recorded open PR blocks teardown even when matching content is in the default branch"
+}
+
 test_scout_board_copy_failure_refuses_cleanup() {
   local case_dir rc
   case_dir=$(make_scout_board_case board-fail)
@@ -4555,4 +4587,5 @@ test_scout_board_copy_failure_refuses_cleanup() {
 test_scout_board_is_preserved_via_export
 test_scout_board_falls_back_to_plain_copy
 test_scout_board_copy_failure_refuses_cleanup
+test_recorded_open_pr_is_not_landed_even_when_content_is_in_default
 

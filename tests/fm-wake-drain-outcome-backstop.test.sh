@@ -488,6 +488,58 @@ test_overbound_routine_event_stays_silent() {
   pass "an over-bound unclassifiable routine event stays silent"
 }
 
+test_outcome_rejects_landed_wording_for_open_recorded_pr() {
+  local dir state fakebin rc
+  dir=$(make_case open-pr-landed-wording)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  printf 'branch=fm/task-x\nproject=%s\npr=https://github.com/example/repo/pull/7\n' "$ROOT" > "$state/task-x.meta"
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' 'pull_request:' '  state: open'
+SH
+  chmod +x "$fakebin/gh-axi"
+
+  set +e
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
+    --task task-x --verdict captain --summary 'work landed and task cleaned up' \
+    > "$dir/append.out" 2> "$dir/append.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an open recorded PR received a landed outcome"
+  grep -F 'recorded PR https://github.com/example/repo/pull/7 is not merged' "$dir/append.err" >/dev/null \
+    || fail "open-PR refusal did not explain the merge requirement: $(cat "$dir/append.err")"
+  [ ! -s "$state/branch-outcomes.jsonl" ] || fail "landed outcome for an open PR was appended"
+  pass "an open recorded PR blocks landed and cleanup outcomes"
+}
+
+test_outcome_rejects_pr_for_another_recorded_branch() {
+  local dir state fakebin out rc
+  dir=$(make_case wrong-pr-task)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  printf 'branch=fm/session-names\nproject=%s\n' "$ROOT" > "$state/model-icons.meta"
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *--head*) printf '%s\n' 'count: 0 (showing first 0)' 'pull_requests[]: []' ;;
+esac
+SH
+  chmod +x "$fakebin/gh-axi"
+
+  set +e
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
+    --task model-icons --verdict captain \
+    --summary 'session names shipped https://github.com/avi2d/skills/pull/241' > "$dir/append.out" 2> "$dir/append.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an outcome recorded a PR owned by another task branch"
+  grep -F "GitHub does not list it under recorded branch 'fm/session-names'" "$dir/append.err" >/dev/null \
+    || fail "wrong-branch refusal did not identify the branch mismatch: $(cat "$dir/append.err")"
+  [ ! -s "$state/branch-outcomes.jsonl" ] || fail "wrong-branch outcome was appended"
+  pass "an outcome refuses a PR whose head branch belongs to another task"
+}
+
 test_backstop_output_is_bounded() {
   local dir state out old i payload count longest
   dir=$(make_case bounded-output)
@@ -531,3 +583,5 @@ test_held_lock_mode_accepts_a_lock_owner_descendant
 test_index_self_heal_runs_under_the_outcome_lock
 test_overbound_routine_event_stays_silent
 test_backstop_output_is_bounded
+test_outcome_rejects_pr_for_another_recorded_branch
+test_outcome_rejects_landed_wording_for_open_recorded_pr

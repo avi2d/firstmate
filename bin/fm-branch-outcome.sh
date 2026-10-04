@@ -353,6 +353,48 @@ EOF
   publish_outcome_index_ready "$(last_seq)"
 }
 
+validate_outcome_pr_branches() {
+  local task=$1 summary=$2 meta branch url head recorded_pr state project number pr_list
+  meta="$STATE/$task.meta"
+  [ -f "$meta" ] || return 0
+  branch=$(sed -n 's/^branch=//p' "$meta" | tail -1)
+  recorded_pr=$(sed -n 's/^pr=//p' "$meta" | tail -1)
+  project=$(sed -n 's/^project=//p' "$meta" | tail -1)
+  case "$recorded_pr" in
+    https://github.com/*/pull/[0-9]*)
+      number=${recorded_pr##*/pull/}
+      if printf '%s\n' "$summary" | grep -Eiq 'landed|clean(ed)?[- ]?up'; then
+        if ! view=$(cd "$project" && gh-axi pr view "$number" 2>&1); then
+          echo "error: cannot reach GitHub to verify recorded PR $recorded_pr for task $task: $view" >&2
+          return 1
+        fi
+        state=$(printf '%s\n' "$view" | sed -n 's/^[[:space:]]*state: *//p' | head -1)
+        case "$state" in
+          MERGED|merged) ;;
+          *) echo "error: refusing landed or cleanup outcome for task $task because recorded PR $recorded_pr is not merged" >&2; return 1 ;;
+        esac
+      fi
+      ;;
+  esac
+  printf '%s\n' "$summary" | grep -Eo 'https://github\.com/[^[:space:]]+/pull/[0-9]+' | sort -u \
+    | while IFS= read -r url; do
+        [ -n "$url" ] || continue
+        [ -n "$branch" ] || {
+          echo "error: cannot verify PR $url because task $task has no recorded branch" >&2
+          exit 1
+        }
+        number=${url##*/pull/}
+        if ! pr_list=$(cd "$project" && gh-axi pr list --state all --head "$branch" --limit 100 2>&1); then
+          echo "error: cannot reach GitHub to verify PR $url for task $task: $pr_list" >&2
+          exit 1
+        fi
+        printf '%s\n' "$pr_list" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\),.*/\1/p' | grep -qxF "$number" || {
+          echo "error: refusing PR $url for task $task: GitHub does not list it under recorded branch '$branch'" >&2
+          exit 1
+        }
+      done
+}
+
 write_outcome_tail() { # [<bounded input file>] (append uses the store)
   local tmp input=${1:-$STORE}
   tmp=$(mktemp "$STATE/.branch-outcomes-tail.XXXXXX") || return 1
@@ -531,6 +573,10 @@ case "$CMD" in
     if ! CURSOR_SEQ=$(read_cursor) || [ "$CURSOR_SEQ" -gt "$LAST_SEQ" ]; then
       fm_lock_release "$LOCK"
       echo "error: refusing append because the outcome cursor is invalid or ahead of the store" >&2
+      exit 1
+    fi
+    if ! validate_outcome_pr_branches "$TASK" "$SUMMARY"; then
+      fm_lock_release "$LOCK"
       exit 1
     fi
     SEQ=$(( LAST_SEQ + 1 ))

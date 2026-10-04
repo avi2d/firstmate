@@ -1531,13 +1531,21 @@ EOF
 # current work is not contained in the PR head, no PR is found, or any gh error
 # occurs - the caller then falls back to the content check.
 pr_is_merged() {
-  local branch=$1 target view state remainder head resolved_url current landed=0
+  local branch=$1 target number axi_view view state remainder head resolved_url current landed=0
+  PR_MERGE_LOOKUP=error
   if [ -n "$PR_URL" ]; then
     target=$PR_URL
   else
     target=$(pr_number_from_branch "$branch") || return 1
   fi
   [ -n "$target" ] || return 1
+  number=$(pr_number_from_target "$target") || return 1
+  axi_view=$(cd "$WT" && gh-axi pr view "$number" 2>&1) || return 1
+  state=$(printf '%s\n' "$axi_view" | sed -n 's/^[[:space:]]*state: *//p' | head -1)
+  case "$state" in
+    MERGED|merged) ;;
+    *) PR_MERGE_LOOKUP=open; return 1 ;;
+  esac
   view=$(cd "$WT" && gh pr view "$target" --json state,headRefOid,url -q '.state + "\t" + .headRefOid + "\t" + .url' 2>/dev/null) || return 1
   state=${view%%$'\t'*}
   remainder=${view#*$'\t'}
@@ -1547,7 +1555,7 @@ pr_is_merged() {
   [ "$head" != "$remainder" ] || return 1
   case "$state" in
     MERGED|merged) ;;
-    *) return 1 ;;
+    *) PR_MERGE_LOOKUP=open; return 1 ;;
   esac
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
@@ -1562,6 +1570,7 @@ pr_is_merged() {
     [ -n "$resolved_url" ] || return 1
     PR_URL=$resolved_url
   fi
+  PR_MERGE_LOOKUP=merged
   return 0
 }
 
@@ -1597,6 +1606,12 @@ content_in_default() {
 # only for genuinely unlanded work.
 work_is_landed() {
   local branch=$1
+  case "$PR_URL" in
+    https://github.com/*/pull/[0-9]*)
+      pr_is_merged "$branch"
+      return $?
+      ;;
+  esac
   pr_is_merged "$branch" && return 0
   content_in_default
 }
@@ -1922,9 +1937,37 @@ validate_worktree_teardown_safety() {
       TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
     fi
     if ! work_is_landed "$branch"; then
-      echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+      if [ -n "$PR_URL" ]; then
+        if [ "$PR_MERGE_LOOKUP" = open ]; then
+          echo "REFUSED: recorded PR $PR_URL is not merged; cleanup requires GitHub to report it merged." >&2
+        else
+          echo "REFUSED: cannot verify recorded PR $PR_URL with GitHub; cleanup requires a confirmed merge." >&2
+        fi
+      else
+        echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+        echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
+      fi
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
-      echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
+      return 1
+    fi
+  fi
+
+  case "$PR_URL" in
+    https://github.com/*/pull/[0-9]*) ;;
+    *) return 0 ;;
+  esac
+  if [ -n "$PR_URL" ]; then
+    branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
+    if [ -z "$branch" ]; then
+      branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+      TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
+    fi
+    if ! pr_is_merged "$branch"; then
+      if [ "$PR_MERGE_LOOKUP" = open ]; then
+        echo "REFUSED: recorded PR $PR_URL is not merged; cleanup requires GitHub to report it merged." >&2
+      else
+        echo "REFUSED: cannot verify recorded PR $PR_URL with GitHub; cleanup requires a confirmed merge." >&2
+      fi
       return 1
     fi
   fi
