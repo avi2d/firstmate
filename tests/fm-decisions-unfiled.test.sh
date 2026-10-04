@@ -132,6 +132,32 @@ test_absent_clone_and_absent_captain_stay_silent() {
   pass "absent clone and absent captain stay silent"
 }
 
+test_shared_short_quote_cites_only_the_quoted_ruling() {
+  fresh_world
+  write_captain \
+    '- 2026-10-02: Effort levels: answered "keep-solhigh", so no standing xhigh for edge-case domains.' \
+    '- 2026-10-02: Settings set-aside: answered "standing" over leaving the Mac on old rules.'
+  write_record 0048-effort "2026-10-02" "keep-solhigh"
+  printf '\n## Decision\n\nNo standing xhigh for edge-case domains.\n' \
+    >> "$TMP_ROOT/home/projects/decisions/docs/adr/0048-effort.md"
+
+  local out
+  out=$("$CHECK" --captain "$TMP_ROOT/home/data/captain.md" \
+    --decisions "$TMP_ROOT/home/projects/decisions") \
+    || fail "check failed on a shared-short-quote fixture"
+  assert_contains "$out" "Settings set-aside" "ruling sharing only a short word with the record was taken as cited"
+  assert_not_contains "$out" "Effort levels" "quoted ruling was listed as unfiled"
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ] \
+    || fail "expected exactly one listed line, got: $out"
+
+  write_record 0069-settings "2026-10-02" "standing"
+  out=$("$CHECK" --captain "$TMP_ROOT/home/data/captain.md" \
+    --decisions "$TMP_ROOT/home/projects/decisions") \
+    || fail "check failed once both rulings are filed"
+  [ -z "$out" ] || fail "both rulings filed but output printed: $out"
+  pass "a short quote shared with another ruling's record does not cite"
+}
+
 test_check_writes_nothing() {
   fresh_world
   write_captain '- 2026-09-15: Merge authority: "I merge green work myself".'
@@ -151,6 +177,7 @@ test_record_quote_of_bullet_counts_as_cited
 test_bullet_holding_the_record_quote_counts_as_cited
 test_source_record_without_words_cites_nothing
 test_corrected_paraphrase_quote_still_cites
+test_shared_short_quote_cites_only_the_quoted_ruling
 test_empty_records_list_everything
 test_absent_clone_and_absent_captain_stay_silent
 test_check_writes_nothing
