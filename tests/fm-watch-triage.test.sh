@@ -4478,6 +4478,60 @@ test_paused_authoritative_working_preserves_wedge_timer() {
 # FM_WEDGE_DEMAND_INSPECT_COUNT consecutive escalations on the SAME pane, the
 # wake reason itself carries a "demand-deep-inspection" marker.
 
+test_provider_limit_wait_suppresses_an_existing_wedge_timer() {
+  local dir state fakebin out capture window key gen future hash pid since cycles
+  dir=$(make_case provider-limit-wedge); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture="$dir/pane.txt"; window="test:fm-provider-limit"
+  printf 'idle after provider usage limit' > "$capture"
+  printf 'window=%s\nkind=ship\nharness=pi\nbackend=tmux\n' "$window" > "$state/quota.meta"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" quota)
+  future=$(( $(date +%s) + 3600 ))
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" quota idle --gen "$gen" \
+    --source pi-ext --event provider-limit --reset-epoch "$future" \
+    || fail "provider-limit fixture could not be written"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  hash=$(hash_text "$(cat "$capture")")
+  watch_bg "$state" "$fakebin" "$out" env \
+    FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=pi FM_FAKE_CREW_STATE='state: unknown · source: none · stopped' \
+    FM_WATCH_HANDLING_SUCCESSOR=1 FM_STALE_ESCALATE_SECS=1
+  pid=$!
+  cycles=0
+  while [ "$cycles" -lt 4 ]; do
+    if ! wait_poll_cycle "$state" "$pid"; then
+      reap "$pid"; fail "first sight of a provider-limit stop did not remain quiet: $(cat "$out")"
+    fi
+    cycles=$((cycles + 1))
+  done
+  [ ! -s "$state/.wake-queue" ] || fail "first sight produced a stale wake before reset"
+  [ -e "$state/.paused-$key" ] || fail "first sight did not record the provider wait"
+  [ ! -e "$state/.stale-since-$key" ] || fail "first sight started a wedge timer"
+  reap "$pid"
+  printf '%s' "$hash" > "$state/.hash-$key"
+  printf '%s' "$hash" > "$state/.stale-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s\n' "$(( $(date +%s) - 600 ))" > "$state/.stale-since-$key"
+  printf '4\n' > "$state/.wedge-escalations-$key"
+  watch_bg "$state" "$fakebin" "$out" env \
+    FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=pi FM_FAKE_CREW_STATE='state: unknown · source: none · stopped' \
+    FM_WATCH_HANDLING_SUCCESSOR=1 FM_STALE_ESCALATE_SECS=1
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "an active provider reset did not suppress the existing wedge timer: $(cat "$out")"
+  fi
+  [ ! -s "$state/.wake-queue" ] || fail "provider-limit stop produced a stale wake before reset: $(cat "$state/.wake-queue")"
+  [ ! -s "$out" ] || fail "provider-limit stop surfaced before reset: $(cat "$out")"
+  since=$(cat "$state/.stale-since-$key" 2>/dev/null || true)
+  if [ -n "$since" ]; then
+    case "$since" in *[!0-9]*) fail "provider-limit wait wrote a malformed wedge timer" ;; esac
+    [ $(( $(date +%s) - since )) -lt 5 ] || fail "provider-limit wait did not restart the wedge timer"
+  fi
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "provider-limit stop retained the wedge escalation count"
+  reap "$pid"
+  pass "a provider-limit session stop cancels an existing wedge ladder until reset"
+}
+
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
   local dir state fakebin out capture_file window key pane_hash sig pid n
   dir=$(make_case wedge-escalation); state="$dir/state"; fakebin="$dir/fakebin"
@@ -6676,6 +6730,7 @@ test_permission_recovery_surfaces_preserved_status
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
+test_provider_limit_wait_suppresses_an_existing_wedge_timer
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
 test_wedge_escalation_resets_when_pane_becomes_active
 test_gone_endpoint_reports_once_instead_of_escalating_forever

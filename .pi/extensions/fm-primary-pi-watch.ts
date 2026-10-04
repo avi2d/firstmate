@@ -93,7 +93,7 @@ type WatchToolRenderContext = {
 
 type UnconsumedWake = {
   content: string;
-  pending: PendingActionableClose;
+  pending: PendingActionableClose[];
 };
 
 type SessionGeneration = {
@@ -636,11 +636,26 @@ export default function (pi: ExtensionAPI) {
       "watcher",
       `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
     );
-    if (pending) owner.unconsumedWakes.set(pending.token, { content, pending });
+    if (pending) {
+      const accepted = owner.unconsumedWakes.values().next().value;
+      if (accepted) {
+        if (!accepted.pending.some((joined) => joined.token === pending.token)) {
+          accepted.pending.push(pending);
+          owner.unconsumedWakes.set(pending.token, accepted);
+        }
+        return true;
+      }
+    }
+    const wake = pending ? { content, pending: [pending] } : undefined;
+    if (pending && wake) owner.unconsumedWakes.set(pending.token, wake);
     try {
       await pi.sendUserMessage(content, { deliverAs: "followUp" });
     } catch (error) {
-      if (pending) owner.unconsumedWakes.delete(pending.token);
+      if (wake) {
+        for (const [token, accepted] of owner.unconsumedWakes) {
+          if (accepted === wake) owner.unconsumedWakes.delete(token);
+        }
+      }
       throw error;
     }
     // Accepted by Pi. A generation replaced while Pi was accepting it may
@@ -652,17 +667,19 @@ export default function (pi: ExtensionAPI) {
   // Pi consumed a main follow-up: an idle main at before_agent_start, a
   // streaming main at the user message_start that joins the running run.
   function consumeWake(owner: SessionGeneration, text: string): void {
-    for (const [token, wake] of owner.unconsumedWakes) {
-      if (wake.content !== text) continue;
-      owner.unconsumedWakes.delete(token);
-      wake.pending.delivered = true;
+    const wake = [...owner.unconsumedWakes.values()].find((candidate) => candidate.content === text);
+    if (!wake) return;
+    for (const [token, accepted] of owner.unconsumedWakes) {
+      if (accepted === wake) owner.unconsumedWakes.delete(token);
+    }
+    for (const pending of wake.pending) {
+      pending.delivered = true;
       try {
-        finishPendingActionable(owner, wake.pending);
+        finishPendingActionable(owner, pending);
       } catch (error) {
         surfaceCleanupFailure(owner, error);
         schedulePendingCleanup(owner);
       }
-      return;
     }
   }
 

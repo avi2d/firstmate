@@ -260,8 +260,8 @@ test_ship_mode_is_explicit_not_registry() {
   brief="$home/data/brief-explicit-a5/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
     || fail "registered direct-PR posture overrode the explicit --mode"
-  assert_grep "Firstmate will then instruct you to run /no-mistakes" "$brief" \
-    "explicit no-mistakes brief did not render the pipeline definition of done"
+  assert_grep "After committing, immediately start \`/no-mistakes\`" "$brief" \
+    "explicit no-mistakes brief did not render the automatic validation start"
 
   # An unregistered project is not a blocker either, because nothing is looked up.
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a6 never-registered --mode local-only >/dev/null 2>&1 \
@@ -367,6 +367,14 @@ test_no_mistakes_dod_wording() {
   assert_grep '[captain]' "$brief" "rendered intent contract must explain the neutral legacy provenance marker"
   assert_grep "no-mistakes itself provides for the mechanics" "$brief" \
     "no-mistakes DOD lost its guidance-reference sentence"
+  assert_grep "After committing, immediately start \`/no-mistakes\`" "$brief" \
+    "no-mistakes DOD must start validation without a firstmate handoff"
+  assert_grep "do not report the committed step as \`done:\`" "$brief" \
+    "no-mistakes DOD must reserve done for the green PR"
+  assert_no_grep 'Firstmate will then instruct you to run /no-mistakes' "$brief" \
+    "no-mistakes DOD still waits for a firstmate validation instruction"
+  assert_no_grep 'When you believe it is complete, append `done' "$brief" \
+    "no-mistakes DOD still reports committed work as done"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep '`no-mistakes axi run --help`' "$brief" \
     "no-mistakes DOD must render literal backticks around the help command"
@@ -401,6 +409,14 @@ test_no_mistakes_dod_wording() {
     "no-mistakes DOD still states the --yes ban as a preference"
   assert_no_grep "no-mistakes refuses" "$brief" \
     "no-mistakes DOD must not claim the tool itself refuses --yes"
+  id="brief-wording-gerrit-b1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes --forge gerrit >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "After committing, immediately start" "$brief" "Gerrit no-mistakes DOD must start validation without a firstmate handoff"
+  assert_grep "Pass \`--skip push,pr,ci\` on every \`no-mistakes axi run\`" "$brief" "Gerrit no-mistakes DOD must preserve its skipped publishing steps"
+  assert_grep 'ends at a ready branch' "$brief" "Gerrit no-mistakes DOD must preserve its ready-branch result"
+  assert_no_grep 'Firstmate will then instruct you to run /no-mistakes' "$brief" "Gerrit no-mistakes DOD still waits for a firstmate validation instruction"
+  assert_no_grep "That first \`done:\` is the handoff" "$brief" "Gerrit no-mistakes DOD still reports committed work as done"
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
 }
 

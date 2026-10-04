@@ -1531,6 +1531,13 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
       fm_epoch_seconds_to age
       age=$(( age - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
+        if fm_busy_provider_wait_until "$STATE" "$task" >/dev/null; then
+          date +%s > "$since_file"
+          rm -f "$escalation_file"
+          clear_write_tracking "$(window_key "$win")"
+          triage_log "absorbed stale (provider usage limit, waiting for reset): $win"
+          return 0
+        fi
         if evidence=$(wedge_wait_evidence "$task") &&
            wedge_defer_wait "$win" "$since_file" "$label" "$age" "$evidence"; then
           return 0
@@ -1595,6 +1602,10 @@ handle_paused_stale() {  # <window> <task> <hash>
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
   clear_write_tracking "$key"
   statusf="$STATE/$task.status"
+  if fm_busy_provider_wait_until "$STATE" "$task" >/dev/null; then
+    triage_log "absorbed stale (provider usage limit, waiting for reset): $win"
+    return 0
+  fi
   mtime=$(stat_mtime "$statusf")
   case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
   now=$(date +%s)
@@ -1731,6 +1742,11 @@ clear_pause_tracking() {  # <window-key>
 pause_state_class() {  # <window> <task>
   local win=$1 task=$2 key last recheck_file class agent_alive kind
   key=$(window_key "$win")
+  if fm_busy_provider_wait_until "$STATE" "$task" >/dev/null; then
+    rm -f "$STATE/.paused-rechecked-$key"
+    printf 'paused'
+    return
+  fi
   last=$(status_declared_wait_line "$STATE/$task.status")
   recheck_file="$STATE/.paused-rechecked-$key"
   if ! status_is_paused_or_captain_held "$last"; then

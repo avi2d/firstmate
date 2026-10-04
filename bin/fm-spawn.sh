@@ -4653,17 +4653,55 @@ EOF
 // tool calls) and stays a wake NOTIFICATION touch for the watcher, never
 // current-state truth.
 import { execFile } from "node:child_process";
-const busyEvent = (state: string, event: string) =>
+const busyEvent = (state: string, event: string, resetEpoch = 0) =>
   new Promise<void>((resolve) => {
-    execFile("$FM_ROOT/bin/fm-busy-event.sh", [
+    const args = [
       "apply", "$STATE_REAL", "$ID", state,
       "--gen", "$BUSY_GEN", "--source", "pi-ext", "--event", event,
-    ], () => resolve());
+    ];
+    if (resetEpoch > 0) args.push("--reset-epoch", String(resetEpoch));
+    execFile("$FM_ROOT/bin/fm-busy-event.sh", args, () => resolve());
   });
+const quotaResetEpoch = (provider: string): Promise<number> =>
+  new Promise((resolve) => {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(provider)) return resolve(0);
+    execFile("quota-axi", ["--provider", provider, "--json", "--no-credential-refresh"], { timeout: 5000 }, (error, stdout) => {
+      if (error) return resolve(0);
+      try {
+        const rows = JSON.parse(stdout).providers ?? [];
+        const resetsAt = rows.find((row: any) => row.provider === provider)?.resetsAt;
+        const epoch = typeof resetsAt === "number" ? resetsAt : Date.parse(resetsAt);
+        resolve(Number.isFinite(epoch) ? Math.floor(epoch > 1e12 ? epoch / 1000 : epoch) : 0);
+      } catch {
+        resolve(0);
+      }
+    });
+  });
+const providerLimitReset = async (ctx: any): Promise<number | null> => {
+  const entries = ctx?.sessionManager?.getEntries?.() ?? [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    const message = entry.message;
+    if (message.stopReason !== "error") return null;
+    const detail = String(message.errorMessage ?? "");
+    if (!/(?:usage[ _-]*limit|rate[ _-]*limit|quota[ _-]*(?:exceeded|limit)|daily[ _-]*limit)/i.test(detail)) return null;
+    const match = detail.match(/(?:reset|resets|retry)[^0-9]*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/i);
+    if (match) {
+      const epoch = Date.parse(match[1]);
+      if (Number.isFinite(epoch)) return Math.floor(epoch / 1000);
+    }
+    const provider = String(ctx?.model?.provider ?? "");
+    return (await quotaResetEpoch(provider)) || 0;
+  }
+  return null;
+};
 export default async function (pi: any) {
   pi.on("agent_start", () => busyEvent("busy", "agent-start"));
-  pi.on("agent_settled", (_event: any, ctx: any) => {
+  pi.on("agent_settled", async (_event: any, ctx: any) => {
     if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+    const resetEpoch = await providerLimitReset(ctx);
+    if (resetEpoch !== null) return busyEvent("idle", "provider-limit", resetEpoch);
     return busyEvent("idle", "agent-settled");
   });
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));

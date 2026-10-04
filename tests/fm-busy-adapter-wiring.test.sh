@@ -55,16 +55,25 @@ classify() {  # <harness> <id> <state-dir>
 # Node host and fire one lifecycle handler. Modes: agent-start, settle-idle,
 # settle-continuing, turn-end.
 drive_pi_ext() {
-  EXT_PATH="$1" MODE="$2" node --input-type=module 2>&1 <<'EOF'
+  EXT_PATH="$1" MODE="$2" STOP_TEXT="${3-}" node --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 const mod = await import(pathToFileURL(process.env.EXT_PATH).href);
 const handlers = {};
 mod.default({ on: (name, fn) => { handlers[name] = fn; }, events: { on: (name, fn) => { handlers[name] = fn; } } });
-const ctx = { isIdle: () => process.env.MODE !== "settle-continuing" };
+const ctx = {
+  isIdle: () => process.env.MODE !== "settle-continuing",
+  model: { provider: "openrouter" },
+  sessionManager: {
+    getEntries: () => process.env.MODE === "provider-limit"
+      ? [{ type: "message", message: { role: "assistant", stopReason: "error", errorMessage: process.env.STOP_TEXT } }]
+      : [],
+  },
+};
 switch (process.env.MODE) {
   case "agent-start": await handlers["agent_start"]({}, ctx); break;
   case "settle-idle": await handlers["agent_settled"]({}, ctx); break;
   case "settle-continuing": await handlers["agent_settled"]({}, ctx); break;
+  case "provider-limit": await handlers["agent_settled"]({}, ctx); break;
   case "settle-then-start":
     await handlers["agent_settled"]({}, ctx);
     await handlers["agent_start"]({}, ctx);
@@ -77,6 +86,39 @@ if (["turn-end", "progress"].includes(process.env.MODE)) {
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
 EOF
+}
+
+test_pi_provider_limit_uses_session_reset_and_clears_on_work() {
+  local rec id=busy-pi-provider-stop out state ext future reset expected
+  rec=$(make_spawn_case pi-provider-limit pi "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "pi spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  ext="$state/$id.pi-ext.ts"
+  future=2099-01-02T03:04:05Z
+  out=$(drive_pi_ext "$ext" provider-limit "OpenRouter daily usage limit reached; reset at $future") \
+    || fail "provider-limit drive failed: $out"
+  out=$(classify pi "$id" "$state")
+  [ "$out" = "paused pi-ext" ] || fail "worker-session usage-limit stop should classify paused, got '$out'"
+  reset=$(awk '{for (i=1;i<=NF;i++) if ($i ~ /^reset=/) {sub(/^reset=/, "", $i); print $i}}' "$state/$id.busy-state")
+  expected=$(node -e 'process.stdout.write(String(Date.parse(process.argv[1]) / 1000))' "$future")
+  [ "$reset" = "$expected" ] || fail "session reset timestamp was not recorded exactly: $reset != $expected"
+  out=$(drive_pi_ext "$ext" agent-start) || fail "agent-start drive failed: $out"
+  out=$(classify pi "$id" "$state")
+  [ "$out" = "busy pi-ext" ] || fail "later worker activity must clear the provider wait, got '$out'"
+  cat > "$FAKEBIN_DIR/quota-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"providers":[{"provider":"openrouter","resetsAt":"2099-01-02T03:04:05Z"}]}'
+SH
+  chmod +x "$FAKEBIN_DIR/quota-axi"
+  PATH="$FAKEBIN_DIR:$PATH" drive_pi_ext "$ext" provider-limit \
+    "OpenRouter daily usage limit reached" || fail "quota fallback drive failed: $out"
+  out=$(classify pi "$id" "$state")
+  [ "$out" = "paused pi-ext" ] || fail "quota resetsAt fallback should classify paused, got '$out'"
+  reset=$(awk '{for (i=1;i<=NF;i++) if ($i ~ /^reset=/) {sub(/^reset=/, "", $i); print $i}}' "$state/$id.busy-state")
+  [ "$reset" = "$expected" ] || fail "quota-axi resetsAt was not recorded: $reset != $expected"
+  pass "Pi worker-session usage-limit stops retain session or quota reset times and later activity clears the wait"
 }
 
 test_pi_extension_semantic_lifecycle() {
@@ -422,6 +464,7 @@ test_kimi_and_grok_install_no_unverified_wiring() {
   pass "kimi and grok install no unverified semantic wiring and classify through their own gates"
 }
 
+test_pi_provider_limit_uses_session_reset_and_clears_on_work
 test_pi_extension_semantic_lifecycle
 test_pi_extension_serializes_settle_before_next_start
 test_pi_extension_stale_incarnation_rejected
