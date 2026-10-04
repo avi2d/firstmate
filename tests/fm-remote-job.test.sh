@@ -296,7 +296,7 @@ HOME="$ACCOUNT_HOME" PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin" FM_FAKE_P
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=5 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
 for _ in $(seq 1 100); do
-  [ -f "$STATE_ROOT/worker.ready" ] && break
+  [ -f "$STATE_ROOT/worker.ready" ] && [ -f "$STATE_ROOT/host.heartbeat" ] && break
   sleep 0.05
 done
 assert_present "$STATE_ROOT/worker.ready" "the worker did not publish its readiness heartbeat"
@@ -316,6 +316,16 @@ file_inode() {
     stat -c %i "$1" 2>/dev/null || true
   fi
 }
+
+HOST_HEARTBEAT="$STATE_ROOT/host.heartbeat"
+assert_present "$HOST_HEARTBEAT" "the worker did not publish its account heartbeat"
+read -r HOST_HEARTBEAT_VALUE < "$HOST_HEARTBEAT"
+case "$HOST_HEARTBEAT_VALUE" in ''|*[!0-9]*) fail "the worker account heartbeat was not a Unix timestamp" ;; esac
+HOST_HEARTBEAT_INODE=$(file_inode "$HOST_HEARTBEAT")
+sleep 1.1
+[ "$(file_inode "$HOST_HEARTBEAT")" = "$HOST_HEARTBEAT_INODE" ] \
+  || fail "the account heartbeat was rewritten more often than once a minute"
+pass "the worker publishes an account heartbeat at a bounded cadence"
 
 printf 'first line\nsecond line\n' > "$TMP_ROOT/stdin"
 # shellcheck disable=SC2016 # Literal shell-looking argv is an injection probe.

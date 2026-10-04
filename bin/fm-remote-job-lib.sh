@@ -943,6 +943,7 @@ fm_remote_job_launchagent_loaded() { # <remote-root> <account-home> <uid>
 
 fm_remote_job_worker_pid_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.pid"; }
 fm_remote_job_worker_ready_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.ready"; }
+fm_remote_job_worker_host_heartbeat_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/host.heartbeat"; }
 fm_remote_job_worker_identity_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.identity"; }
 fm_remote_job_worker_lock_path() { printf '%s\n' "$FM_REMOTE_JOB_STATE/worker.lock"; }
 

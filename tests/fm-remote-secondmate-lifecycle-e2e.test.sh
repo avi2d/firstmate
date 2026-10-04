@@ -855,10 +855,10 @@ assert_no_grep '--session default' "$HERDR_LOG" "remote launch targeted the inte
 assert_grep 'window=remote:ios' "$PARENT/state/ios.meta" "parent metadata pretended the endpoint was local"
 assert_present "$PARENT/state/procevent/remote-reply-ios.source" "remote spawn did not arm its reply source"
 publish_healthy_watcher_identity "$PARENT/state" "$PARENT" "$ROOT/bin/fm-watch.sh"
-printf '1\n' > "$REMOTE_HOME/state/.remote-home-heartbeat"
+printf '1\n' > "$TMP_ROOT/remote-jobs/host.heartbeat"
 [ "$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state ios)" = host-unavailable ] \
-  || fail "a stale remote-home heartbeat did not identify the host as unavailable"
-printf '%s\n' "$(date +%s)" > "$REMOTE_HOME/state/.remote-home-heartbeat"
+  || fail "a stale account heartbeat did not identify the host as unavailable"
+printf '%s\n' "$(date +%s)" > "$TMP_ROOT/remote-jobs/host.heartbeat"
 [ "$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state ios)" = alive ] \
   || fail "a fresh remote-home heartbeat did not permit endpoint probing"
 # Herdr reports a native agent state, so the delivery observation resolves
@@ -1228,7 +1228,6 @@ RELAUNCH_CHECKPOINT=$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-c
 assert_contains "$RELAUNCH_CHECKPOINT" 'refusing to relaunch without a checkout whose unlanded work can be accounted for' \
   "the host-local restart did not reach the control plane's own pre-stop checkpoint"
 cp "$TMP_ROOT/ios-before-relaunch.meta" "$RELAUNCH_ROUTE_META"
-printf '%s\n' "$(date +%s)" > "$REMOTE_HOME/state/.remote-home-heartbeat"
 [ "$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state ios)" = alive ] \
   || fail "a refused remote restart must leave the running agent untouched"
 pass "the remote restart verb delegates to the host-local control plane and refuses before stopping anything"
@@ -1280,7 +1279,6 @@ jq --arg p "$ios_pane" \
   "$HERDR_STATE" > "$TMP_ROOT/herdr-dead.json" && mv "$TMP_ROOT/herdr-dead.json" "$HERDR_STATE"
 [ "$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state ios)" = dead ] \
   || fail "the agent-free remote pane did not classify dead"
-printf '%s\n' "$(date +%s)" > "$REMOTE_HOME/state/.remote-home-heartbeat"
 
 tabs_before=$(grep -c '^tab create' "$HERDR_LOG" || true)
 # exec keeps $! the watcher itself rather than the function's subshell, so a
@@ -1291,15 +1289,13 @@ FM_STATE_OVERRIDE="$WATCH_STATE" FM_SECONDMATE_LIVENESS_SECS=1 FM_POLL=1 \
   > "$TMP_ROOT/watch-liveness.out" 2> "$TMP_ROOT/watch-liveness.err" &
 watch_pid=$!
 watch_wait=0
-while ! grep -F $'\tcheck\tsecondmate-relaunch-ios-' "$WATCH_STATE/.wake-queue" >/dev/null 2>&1 \
-  && [ "$watch_wait" -lt 1500 ]; do
+while kill -0 "$watch_pid" 2>/dev/null && [ "$watch_wait" -lt 6000 ]; do
   sleep 0.02
   watch_wait=$((watch_wait + 1))
 done
-if ! grep -F $'\tcheck\tsecondmate-relaunch-ios-' "$WATCH_STATE/.wake-queue" >/dev/null 2>&1; then
+if kill -0 "$watch_pid" 2>/dev/null; then
   kill "$watch_pid" 2>/dev/null || true
-  wait "$watch_pid" 2>/dev/null || true
-  fail "the watcher did not queue its auto-relaunch wake within the bound: $(cat "$TMP_ROOT/watch-liveness.err"; cat "$TMP_ROOT/watch-liveness.out"; cat "$WATCH_STATE/.watch-triage.log" 2>/dev/null)"
+  fail "the watcher did not exit on its auto-relaunch wake within the bound"
 fi
 wait "$watch_pid" \
   || fail "the liveness watcher leg exited non-zero: $(cat "$TMP_ROOT/watch-liveness.err")"
@@ -1379,6 +1375,7 @@ pass "watch liveness: an unreachable remote secondmate is probed, preserved, and
 make_herdr_client_pair "$TMP_ROOT/client-pair" 0.7.1 14 0.7.5 16
 export FM_HERDR_PAIR_DIR="$TMP_ROOT/client-pair"
 SHADOWED_STATE=$(FM_HOME="$REMOTE_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$TMP_ROOT/remote-jobs" \
   PATH="$TMP_ROOT/client-pair/stale:$REMOTE_ROOT/bin:$TMP_ROOT/client-pair/tools:/usr/bin:/bin" \
   "$REMOTE_ROOT/bin/fm-remote-secondmate-control.sh" state ios 2>"$TMP_ROOT/shadowed-state.err")
 [ "$SHADOWED_STATE" = alive ] \

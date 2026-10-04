@@ -106,6 +106,15 @@ worker_write_heartbeat() {
   mv -f -- "$tmp" "$ready"
 }
 
+worker_write_host_heartbeat() {
+  local heartbeat tmp
+  heartbeat=$(fm_remote_job_worker_host_heartbeat_path)
+  tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.host-heartbeat.XXXXXX") || return 1
+  printf '%s\n' "$(date +%s)" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$heartbeat"
+}
+
 worker_publish_pid() {
   local pid_file tmp
   pid_file=$(fm_remote_job_worker_pid_path)
@@ -893,6 +902,9 @@ worker_run_job() { # <account-home> <job-dir>
     "FM_ROOT_OVERRIDE=$root"
     FM_REMOTE_JOB_ACTIVE=1
   )
+  if [ -n "${FM_REMOTE_JOB_STATE_ROOT:-}" ]; then
+    child_env+=("FM_REMOTE_JOB_STATE_ROOT=$FM_REMOTE_JOB_STATE_ROOT")
+  fi
   if [ -n "${FM_REMOTE_JOB_PLATFORM_OVERRIDE:-}" ]; then
     child_env+=("FM_REMOTE_JOB_PLATFORM_OVERRIDE=$FM_REMOTE_JOB_PLATFORM_OVERRIDE")
   fi
@@ -1161,7 +1173,7 @@ worker_wait_for_work() {
 }
 
 main() {
-  local account_home lock_status next_heartbeat=-1 next_sweep=0 sweep_interval
+  local account_home lock_status next_heartbeat=-1 next_host_heartbeat=-1 next_sweep=0 sweep_interval
   account_home=$(worker_account_home) || { worker_error "cannot resolve account home"; exit 1; }
   FM_ROOT=$(fm_remote_job_canonical_existing_dir "$FM_ROOT") || { worker_error "configured FM_ROOT is unsafe"; exit 1; }
   [ -f "$FM_ROOT/AGENTS.md" ] && [ ! -L "$FM_ROOT/AGENTS.md" ] || { worker_error "FM_ROOT is not a Firstmate checkout"; exit 1; }
@@ -1194,6 +1206,10 @@ main() {
       fi
       worker_write_heartbeat || { worker_error "cannot update worker heartbeat"; exit 1; }
       next_heartbeat=$SECONDS
+    fi
+    if [ "$SECONDS" -ge "$next_host_heartbeat" ]; then
+      worker_write_host_heartbeat || { worker_error "cannot update account heartbeat"; exit 1; }
+      next_host_heartbeat=$((SECONDS + 60))
     fi
     # Checked right after a heartbeat no older than a second, so the grace
     # window cannot make a still-healthy worker read as unready to a

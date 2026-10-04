@@ -2680,14 +2680,6 @@ while :; do
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
   touch "$STATE/.last-watcher-beat"
-  if [ "$(age_of "$STATE/.remote-home-heartbeat")" -ge 60 ]; then
-    heartbeat_tmp="$STATE/.remote-home-heartbeat.tmp.$$"
-    if printf '%s\n' "$(date +%s)" > "$heartbeat_tmp"; then
-      mv -f -- "$heartbeat_tmp" "$STATE/.remote-home-heartbeat"
-    else
-      rm -f -- "$heartbeat_tmp"
-    fi
-  fi
 
   # Opt-in fleet activity ledger (docs/fleet-ledger.md): pick up newly appended
   # status lines before this cycle can exit on a wake. Off costs one file test.

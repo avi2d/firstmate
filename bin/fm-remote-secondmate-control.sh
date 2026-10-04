@@ -69,6 +69,8 @@ REMOTE_HERDR_SESSION=fm-remote
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# shellcheck source=bin/fm-remote-job-lib.sh
+. "$SCRIPT_DIR/fm-remote-job-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -120,8 +122,16 @@ remote_endpoint_require() {
 }
 
 state_value() { # <id>; prints recovery-grade state
-  local id=$1 meta heartbeat heartbeat_value now
-  heartbeat="$TARGET_HOME/state/.remote-home-heartbeat"
+  local id=$1 meta account_home heartbeat heartbeat_value now
+  account_home=${HOME:-}
+  if [ -z "$account_home" ]; then
+    account_home=$(unset HOME; CDPATH='' cd ~ 2>/dev/null && pwd -P) || account_home=
+  fi
+  if [ -z "$account_home" ] || ! fm_remote_job_prepare_state "$account_home" >/dev/null 2>&1; then
+    printf 'host-unavailable\n'
+    return 0
+  fi
+  heartbeat=$(fm_remote_job_worker_host_heartbeat_path)
   if [ ! -f "$heartbeat" ] || [ -L "$heartbeat" ]; then
     printf 'host-unavailable\n'
     return 0
