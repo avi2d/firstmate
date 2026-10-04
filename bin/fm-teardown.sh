@@ -1567,6 +1567,22 @@ pr_is_merged() {
   return 0
 }
 
+# Prints the URL of the still-open PR whose head is <branch>. Returns non-zero
+# when no PR is found, it is merged or closed, or the forge cannot be read.
+open_pr_for_branch() {
+  local branch=$1 number view state url
+  number=$(pr_number_from_branch "$branch") || return 1
+  view=$(cd "$WT" && gh pr view "$number" --json state,headRefOid,url -q '.state + "\t" + .headRefOid + "\t" + .url' 2>/dev/null) || return 1
+  state=${view%%$'\t'*}
+  url=${view##*$'\t'}
+  case "$state" in
+    OPEN|open) ;;
+    *) return 1 ;;
+  esac
+  [ -n "$url" ] && [ "$url" != "$view" ] || return 1
+  printf '%s\n' "$url"
+}
+
 # Is the branch's content already present in the up-to-date default branch? Fetches
 # first, then 3-way merges the default branch with HEAD: when HEAD introduces nothing
 # the default branch does not already contain (e.g. its change landed via squash) the
@@ -1873,7 +1889,7 @@ teardown_treehouse_return() {
 }
 
 validate_worktree_teardown_safety() {
-  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
+  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch open_url
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   case "$KIND" in
@@ -1943,6 +1959,23 @@ validate_worktree_teardown_safety() {
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
       return 1
     fi
+  fi
+
+  if [ -z "$PR_URL" ]; then
+    case "$MODE" in
+      direct-PR|no-mistakes) ;;
+      *) return 0 ;;
+    esac
+    branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
+    if [ -z "$branch" ]; then
+      branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+      TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
+    fi
+    if open_url=$(open_pr_for_branch "$branch"); then
+      echo "REFUSED: PR $open_url is still open; cleanup waits for it to merge, because bin/fm-pr-merge.sh needs this task record." >&2
+      return 1
+    fi
+    return 0
   fi
 
   case "$PR_URL" in

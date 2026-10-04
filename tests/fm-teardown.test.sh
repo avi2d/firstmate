@@ -412,6 +412,29 @@ SH
   chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
 }
 
+# A PR exists for the pushed task branch but no pr= was ever recorded.
+# Args: case_dir state (OPEN|CLOSED|MERGED)
+add_gh_branch_pr_in_state() {
+  local case_dir=$1 state=$2 head
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  cat > "$case_dir/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr list")
+    printf '%s\n' "count: 1 (showing first 1)" "pull_requests[1]{number,state}:" "  7,any" ; exit 0 ;;
+esac
+exit 0
+SH
+  cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr view") printf '%s\t%s\t%s\n' '$state' '$head' 'https://github.com/example/repo/pull/7' ; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh-axi" "$case_dir/fakebin/gh"
+}
+
 # Override fakebin/treehouse so `treehouse return --force <wt>` fails with a
 # git "file exists" lock error whenever the worktree's real index.lock is
 # present, and succeeds once it is gone. This drives the lock through
@@ -4619,8 +4642,73 @@ test_scout_board_copy_failure_refuses_cleanup() {
   pass "teardown refuses cleanup when the board copy fails"
 }
 
+test_unrecorded_open_pr_for_pushed_branch_refuses() {
+  local case_dir rc mode head
+  for mode in direct-PR no-mistakes; do
+    case_dir=$(make_case "unrecorded-open-pr-$mode")
+    write_meta "$case_dir" "$mode" ship
+    wt_commit "$case_dir" "shippable work"
+    git -C "$case_dir/wt" push -q origin fm/task-x1
+    git -C "$case_dir/project" fetch -q origin
+    head=$(git -C "$case_dir/wt" rev-parse HEAD)
+    add_gh_branch_pr_in_state "$case_dir" OPEN
+
+    set +e
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+
+    expect_code 1 "$rc" "unrecorded-open-pr-$mode: an open PR must block cleanup of a pushed branch"
+    assert_grep "PR https://github.com/example/repo/pull/7 is still open" "$case_dir/stderr" \
+      "unrecorded-open-pr-$mode: refusal did not name the open PR"
+    assert_refusal_retained_task_state "$case_dir" "unrecorded-open-pr-$mode" "$head"
+  done
+  pass "a pushed direct-PR or no-mistakes branch whose PR is still open is not cleaned up"
+}
+
+test_unrecorded_finished_pr_for_pushed_branch_allows() {
+  local case_dir rc state
+  for state in MERGED CLOSED; do
+    case_dir=$(make_case "unrecorded-pr-$state")
+    write_meta "$case_dir" direct-PR ship
+    wt_commit "$case_dir" "shippable work"
+    git -C "$case_dir/wt" push -q origin fm/task-x1
+    git -C "$case_dir/project" fetch -q origin
+    add_gh_branch_pr_in_state "$case_dir" "$state"
+
+    set +e
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+
+    expect_code 0 "$rc" "unrecorded-pr-$state: a $state PR keeps cleanup going"
+    assert_absent "$case_dir/state/task-x1.meta" "unrecorded-pr-$state: cleanup kept the task record"
+  done
+  pass "a pushed branch whose PR is merged or closed is still cleaned up"
+}
+
+test_local_only_pushed_branch_ignores_open_pr() {
+  local case_dir rc
+  case_dir=$(make_case local-only-open-pr)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  add_gh_branch_pr_in_state "$case_dir" OPEN
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "local-only-open-pr: a local-only task is not held by a PR"
+  pass "a local-only task on a pushed branch is cleaned up whatever PR its branch has"
+}
+
 test_scout_board_is_preserved_via_export
 test_scout_board_falls_back_to_plain_copy
 test_scout_board_copy_failure_refuses_cleanup
 test_recorded_open_pr_is_not_landed_even_when_content_is_in_default
-
+test_unrecorded_open_pr_for_pushed_branch_refuses
+test_unrecorded_finished_pr_for_pushed_branch_allows
+test_local_only_pushed_branch_ignores_open_pr
