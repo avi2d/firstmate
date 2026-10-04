@@ -88,6 +88,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
 # shellcheck source=bin/fm-quota-axi-lib.sh
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+# shellcheck source=bin/fm-quota-assessment-lib.sh
+. "$SCRIPT_DIR/fm-quota-assessment-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
@@ -417,32 +419,15 @@ fi
 # ---- resolution: declared gates + quota evidence + argmax, all in jq ------------
 RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg none_criterion "$DEFAULT_WHEN" --argjson pmap "$PMAP" \
   --argjson accounts "$ACCOUNTS" --argjson clauth "$CLAUTH_STATUS" \
-  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_CLAUTH_ROW_JQ"'
+  --slurpfile resp "$RESP_FILE" --slurpfile rules "$RULES" --slurpfile quota "$QUOTA" "$FM_QUOTA_ROW_JQ$FM_CLAUTH_ROW_JQ$FM_QUOTA_ASSESSMENT_JQ"'
   ($resp[0]) as $r | ($rules[0]) as $cfg | ($quota[0]) as $q | ($r.answers.rule) as $a |
   def profiles($v): if ($v | type) == "array" then $v elif ($v | type) == "object" then [$v] else [] end;
   def prov($p; $lane): quota_row($q; $p; $lane);
-  def row_rows($row): ($row | .quotaSemantics.effectiveAvailability // []);
-  def bare($m): ($m | split("/") | last);
   def provider_of($c): ($c.provider // $pmap[$c.harness] // null);
   def lane_of($c): quota_lane($c.harness; $c.model);
   def row_measured($row):
     ($row != null and (["known", "partial"] | index($row.quotaSemantics.status)) != null);
-  def applicable($row; $m):
-    (bare($m)) as $bare |
-    [row_rows($row)[] | select(
-      .scope == "all_models" or .scope == "all_products" or
-      ($m != "" and (.scope == ("model:" + $bare) or .scope == ("product:" + $bare)))
-    )];
-  def row_floor_state($f; $row):
-    if $f == null then "none"
-    elif $row == null or (row_measured($row) | not) then "unknown"
-    else [row_rows($row)[] | select(.scope == $f.scope)] as $matches
-      | if ($matches | length) == 0 or any($matches[]; .status != "known") then "unknown"
-        elif any($matches[]; .effectivePercentRemaining < $f.min_percent) then "below"
-        else "ok"
-        end
-    end;
-  def floor_state($f; $p; $lane): row_floor_state($f; prov($p; $lane));
+  def floor_state($f; $p; $lane): quota_floor_state($f; prov($p; $lane));
   def account_row($account):
     if ($accounts | has($account) | not) then {unusable: "config/claude-accounts declares no login for account \($account)"}
     elif $clauth.unavailable then {unusable: "\($clauth.unavailable), so account \($account) is unverified"}
@@ -463,17 +448,17 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
                 then "provider \($p) has no quota row for account \(if $lane == "" then "default" else $lane end)"
                 else "provider \($p) not in the quota snapshot" end)}
     else
-      (applicable($row; ($c.model // ""))) as $rows |
+      (quota_applicable_rows($row; ($c.model // ""))) as $rows |
       (evidence($rows)) as $bounds |
-      (row_floor_state($c.floor; $row)) as $profile_floor_state |
-      if any($rows[]; (.runway.status // "") == "exhausted_now") then
-        ($rows | map(select((.runway.status // "") == "exhausted_now")) | first) as $bad |
+      (quota_floor_state($c.floor; $row)) as $profile_floor_state |
+      if (quota_runway_exhausted_rows($rows) | length) > 0 then
+        (quota_runway_exhausted_rows($rows) | first) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: ($bad.effectivePercentRemaining // null), runway: $bad.runway.status, eligible: false, reason: "runway exhausted_now at \($bad.scope)"}
       elif any($rows[]; .status == "known" and (.effectivePercentRemaining | type) == "number" and .effectivePercentRemaining <= 0) then
         ($rows | map(select(.status == "known" and (.effectivePercentRemaining | type) == "number" and .effectivePercentRemaining <= 0)) | first) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: false, reason: "0% remaining at \($bad.scope)"}
       elif $profile_floor_state == "below" then
-        ([row_rows($row)[] | select(
+        ([quota_rows($row)[] | select(
           .scope == $c.floor.scope and
           .effectivePercentRemaining < $c.floor.min_percent
         )] | first) as $floor_row |
@@ -484,7 +469,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       elif ($rows | length) == 0 then
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true, unknown: true, reason: "no applicable quota row for provider \($p)"}
       elif $profile_floor_state == "unknown" then
-        ([row_rows($row)[] | select(.scope == $c.floor.scope)] | first) as $floor_row |
+        ([quota_rows($row)[] | select(.scope == $c.floor.scope)] | first) as $floor_row |
         {profile: $c, provider: $p, bounds: $bounds, scope: $c.floor.scope, pct: ($floor_row.effectivePercentRemaining // null), runway: ($floor_row.runway.status // null), eligible: true, unranked: true, unknown: true, floor_unverified: true, reason: "profile floor \($c.floor.scope) is unverifiable: not rankable"}
       elif any($rows[]; .status != "known") then
         ($rows | map(select(.status != "known")) | first) as $bad |

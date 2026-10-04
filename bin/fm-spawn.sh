@@ -648,6 +648,14 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-quota-axi-lib.sh
+. "$SCRIPT_DIR/fm-quota-axi-lib.sh"
+# shellcheck source=bin/fm-quota-assessment-lib.sh
+. "$SCRIPT_DIR/fm-quota-assessment-lib.sh"
+# shellcheck source=bin/fm-clauth-lib.sh
+. "$SCRIPT_DIR/fm-clauth-lib.sh"
+# shellcheck source=bin/fm-quota-spawn-lib.sh
+. "$SCRIPT_DIR/fm-quota-spawn-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -674,6 +682,8 @@ BRANCH_PREFIX_SET=0
 TRACEPARENT_SET=0
 CLAUDE_ACCOUNT=
 CLAUDE_ACCOUNT_SET=0
+QUOTA_OVERRIDE_REASON=
+QUOTA_OVERRIDE_SET=0
 RELAUNCH=0
 POS=()
 want_value=
@@ -721,6 +731,10 @@ for a in "$@"; do
     claude-account)
       CLAUDE_ACCOUNT=$a
       CLAUDE_ACCOUNT_SET=1
+      ;;
+    quota-override-reason)
+      QUOTA_OVERRIDE_REASON=$a
+      QUOTA_OVERRIDE_SET=1
       ;;
     *)
       echo "error: internal parser state for --$want_value" >&2
@@ -785,6 +799,11 @@ for a in "$@"; do
     CLAUDE_ACCOUNT=${a#--claude-account=}
     CLAUDE_ACCOUNT_SET=1
     ;;
+  --quota-override-reason) want_value=quota-override-reason ;;
+  --quota-override-reason=*)
+    QUOTA_OVERRIDE_REASON=${a#--quota-override-reason=}
+    QUOTA_OVERRIDE_SET=1
+    ;;
   *) POS+=("$a") ;;
   esac
 done
@@ -824,6 +843,19 @@ done
   echo "error: --claude-account requires a non-empty value" >&2
   exit 1
 }
+[ "$QUOTA_OVERRIDE_SET" -eq 0 ] || [ -n "$QUOTA_OVERRIDE_REASON" ] || {
+  echo "error: --quota-override-reason requires a non-empty value" >&2
+  exit 1
+}
+if [ "$QUOTA_OVERRIDE_SET" -eq 1 ] && [ -z "$(printf '%s' "$QUOTA_OVERRIDE_REASON" | tr -d '[:space:]')" ]; then
+  echo "error: --quota-override-reason requires a stated reason" >&2
+  exit 1
+fi
+case "$QUOTA_OVERRIDE_REASON" in *$'\n'*|*$'\r'*)
+  echo "error: --quota-override-reason must be one line" >&2
+  exit 1
+  ;;
+esac
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -1495,6 +1527,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$CLAUDE_ACCOUNT" ] || shared_args+=(--claude-account "$CLAUDE_ACCOUNT")
+  [ "$QUOTA_OVERRIDE_SET" -eq 0 ] || shared_args+=(--quota-override-reason "$QUOTA_OVERRIDE_REASON")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
   # One delivery contract applies to every pair in a batch, exactly like the shared
   # harness. Each pair still re-validates it against its own brief, so a batch
@@ -2455,6 +2488,15 @@ if [ "$HARNESS" = claude ] && [ -n "$CLAUDE_ACCOUNT_SELECTION$WORKER_ACCOUNT" ];
     export CLAUDE_CONFIG_DIR=$CLAUDE_LAUNCH_ROOT
   else
     unset CLAUDE_CONFIG_DIR
+  fi
+fi
+if [ "$KIND" = secondmate ] && [ "$QUOTA_OVERRIDE_SET" -eq 1 ]; then
+  echo "error: --quota-override-reason applies only to ship and scout spawns" >&2
+  exit 1
+fi
+if [ "$KIND" != secondmate ]; then
+  if ! fm_quota_spawn_gate "$CONFIG/crew-dispatch.json" "$HARNESS" "${MODEL:-default}" "${EFFORT:-default}" "$CLAUDE_ACCOUNT" "$QUOTA_OVERRIDE_REASON"; then
+    exit 1
   fi
 fi
 
@@ -4985,7 +5027,7 @@ fi
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider claude_account busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo branch tasktmp model effort account account_provider claude_account quota_gate busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -5009,6 +5051,7 @@ preserve_relaunch_meta() {
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
   [ -z "$WORKER_ACCOUNT_PROVIDER" ] || echo "account_provider=$WORKER_ACCOUNT_PROVIDER"
   [ -z "$CLAUDE_ACCOUNT" ] || echo "claude_account=$CLAUDE_ACCOUNT"
+  [ -z "${FM_QUOTA_GATE_NOTE:-}" ] || echo "quota_gate=$FM_QUOTA_GATE_NOTE"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
