@@ -178,7 +178,7 @@ test_quota_gate_uses_strictest_matching_floor() {
   read_case_record "$rec"
   printf '%s\n' '{"rules":[{"when":"first","use":{"harness":"codex","model":"gpt-5","floor":{"scope":"all_models","min_percent":20}}},{"when":"second","use":{"harness":"codex","model":"gpt-5","floor":{"scope":"all_models","min_percent":30}}}]}' > "$HOME_DIR/config/crew-dispatch.json"
   make_quota_axi_fixture
-  FM_FAKE_QUOTA_REMAINING=25 out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  out=$(FM_FAKE_QUOTA_REMAINING=25 run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn below the strictest matching floor should refuse"
   assert_contains "$out" 'below 30%' "quota refusal should use the strictest matching floor"
