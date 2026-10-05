@@ -1820,6 +1820,23 @@ ok - real herdr 0.9.3 + pi 1.0.2: a fullscreen pane hashes the same with and wit
 ok - real herdr 0.9.3 + pi 1.0.2: a regular-mode pane draws no scrollbar and hashes its viewport as the plain digest
 ```
 
+### Fullscreen Pi workers and second mates
+
+Pi workers and second mates launch in Pi's default fullscreen TUI ([`fm-spawn.sh --help`](../../bin/fm-spawn.sh) owns the launch).
+Measured 2026-10-05 on Darwin arm64 against Herdr 0.9.3 and Pi 1.0.2, in an isolated `fm-lab-` session with a lab home.
+A fullscreen scout and a fullscreen seeded second mate, each spawned by `bin/fm-spawn.sh`, ran beside a control of the same kind launched with `--tui-mode regular`, with turns from a scripted faux provider extension so no model token was spent.
+Every check below gave the same answer in both modes, for the scout and for the second mate:
+
+- `bin/fm-crew-state.sh` while idle, mid-turn, after a finished turn, and after exit.
+- Busy classification while idle, mid-turn, and stalled mid-turn, from the Pi extension for the scout and from Herdr's native state for the second mate.
+- Composer state while empty, while holding typed text, after clearing, and after relaunch.
+- A `bin/fm-send.sh` steer read and moved to `handled/` when sent mid-turn, when idle, and after relaunch, and the doorbell skipped over a typed draft without touching it.
+- `bin/fm-control.sh` interrupt (`cancel=unconfirmed` in both), relaunch, and exit.
+- `bin/fm-peek.sh` showing the newest transcript row and the composer, and a 200-line read reaching the first transcript line.
+
+The fullscreen worker drew 33 scrollbar rows after a long read, before and after relaunch, and the control drew none, so relaunch keeps the TUI mode.
+The stale and wedge hash is the one supervision read that needed a change, recorded under "Fullscreen Pi scrollbar and the stale hash" above.
+
 ### Pane status authority across a relaunch
 
 Measured 2026-09-21 on Linux x86_64 against Herdr 0.9.1 (client protocol 22) and Pi 0.86.1, in an isolated `fm-lab-` session (`bin/fm-herdr-lab.sh`), after the same freeze was observed live on a relaunched Pi crewmate whose pane read `idle` while its validation pipeline ran.

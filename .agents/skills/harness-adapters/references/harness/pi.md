@@ -18,7 +18,7 @@ Verified on 2026-07-27 with Pi and Pi-signed 0.82.0 unless a fact gives another 
 
 Native Codex sessions may request `ultra` through the native extension flag described by `../../../bin/fm-spawn.sh`; it is separate from Pi's thinking levels.
 Pi has no permission system, so workers are always autonomous.
-Fullscreen can bury steering messages by rewriting scrollback, so Firstmate avoids it when the installed CLI supports the override.
+Workers and second mates run Pi's default fullscreen TUI, verified with Pi 1.0.2 on 2026-10-05, and on Herdr the watcher hashes their viewport without Pi's transient scrollbar column (`../../../bin/fm-pane-hash-lib.sh`).
 `../../../bin/fm-spawn.sh --help` owns the executable-pinning and version-safe launch mechanics.
 
 Pi-signed is the signed wrapper identity verified on version 0.82.0.
