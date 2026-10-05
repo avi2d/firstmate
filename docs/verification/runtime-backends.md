@@ -1770,6 +1770,56 @@ ok - real herdr 0.9.0 + pi 0.85.1: the registration left behind by a quit pi rea
 `tests/fm-crew-state.test.sh` pins the recovery classifier: a stale registration over a shell-only pane reports agent gone rather than alive or unreachable, and a stale `working` record never reports the pane working.
 A stale-registration pane is never a husk: create, reclaim, presentation recovery, and session cleanup keep refusing it, and only recovery reuses it.
 
+### Fullscreen Pi scrollbar and the stale hash
+
+[`bin/fm-pane-hash-lib.sh`](../../bin/fm-pane-hash-lib.sh) owns the hash the watcher compares between polls, and [`tests/captures/pi-1.0.2-herdr-0.9.3/README.md`](../../tests/captures/pi-1.0.2-herdr-0.9.3/README.md) holds the replay captures behind its portable test.
+Measured 2026-10-05 on Darwin arm64 against Herdr 0.9.3 and Pi 1.0.2, in isolated `fm-lab-` sessions (`bin/fm-herdr-lab.sh`).
+
+A Herdr `pane read --source recent` longer than the viewport, which every `fm_backend_herdr_capture` issues, makes fullscreen Pi draw its scrollbar in the pane's last column for about one second once the transcript exceeds the viewport.
+The same read returns a varying number of rows from above the viewport.
+A `--source visible` read never triggers the scrollbar but shows one that another reader triggered.
+Regular mode never draws it.
+So the hash reads a Herdr Pi pane's viewport and strips the scrollbar column, and both halves are needed: a stripped 40-line tail still changed about one poll in ten on an unchanged pane, and an unstripped viewport changed whenever another reader had read the pane within the last second.
+The stripped viewport kept one digest across 120 one-second polls of an idle fullscreen pane, 59 of them mid-flash, with a 40-line read every third poll and another reader every 4 s.
+
+The real `bin/fm-watch.sh`, with `FM_POLL=3` and `FM_STALE_ESCALATE_SECS=30`, watched an idle regular-mode worker and an idle fullscreen worker, both spawned by `bin/fm-spawn.sh` with a transcript longer than the viewport, while `bin/fm-peek.sh` read both panes every 4 s:
+
+```text
+t+33s signal: fs4.turn-ended reg4.turn-ended
+t+48s stale: FULLSCREEN
+t+52s stale: REGULAR
+t+84s stale: FULLSCREEN (idle 32s, possible wedge, escalation 1)
+t+88s stale: REGULAR (idle 31s, possible wedge, escalation 1)
+t+120s stale: FULLSCREEN (idle 32s, possible wedge, escalation 2)
+t+124s stale: REGULAR (idle 33s, possible wedge, escalation 2)
+```
+
+The same probe with no concurrent reader:
+
+```text
+t+35s signal: fs5.turn-ended reg5.turn-ended
+t+51s stale: FULLSCREEN
+t+55s stale: REGULAR
+t+88s stale: FULLSCREEN (idle 33s, possible wedge, escalation 1)
+t+93s stale: REGULAR (idle 34s, possible wedge, escalation 1)
+t+126s stale: FULLSCREEN (idle 33s, possible wedge, escalation 2)
+t+130s stale: REGULAR (idle 33s, possible wedge, escalation 2)
+```
+
+The live guard that refreshes this record runs by default wherever Herdr, Pi, jq, and Perl are installed, spends no model token, and fails naming both versions:
+
+```sh
+tests/fm-herdr-pi-fullscreen-scrollbar-live-e2e.test.sh
+```
+
+Observed 2026-10-05:
+
+```text
+# fullscreen pi 1.0.2 under herdr 0.9.3: scrollbar rows quiet 0, flash 34
+ok - real herdr 0.9.3 + pi 1.0.2: a fullscreen pane hashes the same with and without its transient scrollbar
+ok - real herdr 0.9.3 + pi 1.0.2: a regular-mode pane draws no scrollbar and hashes its viewport as the plain digest
+```
+
 ### Pane status authority across a relaunch
 
 Measured 2026-09-21 on Linux x86_64 against Herdr 0.9.1 (client protocol 22) and Pi 0.86.1, in an isolated `fm-lab-` session (`bin/fm-herdr-lab.sh`), after the same freeze was observed live on a relaunched Pi crewmate whose pane read `idle` while its validation pipeline ran.
