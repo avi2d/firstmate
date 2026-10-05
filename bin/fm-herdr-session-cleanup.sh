@@ -292,6 +292,103 @@ fm_herdr_cleanup_one() { # <session> <workspace> <title> <home-real>
   return 0
 }
 
+# The heartbeat retry moves focus only onto a tab a live home-local task owns,
+# and only when no client is attached; an attached viewer's focus never moves.
+fm_herdr_session_cleanup_home_tab() { # <state> <home> <session>; prints the focused tab
+  local state=$1 home=$2 session=$3 journal id tab focused
+  for journal in "$state"/*.herdr-presentation; do
+    [ -e "$journal" ] || [ -L "$journal" ] || continue
+    id=${journal##*/}; id=${id%.herdr-presentation}
+    [ -f "$state/$id.meta" ] || [ -L "$state/$id.meta" ] || continue
+    fm_backend_herdr_projection_journal_snapshot "$journal" "$id" 2>/dev/null || continue
+    [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || continue
+    [ "$FM_BACKEND_HERDR_JOURNAL_HOME" = "$home" ] || continue
+    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || continue
+    tab=$FM_BACKEND_HERDR_JOURNAL_TAB_ID
+    [ -n "$tab" ] || continue
+    fm_backend_herdr_cli "$session" tab focus "$tab" >/dev/null 2>&1 || continue
+    focused=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) || continue
+    [ "${focused#*$'\t'}" = "$tab" ] || continue
+    printf '%s\n' "$tab"
+    return 0
+  done
+  return 1
+}
+
+# One recorded pending pane close: a version 2 journal whose task metadata is
+# gone but whose pane is still alive. A focused tab with a client attached
+# keeps the journal; a focused tab with no client attached is refocused onto
+# a home-owned tab first. The close itself stays with the sweep owner below.
+fm_herdr_session_cleanup_heartbeat_retry() { # <journal> <id> <home> <session> <state>
+  local journal=$1 id=$2 home=$3 session=$4 state=$5
+  local tab workspace title snapshot meta meta_backend task_lock presentation_lock
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" 2>/dev/null || return 0
+  [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || return 0
+  [ "$FM_BACKEND_HERDR_JOURNAL_HOME" = "$home" ] || return 0
+  [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || return 0
+  meta="$state/$id.meta"
+  if [ -e "$meta" ] || [ -L "$meta" ]; then
+    meta_backend=$(meta_value "$meta" backend 2>/dev/null) || meta_backend=
+    [ "$meta_backend" = herdr ] && return 0
+    return 0
+  fi
+  tab=$FM_BACKEND_HERDR_JOURNAL_TAB_ID
+  workspace=$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID
+  title=$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL
+  if [ -n "$tab" ] \
+    && snapshot=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) \
+    && [ "${snapshot#*$'\t'}" = "$tab" ] \
+    && ! fm_backend_herdr_projection_target_tab_focus_held "$session" "$tab" 2>/dev/null; then
+    task_lock="$state/.spawn-$id.lock"
+    if ! fm_lock_try_acquire "$task_lock"; then
+      fm_herdr_cleanup_warn "$id skipped because its task lock is busy"
+      return 0
+    fi
+    presentation_lock=$(fm_backend_herdr_presentation_session_lock_path "$session" 2>/dev/null) \
+      || presentation_lock=
+    if [ -n "$presentation_lock" ] && fm_lock_try_acquire "$presentation_lock"; then
+      if { [ ! -e "$meta" ] && [ ! -L "$meta" ]; } \
+        && snapshot=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) \
+        && [ "${snapshot#*$'\t'}" = "$tab" ] \
+        && ! fm_backend_herdr_projection_target_tab_focus_held "$session" "$tab" 2>/dev/null \
+        && fm_herdr_session_cleanup_home_tab "$state" "$home" "$session" >/dev/null 2>&1; then
+        : # Focus now sits on a home-owned tab while no client is attached.
+      fi
+      fm_lock_release "$presentation_lock" || true
+    else
+      fm_herdr_cleanup_warn "$id skipped because the shared presentation lock is busy"
+    fi
+    fm_lock_release "$task_lock" || true
+  fi
+  if [ -n "$tab" ] \
+    && snapshot=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) \
+    && [ "${snapshot#*$'\t'}" = "$tab" ] \
+    && fm_backend_herdr_projection_target_tab_focus_held "$session" "$tab" 2>/dev/null; then
+    printf 'keeping pending herdr pane for %s: its tab still holds an attached viewer\n' "$id"
+    return 0
+  fi
+  fm_herdr_cleanup_one "$session" "$workspace" "$title" "$home"
+  [ -e "$journal" ] || [ -L "$journal" ] || printf 'closed pending herdr pane for %s\n' "$id"
+  return 0
+}
+
+fm_herdr_session_cleanup_heartbeat() {
+  local state home session journal id
+  command -v herdr >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
+  home=$(fm_herdr_cleanup_home_identity) || {
+    fm_herdr_cleanup_warn 'home identity is unreadable; preserving every candidate'
+    return 0
+  }
+  session=$(fm_backend_herdr_session)
+  state=${FM_STATE_OVERRIDE:-$FM_HOME/state}
+  for journal in "$state"/*.herdr-presentation; do
+    [ -e "$journal" ] || [ -L "$journal" ] || continue
+    id=${journal##*/}; id=${id%.herdr-presentation}
+    fm_herdr_session_cleanup_heartbeat_retry "$journal" "$id" "$home" "$session" "$state"
+  done
+  return 0
+}
+
 fm_herdr_session_cleanup() {
   local session home_real list candidates workspace title journal found=0
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 0
@@ -332,6 +429,9 @@ fm_herdr_session_cleanup() {
 }
 
 if [ "${FM_HERDR_SESSION_CLEANUP_SOURCE_ONLY:-0}" != 1 ]; then
-  fm_herdr_session_cleanup
+  case "${1:-}" in
+    --heartbeat) fm_herdr_session_cleanup_heartbeat ;;
+    *) fm_herdr_session_cleanup ;;
+  esac
   exit 0
 fi

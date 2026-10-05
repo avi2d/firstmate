@@ -1174,6 +1174,22 @@ fm_backend_herdr_workspace_move_capable() {  # <session>
   ' >/dev/null 2>&1 || return 5
 }
 
+# fm_backend_herdr_projection_target_tab_focus_held: report whether the exact
+# target tab is the session's active one while a client is attached to it.
+# A held tab is a deferred close, not a failed one: the viewer is looking at
+# exactly what the close would remove, so the retry waits for focus to move.
+# An unattached session holds nothing, even on the active tab, because the
+# heartbeat retry focuses a home-owned tab first and then closes.
+fm_backend_herdr_projection_target_tab_focus_held() {  # <session> <guard-tab-id>
+  local session=$1 guard_tab=$2 snapshot active_tab
+  [ -n "$guard_tab" ] || return 1
+  snapshot=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) || return 1
+  active_tab=${snapshot#*$'\t'}
+  [ -n "$active_tab" ] && [ "$active_tab" = "$guard_tab" ] || return 1
+  snapshot=$(fm_backend_herdr_cli "$session" terminal title clear 2>/dev/null) || return 1
+  [ "$(printf '%s' "$snapshot" | jq -r '.result.reason // empty' 2>/dev/null)" = cleared ]
+}
+
 # fm_backend_herdr_emptying_close_plan: choose the focus-safe removal for one
 # exact pane. The LAST echoed line is the plan: "plain" (use the ordinary
 # explicit close; below the presentation version floor the exact-tab restore

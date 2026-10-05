@@ -3239,6 +3239,21 @@ EOF
   hb=$(( HEARTBEAT * (1 << streak) ))
   [ "$hb" -gt "$HEARTBEAT_MAX" ] && hb=$HEARTBEAT_MAX
   if [ "$(age_of "$STATE/.last-heartbeat")" -ge "$hb" ]; then
+    # A deferred pane close is time passing, not news: retry it on every tick,
+    # absorbed or not, before triage decides what the tick means.
+    if command -v herdr >/dev/null 2>&1; then
+      _fm_pending_close=0
+      for _fm_pending_journal in "$STATE"/*.herdr-presentation; do
+        [ -e "$_fm_pending_journal" ] || [ -L "$_fm_pending_journal" ] || continue
+        _fm_pending_close=1
+        break
+      done
+      if [ "$_fm_pending_close" = 1 ]; then
+        FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+          "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" --heartbeat >/dev/null 2>&1 || true
+      fi
+      unset _fm_pending_journal _fm_pending_close
+    fi
     # Triage: in always-on mode a heartbeat is benign unless the cheap fleet-scan
     # turns up a captain-relevant status the per-wake path missed. Absorb the
     # no-change case (advance the schedule and back off exactly as wake() would,

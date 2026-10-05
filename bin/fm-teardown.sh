@@ -3778,6 +3778,7 @@ teardown_herdr_journal_orphaned() {
   fi
 }
 HERDR_PRESENTATION_RETIRE_CANDIDATE=0
+FOCUS_HELD_DEFERRAL=0
 HERDR_PRESENTATION_SESSION=
 HERDR_PRESENTATION_PANE=
 if [ "$BACKEND" = herdr ] \
@@ -3847,8 +3848,20 @@ if [ "$BACKEND" = herdr ]; then
     exit 1
   fi
   if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
-    echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
-    exit 1
+    if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ] \
+      && fm_backend_herdr_projection_journal_snapshot \
+        "$HERDR_PRESENTATION_JOURNAL" "$ID" 2>/dev/null \
+      && fm_backend_herdr_projection_target_tab_focus_held \
+        "$HERDR_PRESENTATION_SESSION" "$FM_BACKEND_HERDR_JOURNAL_TAB_ID"; then
+      # The pane is alive only because the viewer is looking at it. Finishing
+      # every other step and leaving the retained journal as the durable
+      # pending-close record beats failing cleanup: the watcher's heartbeat
+      # retry closes it once focus moves.
+      FOCUS_HELD_DEFERRAL=1
+    else
+      echo "error: herdr pane $T for $ID is not confirmed gone after its close was refused, skipped, or failed; retaining every durable task record - rerun teardown once the close can run under the session lock" >&2
+      exit 1
+    fi
   fi
 fi
 if [ "$KIND" != secondmate ]; then
@@ -3938,7 +3951,9 @@ rm -rf "$STATE/$ID.inbox" "$STATE/$ID.git-hooks"
 # version 1 attempt whose token-bearing workspace is still present - which the
 # session-start sweep alone may judge (header).
 if [ -e "$HERDR_PRESENTATION_JOURNAL" ] || [ -L "$HERDR_PRESENTATION_JOURNAL" ]; then
-  if teardown_herdr_journal_orphaned; then
+  if [ "$FOCUS_HELD_DEFERRAL" = 1 ]; then
+    : # The journal is the durable pending-close record; the retry owns it now.
+  elif teardown_herdr_journal_orphaned; then
     rm -f "$HERDR_PRESENTATION_JOURNAL"
   else
     echo "warning: retaining herdr presentation journal for $ID; it still names a projected workspace the session-start sweep owns, not the closed endpoint" >&2
@@ -3991,5 +4006,8 @@ elif teardown_owns_worktree; then
   echo "teardown $ID complete (window ${T:-none}, worktree $WT)"
 else
   echo "teardown $ID complete (window ${T:-none}; pool slot $WT left to task $TEARDOWN_SLOT_REASSIGNED_TO${TEARDOWN_SLOT_REASSIGNED_HOME:+ (home $TEARDOWN_SLOT_REASSIGNED_HOME)}, which it was reassigned to)"
+fi
+if [ "$FOCUS_HELD_DEFERRAL" = 1 ]; then
+  echo "teardown $ID note: herdr pane $HERDR_PRESENTATION_PANE still holds the viewer's focus, so its close is deferred to the watcher's next heartbeat; the retained presentation journal is the pending-close record"
 fi
 backlog_refresh_reminder
