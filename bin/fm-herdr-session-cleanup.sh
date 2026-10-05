@@ -316,29 +316,25 @@ fm_herdr_session_cleanup_home_tab() { # <state> <home> <session>; prints the foc
 }
 
 # One recorded pending pane close: a version 2 journal whose task metadata is
-# gone but whose pane is still alive. A focused tab with a client attached
-# keeps the journal; a focused tab with no client attached is refocused onto
-# a home-owned tab first. The close itself stays with the sweep owner below.
+# gone but whose pane is still alive. Focus moves onto a home-owned tab only
+# on a proven absent viewer; a present or unverifiable viewer keeps the
+# journal with no close. The close itself stays with the sweep owner below.
 fm_herdr_session_cleanup_heartbeat_retry() { # <journal> <id> <home> <session> <state>
   local journal=$1 id=$2 home=$3 session=$4 state=$5
-  local tab workspace title snapshot meta meta_backend task_lock presentation_lock
+  local tab workspace title snapshot meta task_lock presentation_lock
   fm_backend_herdr_projection_journal_snapshot "$journal" "$id" 2>/dev/null || return 0
   [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || return 0
   [ "$FM_BACKEND_HERDR_JOURNAL_HOME" = "$home" ] || return 0
   [ "$FM_BACKEND_HERDR_JOURNAL_SESSION" = "$session" ] || return 0
   meta="$state/$id.meta"
-  if [ -e "$meta" ] || [ -L "$meta" ]; then
-    meta_backend=$(meta_value "$meta" backend 2>/dev/null) || meta_backend=
-    [ "$meta_backend" = herdr ] && return 0
-    return 0
-  fi
+  { [ ! -e "$meta" ] && [ ! -L "$meta" ]; } || return 0
   tab=$FM_BACKEND_HERDR_JOURNAL_TAB_ID
   workspace=$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID
   title=$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL
   if [ -n "$tab" ] \
     && snapshot=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) \
     && [ "${snapshot#*$'\t'}" = "$tab" ] \
-    && ! fm_backend_herdr_projection_target_tab_focus_held "$session" "$tab" 2>/dev/null; then
+    && fm_backend_herdr_projection_target_tab_unattached "$session" "$tab" 2>/dev/null; then
     task_lock="$state/.spawn-$id.lock"
     if ! fm_lock_try_acquire "$task_lock"; then
       fm_herdr_cleanup_warn "$id skipped because its task lock is busy"
@@ -350,7 +346,7 @@ fm_herdr_session_cleanup_heartbeat_retry() { # <journal> <id> <home> <session> <
       if { [ ! -e "$meta" ] && [ ! -L "$meta" ]; } \
         && snapshot=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) \
         && [ "${snapshot#*$'\t'}" = "$tab" ] \
-        && ! fm_backend_herdr_projection_target_tab_focus_held "$session" "$tab" 2>/dev/null \
+        && fm_backend_herdr_projection_target_tab_unattached "$session" "$tab" 2>/dev/null \
         && fm_herdr_session_cleanup_home_tab "$state" "$home" "$session" >/dev/null 2>&1; then
         : # Focus now sits on a home-owned tab while no client is attached.
       fi
@@ -362,9 +358,12 @@ fm_herdr_session_cleanup_heartbeat_retry() { # <journal> <id> <home> <session> <
   fi
   if [ -n "$tab" ] \
     && snapshot=$(fm_backend_herdr_projection_focus_snapshot "$session" 2>/dev/null) \
-    && [ "${snapshot#*$'\t'}" = "$tab" ] \
-    && fm_backend_herdr_projection_target_tab_focus_held "$session" "$tab" 2>/dev/null; then
-    printf 'keeping pending herdr pane for %s: its tab still holds an attached viewer\n' "$id"
+    && [ "${snapshot#*$'\t'}" = "$tab" ]; then
+    if fm_backend_herdr_projection_target_tab_focus_held "$session" "$tab" 2>/dev/null; then
+      printf 'keeping pending herdr pane for %s: its tab still holds an attached viewer\n' "$id"
+    else
+      printf 'keeping pending herdr pane for %s: its tab still holds focus\n' "$id"
+    fi
     return 0
   fi
   fm_herdr_cleanup_one "$session" "$workspace" "$title" "$home"

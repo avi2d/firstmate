@@ -167,7 +167,11 @@ case "\${1:-} \${2:-}" in
     printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":67,"foreground_process_group_id":67,"foreground_processes":[{"pid":67,"name":"sh","argv0":"sh"}]}}}\n' "\$id"
     ;;
   "terminal title")
-    if [ "\$fg" = present ]; then printf '{"result":{"reason":"cleared"}}\n'; else printf '{"result":{"reason":"no_foreground_client"}}\n'; fi
+    case "\$fg" in
+      present) printf '{"result":{"reason":"cleared"}}\n' ;;
+      absent) printf '{"result":{"reason":"no_foreground_client"}}\n' ;;
+      *) printf '{"result":{"reason":"defocused_pointer"}}\n' ;;
+    esac
     ;;
   "api snapshot")
     fws=wH; fpane=wH:p1
@@ -282,7 +286,7 @@ test_teardown_defers_focus_held_pane_close() {
     "focus-held teardown left the status record behind"
   [ -f "$case_dir/state/task-x1.herdr-presentation" ] \
     || fail "focus-held teardown dropped the durable pending pane-close record"
-  [ "$(backlog_row_state "$case_dir")" = done ] \
+  [ "$(backlog_row_state "$case_dir")" = "done" ] \
     || fail "focus-held teardown left the backlog item in flight: $(backlog_row_state "$case_dir")"
   [ -s "$case_dir/treehouse.log" ] \
     || fail "focus-held teardown did not return the isolated copy"
@@ -406,6 +410,54 @@ test_heartbeat_retry_never_moves_attached_focus() {
   pass "attached-viewer retry never moves focus and keeps the record"
 }
 
+test_heartbeat_retry_keeps_journal_on_unknown_probe() {
+  local case_dir
+  case_dir=$(make_case unknown-probe)
+  install_fake_herdr "$case_dir"
+  install_fake_ps "$case_dir"
+  write_journal_v2 "$case_dir" task-x1 "$TOKEN" "$case_dir/home" wG wG:tQ wG:pQ
+  : > "$case_dir/herdr.log"
+  printf 'wG:tQ\n' > "$case_dir/focus-tab"
+  printf 'defocused\n' > "$case_dir/foreground"
+  run_heartbeat_cleanup "$case_dir" > "$case_dir/hb.out" 2> "$case_dir/hb.err" \
+    || fail "unknown-probe retry failed: $(cat "$case_dir/hb.out" "$case_dir/hb.err")"
+  ! grep -q "tab focus" "$case_dir/herdr.log" \
+    || fail "unknown-probe retry moved focus without a proven absent viewer"
+  ! grep -q "pane close" "$case_dir/herdr.log" \
+    || fail "unknown-probe retry closed the pane without a proven absent viewer"
+  [ "$(cat "$case_dir/focus-tab")" = wG:tQ ] \
+    || fail "unknown-probe retry left focus at: $(cat "$case_dir/focus-tab")"
+  assert_present "$case_dir/state/task-x1.herdr-presentation" \
+    "unknown-probe retry dropped the pending journal without closing the pane"
+  pass "unknown-probe retry moves nothing and keeps the journal"
+}
+
+test_teardown_refuses_on_unknown_probe() {
+  local case_dir out rc
+  case_dir=$(make_case unknown-teardown)
+  install_fake_herdr "$case_dir"
+  install_fake_ps "$case_dir"
+  write_meta "$case_dir" local-only ship
+  seed_backlog_in_flight "$case_dir"
+  write_journal_v2 "$case_dir" task-x1 "$TOKEN" "$case_dir/home" wG wG:tQ wG:pQ
+  printf 'wG:tQ\n' > "$case_dir/focus-tab"
+  printf 'defocused\n' > "$case_dir/foreground"
+  out=$(run_teardown "$case_dir" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "teardown deferred on an unverified probe instead of refusing"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "teardown dropped the task record on an unverified probe"
+  case "$out" in
+    *"still holds the viewer's focus"*)
+      fail "teardown claimed a proven viewer on an unverified probe" ;;
+  esac
+  case "$out" in
+    *"not confirmed gone"*) ;;
+    *) fail "teardown refused without naming the unconfirmed pane" ;;
+  esac
+  pass "teardown refuses on an unverified probe and keeps every record"
+}
+
 test_watcher_retries_pending_close_on_heartbeat() {
   local case_dir pid waited=0
   case_dir=$(make_case watcher-heartbeat)
@@ -450,6 +502,8 @@ test_teardown_refuses_non_focus_close_failure
 test_heartbeat_retry_closes_once_focus_moves
 test_heartbeat_retry_focuses_home_tab_with_no_client
 test_heartbeat_retry_never_moves_attached_focus
+test_heartbeat_retry_keeps_journal_on_unknown_probe
+test_teardown_refuses_on_unknown_probe
 test_watcher_retries_pending_close_on_heartbeat
 
 printf 'all fm-teardown-focus-retry tests passed\n'
