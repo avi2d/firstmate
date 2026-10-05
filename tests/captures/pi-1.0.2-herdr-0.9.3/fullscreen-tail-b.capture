@@ -1,0 +1,40 @@
+                                                                                   │
+ /Users/user1/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/1.0.2/n│
+ ode_modules/.mise/@earendil-works+pi-coding-agent@1.0.2/node_modules/@earendil-wor│
+ ks/pi-coding-agent/docs/providers.md
+
+ /Users/user1/.local/share/mise/installs/npm-earendil-works-pi-coding-agent/1.0.2/n
+ ode_modules/.mise/@earendil-works+pi-coding-agent@1.0.2/node_modules/@earendil-wor
+ ks/pi-coding-agent/docs/models.md
+
+────────────────────────────────────────────────────────────────────────────────────
+ $ seq -f "LAB_LONG_LINE_%g" 1 120; printf "%0150d\n" 0
+ LAB_LONG_LINE_104
+ LAB_LONG_LINE_105
+ LAB_LONG_LINE_106
+ LAB_LONG_LINE_107
+ LAB_LONG_LINE_108
+ LAB_LONG_LINE_109
+ LAB_LONG_LINE_110
+ LAB_LONG_LINE_111
+ LAB_LONG_LINE_112
+ LAB_LONG_LINE_113
+ LAB_LONG_LINE_114
+ LAB_LONG_LINE_115
+ LAB_LONG_LINE_116
+ LAB_LONG_LINE_117
+ LAB_LONG_LINE_118
+ LAB_LONG_LINE_119
+ LAB_LONG_LINE_120
+ 0000000000000000000000000000000000000000000000000000000000000000000000000000000000
+ 00000000000000000000000000000000000000000000000000000000000000000000
+
+
+ ... 102 more lines (ctrl+o to expand)
+────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────
+/private/tmp/fm-firstmate-fullscreen-hash-scrollbar/fixcwd
+0.0%/0 (auto)                                                                unknown

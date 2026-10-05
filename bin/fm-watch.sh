@@ -217,6 +217,8 @@ WATCH_HOME_EXISTED=0
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# shellcheck source=bin/fm-pane-hash-lib.sh
+. "$SCRIPT_DIR/fm-pane-hash-lib.sh"
 # Steering-inbox loss detection: bin/fm-task-inbox-lib.sh owns the record,
 # doorbell, re-ring ladder, and unavailable-endpoint contracts; this watcher
 # supplies their live endpoint and busy checks plus wake emission
@@ -419,10 +421,6 @@ away_record_present() { fm_afk_contract_away_present "$STATE"; }
 # silently instead of rechecking it.
 captain_held_silenced() {  # <status-line>
   status_is_captain_held "$1" && away_record_present
-}
-
-hash_pane() {
-  if command -v md5 >/dev/null 2>&1; then md5 -q; else md5sum | cut -d' ' -f1; fi
 }
 
 # window_is_busy: 0 (busy) iff the task's harness is PROVABLY working, through
@@ -669,12 +667,12 @@ inbox_steer_check() {  # <window> <task>
 # it never runs on the ordinary per-wake path.
 signal_turnend_panes_churned() {  # <file> ...
   [ -e "$CONFIG/turnend-churn-absorb" ] || return 1
-  local f base task meta kind w key backend label terminal prev now since now_s absorb_secs marker age
+  local f base task meta kind w key backend harness label terminal prev now now_hash since now_s absorb_secs marker age
   local rec_task task_index i j count hash_file hash_bytes created
   local max_absorb_secs=9223372036854775807
   local -a signal_tasks=() signal_statuses=() snapshot_tasks=() snapshot_kinds=()
   local -a snapshot_windows=() snapshot_keys=() snapshot_backends=() snapshot_labels=()
-  local -a signal_indexes=() churn_indexes=() churned_keys=() missing_keys=() created_keys=()
+  local -a snapshot_harnesses=() signal_indexes=() churn_indexes=() churned_keys=() missing_keys=() created_keys=()
   [ "$#" -gt 0 ] || return 1
   for f in "$@"; do
     base=${f##*/}
@@ -716,6 +714,7 @@ signal_turnend_panes_churned() {  # <file> ...
     snapshot_keys+=("$key")
     snapshot_backends+=("$backend")
     snapshot_labels+=("$label")
+    snapshot_harnesses+=("$(fm_meta_get "$meta" harness)")
   done
   # These linear lookups deliberately support stock macOS Bash 3.2.57, enforced
   # by macos-stock-bash, and this repository uses no associative arrays in bin/
@@ -759,6 +758,7 @@ signal_turnend_panes_churned() {  # <file> ...
     key=${snapshot_keys[$task_index]}
     backend=${snapshot_backends[$task_index]}
     label=${snapshot_labels[$task_index]}
+    harness=${snapshot_harnesses[$task_index]}
     hash_file="$STATE/.hash-$key"
     hash_bytes=$(LC_ALL=C wc -c 2>/dev/null < "$hash_file") || return 1
     hash_bytes=${hash_bytes//[[:space:]]/}
@@ -767,7 +767,8 @@ signal_turnend_panes_churned() {  # <file> ...
     [[ $prev =~ ^[0-9a-f]{32}$ ]] || return 1
     now=$(fm_backend_capture "$backend" "$w" 40 "$label" 2>/dev/null) || return 1
     [ -n "$now" ] || return 1
-    [ "$(printf '%s' "$now" | hash_pane)" != "$prev" ] || return 1
+    now_hash=$(fm_pane_stale_hash "$backend" "$harness" "$w" "$label" "$now") || return 1
+    [ "$now_hash" != "$prev" ] || return 1
     churned_keys+=("$key")
   done
   # Enforce the deferral bound BEFORE any .stale- state is touched, so a wake that
@@ -3034,8 +3035,9 @@ EOF
     if [ "$kind" = secondmate ] && ! status_is_paused_or_captain_held "$last"; then
       continue
     fi
-    tail40=$(fm_backend_capture "$(window_backend "$w")" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
-    h=$(printf '%s' "$tail40" | hash_pane)
+    pane_backend=$(window_backend "$w")
+    tail40=$(fm_backend_capture "$pane_backend" "$w" 40 "$(window_label "$w")" 2>/dev/null) || continue
+    h=$(fm_pane_stale_hash "$pane_backend" "$(window_harness "$w")" "$w" "$(window_label "$w")" "$tail40") || continue
     hf="$STATE/.hash-$key"
     cf="$STATE/.count-$key"
     sf="$STATE/.stale-$key"
