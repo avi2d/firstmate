@@ -3084,6 +3084,8 @@ printf 'session:\n  file: /a.html\n  status: feedback\nprompts[1]{tag,text}:\n  
 silent_says no "a freeform captain message is news"
 printf 'session:\n  file: /a.html\n  status: ended\n  ended_by: user\nprompts[1]{tag,text}:\n  "choice","late answer"\n' > "$SIL"
 silent_says no "an ended session still carrying content is never assumed empty"
+printf 'session:\n  file: /a.html\n  status: ended\n  ended_by: user\nprompts[1]:\n  - uid: ""\n    prompt: "late answer"\n    selector: ""\n    tag: message\n    text: Freeform message\n' > "$SIL"
+silent_says no "an ended session still carrying list-form content is never assumed empty"
 printf 'session:\n  file: /a.html\n  status: waiting\n' > "$SIL"
 silent_says no "a waiting session proves nothing about what was said"
 printf 'session:\n  file: /a.html\n  status: browser_disconnected\n' > "$SIL"
@@ -3359,6 +3361,49 @@ assert_contains "$out" "SESSION-ENDING MESSAGE: (none)" \
   "an empty board close invented a session-ending message"
 assert_contains "$out" "ANNOTATIONS: (none)" "an empty board close invented annotations"
 pass "read distinguishes a feedback capture from an ended-with-nothing close"
+
+# Lavish also frames queued content as a list: `prompts[N]:` with `- ` items
+# and a nested `attachments[M]{...}:` table for prompt images. A message in
+# that shape is the same news as a table row, and its image path is what the
+# handler opens to see what the captain is referring to.
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
+prompts[1]:
+  - uid: ""
+    prompt: "i like accent, but i want number role to have a separate color\nwhy do bat and neovim look different here?"
+    selector: ""
+    tag: message
+    text: Freeform message
+    attachments[1]{id,type,path,mime,bytes,width,height,name}:
+      ac1240407ab47e25c4ca4cbc631491e96e9526718d86d18ff719857d276b2d40.png,image,/tmp/review-image/ac1240407ab47e25c4ca4cbc631491e96e9526718d86d18ff719857d276b2d40.png,image/png,345277,1918,1446,image.png
+EOF
+out=$(read_out) || fail "read failed on a list-form capture carrying an image"
+assert_contains "$out" "declared_items: 1" "a list-form capture hid its declared count"
+assert_contains "$out" "presented_items: 1" "a list-form capture dropped its queued item"
+assert_contains "$out" "complete: yes" "a complete list-form capture was not marked complete"
+assert_contains "$out" "CAPTAIN MESSAGE" "a list-form message lost its labeled field"
+assert_contains "$out" "| i like accent, but i want number role to have a separate color" "a list-form message dropped the typed comment"
+assert_contains "$out" "| /tmp/review-image/ac1240407ab47e25c4ca4cbc631491e96e9526718d86d18ff719857d276b2d40.png" "a list-form message dropped its image path"
+assert_contains "$out" "session_ending_message_count: 1" "a list-form message was not counted"
+assert_contains "$out" "annotation_count: 0" "a list-form message was counted as an annotation"
+pass "read presents a list-form message and its image path"
+
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
+prompts[1]:
+  - uid: "el-choice"
+    prompt: "Context data: {\"question\":\"list-form-routing\",\"answer\":\"b\"}"
+    selector: "section#quota > button"
+    tag: choice
+    text: "Option B"
+EOF
+out=$("$ROOT/bin/fm-procevent-lavish.sh" answers "$READ") || fail "answers failed on a list-form choice capture"
+assert_contains "$out" $'list-form-routing\tb\tOption B' "a list-form choice was not reported as a keyed answer"
+pass "answers reads a list-form choice"
 
 # The runner's silence seam is generic and closed by default: an adapter with no
 # `silent` command must keep announcing, so adding the seam changed nothing for

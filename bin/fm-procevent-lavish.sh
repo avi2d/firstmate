@@ -524,18 +524,19 @@ cmd_terminal() {
 
 # Whether a completed result carries any queued content block at all. The
 # published response frames content as a top-level `prompts[N]{...}:` or
-# `feedback[N]{...}:` header whose rows are INDENTED, so this anchors on column
-# zero: an indented payload line is captain-supplied text and must never be able
-# to forge - or, here, to hide behind - a content header. Any recognized block
-# is content regardless of its declared count, while a malformed top-level
-# prompts or feedback header makes the result indeterminate.
+# `feedback[N]{...}:` header whose rows are INDENTED, or as a `prompts[N]:` or
+# `feedback[N]:` list whose `- ` items carry the same fields, so this anchors
+# on column zero: an indented payload line is captain-supplied text and must
+# never be able to forge - or, here, to hide behind - a content header. Any
+# recognized block is content regardless of its declared count, while a
+# malformed top-level prompts or feedback header makes the result indeterminate.
 #
 # 0 = content present, 1 = provably no content, anything else = the check did
 # not complete. The caller must distinguish those three, because "the check
 # failed" is never proof that nothing was said.
 result_has_queued_content() {  # <result-file>
   awk '
-    /^(prompts|feedback)\[[0-9]+\]\{[^}]*\}:[[:space:]]*$/ {
+    /^(prompts|feedback)\[[0-9]+\](\{[^}]*\})?:[[:space:]]*$/ {
       verdict = "present"
       exit
     }
@@ -575,7 +576,8 @@ cmd_silent() {
 # captain submitted in a captured result; the optional mode column relays the
 # card's declared close mode (`done` or `release`) to the keyed-answer intake. The published response frames queued feedback as
 # a `prompts[N]{field,...}:` header followed by exactly N indented CSV rows whose
-# quoted fields carry JSON-style escapes, so this reads the declared field ORDER
+# quoted fields carry JSON-style escapes, or as a `prompts[N]:` list whose `- `
+# items carry the same named fields, so this reads the declared field ORDER
 # rather than assuming a fixed column, and takes only rows whose `tag` field is
 # `choice`. A freeform `message` row is captain prose and is deliberately never a
 # source of decision keys. A row that does not carry both a slug-shaped `question`
@@ -636,18 +638,98 @@ cmd_choice_rows() {
       return length(encode("UTF-8", $answer)) <= 3840 ? $answer : undef;
     }
     my (@fields, $want, @rows);
+    my ($list, @items, @item_bad, $cur, $lastkey, $nest, $nestleft);
+    # A list item carries the same named fields as a table row. Nested tables
+    # an item may carry, such as its image attachments, are consumed and
+    # skipped here because keyed answers never come from them.
+    sub field_value {
+      my ($raw) = @_;
+      my $v = $raw;
+      if ($v =~ /^"(.*)"$/s) { $v = $1; }
+      else { $v =~ s/[ \t]+$//; }
+      $v =~ s/\\(.)/$1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/ge;
+      return $v;
+    }
+    # Re-quote a parsed value as one CSV cell so list items flow through the
+    # same row decoding below as table rows.
+    sub quoted_cell {
+      my ($v) = @_;
+      $v =~ s/\\/\\\\/g;
+      $v =~ s/"/\\"/g;
+      $v =~ s/\n/\\n/g;
+      $v =~ s/\t/\\t/g;
+      $v =~ s/\r/\\r/g;
+      return qq{"$v"};
+    }
     while (my $line = <$fh>) {
-      if (!@fields) {
-        next unless $line =~ /^prompts\[(\d+)\]\{([^}]*)\}:\s*$/;
-        ($want, @fields) = ($1, split /,/, $2);
+      if (!$list && !@fields) {
+        if ($line =~ /^prompts\[(\d+)\]\{([^}]*)\}:\s*$/) {
+          ($want, @fields) = ($1, split /,/, $2);
+          next;
+        }
+        if ($line =~ /^prompts\[(\d+)\]:\s*$/) {
+          ($want, $list) = ($1, 1);
+          next;
+        }
         next;
       }
-      last unless $line =~ /^\s/;
-      last if @rows >= $want;
+      if (!$list) {
+        last unless $line =~ /^\s/;
+        last if @rows >= $want;
+        chomp $line;
+        push @rows, decode("UTF-8", $line);
+        next;
+      }
       chomp $line;
-      push @rows, decode("UTF-8", $line);
+      next if $line =~ /^\s*$/;
+      if ($line =~ /^  - (.*)$/) {
+        last if @items >= $want;
+        $cur = {};
+        push @items, $cur;
+        push @item_bad, 0;
+        ($lastkey, $nest, $nestleft) = (undef, undef, 0);
+        my $rest = $1;
+        if ($rest =~ /^([A-Za-z0-9_.-]+)\[(\d+)\]\{([^}]*)\}:\s*$/) {
+          ($nest, $nestleft) = ($1, $2);
+        } elsif ($rest =~ /^([A-Za-z0-9_.-]+):(?:[ \t]+(.*))?$/) {
+          $cur->{$1} = field_value($2 // "");
+          $lastkey = $1;
+        } else {
+          $item_bad[-1] = 1;
+        }
+        next;
+      }
+      last if $line !~ /^   /;
+      if (!defined $cur) { last; }
+      if (defined $nest) {
+        if ($nestleft > 0 && $line =~ /^      /) {
+          $nestleft--;
+          next;
+        }
+        undef $nest;
+      }
+      if ($line =~ /^    ([A-Za-z0-9_.-]+)\[(\d+)\]\{([^}]*)\}:\s*$/) {
+        ($nest, $nestleft) = ($1, $2);
+        $lastkey = undef;
+      } elsif ($line =~ /^    ([A-Za-z0-9_.-]+):(?:[ \t]+(.*))?$/) {
+        $cur->{$1} = field_value($2 // "");
+        $lastkey = $1;
+      } elsif ($line =~ /^      / && defined $lastkey) {
+        (my $more = $line) =~ s/^\s+//;
+        $cur->{$lastkey} .= "\n$more";
+      } else {
+        $item_bad[-1] = 1;
+      }
     }
     close $fh;
+    if ($list) {
+      @fields = qw(uid prompt selector tag text);
+      for my $i (0 .. $#items) {
+        next if $item_bad[$i];
+        my $item = $items[$i];
+        push @rows, decode("UTF-8", join(",", map { quoted_cell($item->{$_} // "") } @fields));
+      }
+    }
     my %seen;
     my @choices;
     for my $row (@rows) {
@@ -750,7 +832,9 @@ cmd_reconciles() { cmd_choice_rows reconciles "$@"; }
 # A non-choice annotation that carries a freeform `prompt` prints that comment
 # as its own field; a selector must not hide the typed words, even when the
 # comment matches the captured element text. Choice rows keep Context data
-# out of that field. A pure annotation has no prompt.
+# out of that field. A pure annotation has no prompt. An item carrying image
+# attachments prints their paths under `attachments:`, so the handler can open
+# what the captain is referring to.
 cmd_read() {
   local file=${1-} lifecycle session_ended
   [ -n "$file" ] || usage
@@ -762,16 +846,129 @@ cmd_read() {
     my ($path, $lifecycle, $session_ended) = @ARGV;
     open my $fh, "<", $path or exit 1;
     my (@fields, $want, @rows);
+    my ($list, @items, @item_bad, $cur, $lastkey);
+    my ($nest, $nestfields, $nestleft, @nestrows);
+    # A list item carries the same named fields as a table row, with image
+    # attachments as a nested `attachments[N]{field,...}:` table of CSV rows.
+    sub field_value {
+      my ($raw) = @_;
+      my $v = $raw;
+      if ($v =~ /^"(.*)"$/s) { $v = $1; }
+      else { $v =~ s/[ \t]+$//; }
+      $v =~ s/\\(.)/$1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/ge;
+      return $v;
+    }
+    sub split_cells {
+      my ($row) = @_;
+      my @vals;
+      while (length $row) {
+        if ($row =~ s/^"((?:[^"\\]|\\.)*)"//) {
+          push @vals, $1;
+        } else {
+          $row =~ s/^([^,]*)//;
+          push @vals, $1;
+        }
+        last unless $row =~ s/^,//;
+      }
+      return @vals;
+    }
+    # Commit collected nested rows into the current item. A row that does not
+    # match the declared columns fails the item, never the read.
+    sub commit_nest {
+      my ($item, $name, $columns, $cells) = @_;
+      my @kept;
+      for my $cell (@$cells) {
+        my @vals = split_cells($cell);
+        if (@vals > @$columns) {
+          my ($preserve) = grep { $columns->[$_] eq "path" } 0 .. $#$columns;
+          if (defined $preserve) {
+            my $count = @vals - @$columns + 1;
+            my @parts = splice @vals, $preserve, $count;
+            splice @vals, $preserve, 0, join(",", @parts);
+          }
+        }
+        return 0 unless @vals == @$columns;
+        s/\\(.)/$1 eq "n" ? "\n" : $1 eq "t" ? "\t" : $1 eq "r" ? "\r" : $1/ge for @vals;
+        my %h;
+        $h{$columns->[$_]} = $vals[$_] for 0 .. $#$columns;
+        push @kept, \%h;
+      }
+      $item->{$name} = { fields => $columns, rows => \@kept };
+      return 1;
+    }
     while (my $line = <$fh>) {
-      if (!@fields) {
-        next unless $line =~ /^(?:prompts|feedback)\[(\d+)\]\{([^}]*)\}:\s*$/;
-        ($want, @fields) = ($1, split /,/, $2);
+      if (!$list && !@fields) {
+        if ($line =~ /^(?:prompts|feedback)\[(\d+)\]\{([^}]*)\}:\s*$/) {
+          ($want, @fields) = ($1, split /,/, $2);
+          next;
+        }
+        if ($line =~ /^(?:prompts|feedback)\[(\d+)\]:\s*$/) {
+          ($want, $list) = ($1, 1);
+          next;
+        }
         next;
       }
-      last unless $line =~ /^\s/;
-      last if defined($want) && @rows >= $want;
+      if (!$list) {
+        last unless $line =~ /^\s/;
+        last if defined($want) && @rows >= $want;
+        chomp $line;
+        push @rows, $line;
+        next;
+      }
       chomp $line;
-      push @rows, $line;
+      next if $line =~ /^\s*$/;
+      if ($line =~ /^  - (.*)$/) {
+        last if @items >= $want;
+        $cur = {};
+        push @items, $cur;
+        push @item_bad, 0;
+        ($lastkey, $nest, $nestfields, $nestleft, @nestrows) = (undef, undef, undef, 0, ());
+        my $rest = $1;
+        if ($rest =~ /^([A-Za-z0-9_.-]+)\[(\d+)\]\{([^}]*)\}:\s*$/) {
+          ($nest, $nestleft, $nestfields) = ($1, $2, [split /,/, $3]);
+          if ($nestleft == 0) {
+            $item_bad[-1] = 1 unless commit_nest($cur, $nest, $nestfields, \@nestrows);
+            undef $nest;
+          }
+        } elsif ($rest =~ /^([A-Za-z0-9_.-]+):(?:[ \t]+(.*))?$/) {
+          $cur->{$1} = field_value($2 // "");
+          $lastkey = $1;
+        } else {
+          $item_bad[-1] = 1;
+        }
+        next;
+      }
+      last if $line !~ /^   /;
+      if (!defined $cur) { last; }
+      if (defined $nest) {
+        if ($nestleft > 0 && $line =~ /^      /) {
+          (my $cell = $line) =~ s/^      //;
+          push @nestrows, $cell;
+          if (--$nestleft == 0) {
+            $item_bad[-1] = 1 unless commit_nest($cur, $nest, $nestfields, \@nestrows);
+            undef $nest;
+          }
+          next;
+        }
+        $item_bad[-1] = 1 if $nestleft > 0;
+        undef $nest;
+      }
+      if ($line =~ /^    ([A-Za-z0-9_.-]+)\[(\d+)\]\{([^}]*)\}:\s*$/) {
+        ($nest, $nestleft, $nestfields, @nestrows) = ($1, $2, [split /,/, $3], ());
+        if ($nestleft == 0) {
+          $item_bad[-1] = 1 unless commit_nest($cur, $nest, $nestfields, \@nestrows);
+          undef $nest;
+        }
+        $lastkey = undef;
+      } elsif ($line =~ /^    ([A-Za-z0-9_.-]+):(?:[ \t]+(.*))?$/) {
+        $cur->{$1} = field_value($2 // "");
+        $lastkey = $1;
+      } elsif ($line =~ /^      / && defined $lastkey) {
+        (my $more = $line) =~ s/^\s+//;
+        $cur->{$lastkey} .= "\n$more";
+      } else {
+        $item_bad[-1] = 1;
+      }
     }
     close $fh;
     $want = 0 unless defined $want;
@@ -807,6 +1004,16 @@ cmd_read() {
       $f{$fields[$_]} = $vals[$_] for 0 .. $#fields;
       push @parsed, \%f;
     }
+    if (defined $nest && @items) {
+      $item_bad[-1] = 1;
+    }
+    for my $i (0 .. $#items) {
+      if ($item_bad[$i]) {
+        $malformed++;
+        next;
+      }
+      push @parsed, $items[$i];
+    }
     my $presented = scalar @parsed;
     my $complete = ($presented == $want && !$malformed) ? "yes" : "no";
     my @messages;
@@ -829,6 +1036,37 @@ cmd_read() {
       return if !@lines || (@lines == 1 && $lines[0] eq "");
       print "| $_\n" for @lines;
     }
+    # Image attachment paths an item carries, one `| `-prefixed line each so a
+    # captain-supplied filename cannot forge a section label. A nested table
+    # names its `path` column; a table row carrying an `attachments` field of
+    # unknown shape is presented whole rather than dropped.
+    sub attachment_paths {
+      my ($f) = @_;
+      my @paths;
+      my $att = $f->{attachments};
+      if (ref($att) eq "HASH") {
+        my $columns = $att->{fields} || [];
+        my ($has_path) = grep { $_ eq "path" } @$columns;
+        for my $row (@{$att->{rows} || []}) {
+          if ($has_path && defined $row->{path} && length $row->{path}) {
+            push @paths, $row->{path};
+          } else {
+            my $raw = join(",", @{$row}{@$columns});
+            push @paths, $raw if defined $raw && length $raw;
+          }
+        }
+      } elsif (defined $att && length $att) {
+        push @paths, split /\n/, $att;
+      }
+      return @paths;
+    }
+    sub emit_attachments {
+      my ($f) = @_;
+      my @paths = attachment_paths($f);
+      return unless @paths;
+      print "attachments:\n";
+      print "| $_\n" for @paths;
+    }
     if (@messages) {
       my $message_label = $session_ended =~ /^(?:true|True|TRUE)$/
         ? "SESSION-ENDING MESSAGE" : "CAPTAIN MESSAGE";
@@ -839,6 +1077,7 @@ cmd_read() {
           ? $messages[$i]{prompt}
           : (defined $messages[$i]{text} ? $messages[$i]{text} : "");
         emit_body($body);
+        emit_attachments($messages[$i]);
       }
       print "END $message_label\n";
     } else {
@@ -875,6 +1114,7 @@ cmd_read() {
           print "prompt:\n";
           emit_body($comment);
         }
+        emit_attachments($f);
       }
       print "END ANNOTATIONS\n";
     } else {
