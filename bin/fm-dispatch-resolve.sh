@@ -337,13 +337,13 @@ if is_scout_brief; then
   SCOUT_BRIEF=1
 fi
 if [ "$SCOUT_BRIEF" -eq 1 ]; then
-  # The marker line maps to rule_5 exactly, so a scout brief never reaches Jev.
+  # A short file has no rule_5, so the marker falls through to default.
   jq -n --slurpfile rules "$RULES" '
     (($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) + ["default"]) as $choices |
+    (if ($choices | index("rule_5")) then "rule_5" else "default" end) as $pick |
     {model: "scout-routing",
-     answers: {rule: {type: "choice", choice: "rule_5", confidence: 1,
-       probabilities: ($choices | map({key: ., value: (if . == "rule_5" then 1 else 0 end)}) | from_entries
-         | if has("rule_5") then . else .default = 1 end)}}}' > "$RESP_FILE" \
+     answers: {rule: {type: "choice", choice: $pick, confidence: 1,
+       probabilities: ($choices | map({key: ., value: (if . == $pick then 1 else 0 end)}) | from_entries)}}}' > "$RESP_FILE" \
     || emit_error "scout routing failed"
   LAT_MS=0
 else

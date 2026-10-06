@@ -582,8 +582,9 @@ reset_log
 write_response "$RESPONSE" rule_4 0.9
 TYPESAFE_API_KEY=$KEY run code out err "$KIND_BRIEF"
 expect_code 0 "$code" "scout routing exits 0"
-assert_contains "$out" '  status: error' "a scout brief with no rule_5 in the file is an error outcome, not a Jev call"
-assert_contains "$out" '  reason: rule rule_5 is not in the rules file' "the missing investigation rule is named"
+assert_contains "$out" '  status: clear' "a scout brief with no rule_5 in the file falls through to default, not a Jev call"
+assert_contains "$out" '  rule: default (No listed rule applies to this task.)   confidence: 1' "the missing investigation rule falls through to default"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "the default profiles resolve through the quota stage"
 assert_absent "$LOG/argv" "scout routing never calls curl"
 
 reset_log
@@ -1242,6 +1243,19 @@ assert_contains "$out" '  rule: rule_5 (The task is an investigation that ends i
 assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "rule_5 ranks through the quota stage as today"
 assert_absent "$LOG/argv" "scout routing makes no Jev request"
 assert_equals '--json' "$(cat "$LOG/quota-axi.calls")" "scout routing still reads quota once"
+
+THREE_RULES="$TMP_ROOT/three-rules.json"
+jq '.rules |= .[0:3]' "$BASE_RULES" > "$THREE_RULES"
+cp "$THREE_RULES" "$RULES"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$SCOUT_BRIEF" --project pager
+expect_code 0 "$code" "three-rule scout routing exits 0"
+assert_contains "$out" '  status: clear' "a scout brief with three rules resolves without a Jev request"
+assert_contains "$out" '  rule: default (No listed rule applies to this task.)   confidence: 1' "a three-rule file falls through to default"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "the default profiles resolve through the quota stage"
+assert_absent "$LOG/argv" "three-rule scout routing makes no Jev request"
+assert_equals '--json' "$(cat "$LOG/quota-axi.calls")" "three-rule scout routing still reads quota once"
+cp "$FIVE_RULES" "$RULES"
 
 SHIP_RESPONSE="$TMP_ROOT/ship-response.json"
 cat > "$SHIP_RESPONSE" <<'JSON'
