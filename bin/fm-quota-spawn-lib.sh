@@ -36,6 +36,7 @@ fm_quota_spawn_assess() {
   ' <<< "$row"
 }
 
+# shellcheck disable=SC2034 # FM_QUOTA_GATE_NOTE is an output global, read by the sourcing caller.
 fm_quota_spawn_gate() {
   local config=$1 harness=$2 model=$3 effort=$4 account=$5 override=$6
   local profiles count snapshot='' profile provider lane floor row assessment blocked=0 unmeasured=0 result reason reset account_name clauth_snapshot=''

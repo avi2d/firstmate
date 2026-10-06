@@ -1011,9 +1011,9 @@ fm_busy_launch_prompt_parked() {  # <harness>
 }
 
 fm_busy_provider_wait_until() {  # <state-dir> <id> -> active wait's clearing epoch
-  local record state source event seq reset ts until now
+  local record state source event reset ts until now
   record=$(fm_busy_record_read "$1" "$2") || return 1
-  IFS=' ' read -r state source event seq reset ts <<EOF
+  IFS=' ' read -r state source event _ reset ts <<EOF
 $record
 EOF
   [ "$state" = idle ] && [ "$source" = pi-ext ] && [ "$event" = provider-limit ] || return 1

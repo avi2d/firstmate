@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2016,SC2034  # jq program text, read by the sourcing consumers
 FM_QUOTA_ASSESSMENT_JQ=$(cat <<'JQ'
   def quota_rows($row): ($row | .quotaSemantics.effectiveAvailability // []);
   def quota_bare_model($model): ($model | split("/") | last);

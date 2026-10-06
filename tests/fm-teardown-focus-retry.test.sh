@@ -16,7 +16,6 @@ export REAL_GIT_FOR_TEST
 
 TOKEN=AbCdEfGhIjKlMnOpQrStUv
 TOKEN2=ZyXwVuTsRqPoNmLkJiHgFe
-TITLE="└ task-x1 · p:$TOKEN"
 
 make_case() {
   local name=$1 case_dir fakebin
