@@ -1242,6 +1242,224 @@ EOF
   pass "a mixed batch of two distinct files - one routine, one needs-decision - routes wholly to main"
 }
 
+# A routine second-mate span is no longer dragged to main behind an unrelated
+# decision row: neither a marked decision row for the same mate (already
+# presented) nor a decision span for the other mate vetoes the offer. The
+# decision rows stay excluded from the claim and queued for main's own cycle.
+# Spans that carry a decision, a block, a hold, a same-key update, or a
+# resolution that closes an open decision stay on main, as does a lone
+# marked escalation with nothing else claimable.
+test_pi_routine_secondmate_span_survives_unrelated_decision() {
+  local repo home out status
+  repo="$TMP_ROOT/pi-secondmate-routine-span-root"
+  home="$TMP_ROOT/pi-secondmate-routine-span-home"
+  mkdir -p "$repo/.pi/extensions/lib" "$home/state" "$home/projects/approved"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" "$repo/.pi/extensions/lib/fm-branch-dispatch.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-native-contract.ts" "$repo/.pi/extensions/lib/fm-native-contract.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-async-exec.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$repo/.pi/extensions/lib/fm-branch-model-picker.ts"
+  printf 'project=%s/projects/approved\nwindow=fm-winbox\nkind=secondmate\n' "$home" > "$home/state/winbox.meta"
+  printf 'project=%s/projects/approved\nwindow=fm-winbox-ru\nkind=secondmate\n' "$home" > "$home/state/winbox-ru.meta"
+  LIB="$repo/.pi/extensions/lib/fm-branch-dispatch.ts" FM_HOME="$home" CLASSIFY_LIB="$ROOT/bin/fm-classify-lib.sh" \
+    node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+
+const { branchOfferForWake, scopeForUnreadWake } = await import(pathToFileURL(process.env.LIB).href);
+const state = `${process.env.FM_HOME}/state`;
+const row = (seq, kind, key, payload) => `${seq}\t${seq}\t${kind}\t${key}\t${payload}`;
+const hold = "needs-decision [at=1790000000] [key=old-hold]: deferred captain call\n";
+
+function commitCursor() {
+  const rows = [];
+  for (const task of ["winbox", "winbox-ru"]) {
+    const path = `${state}/${task}.status`;
+    let content;
+    try { content = readFileSync(path); } catch { continue; }
+    const ident = execFileSync("bash", ["-c", 'set -e; . "$1"; _fm_open_decisions_file_ident "$2"',
+      "_", process.env.CLASSIFY_LIB, path], { encoding: "utf8" }).trim();
+    rows.push(`${task}\t${Buffer.byteLength(content)}\t${ident}`);
+  }
+  execFileSync("bash", ["-c", 'set -e; . "$1"; status_commit_presentation_snapshot "$2" "$3"',
+    "_", process.env.CLASSIFY_LIB, state, rows.join("\n")]);
+}
+function present(task, content) {
+  writeFileSync(`${state}/${task}.status`, content);
+  commitCursor();
+}
+function verdicts(message) {
+  return [false, true].map((attendedHost) =>
+    branchOfferForWake(state, message, false, attendedHost).eligible);
+}
+function expectOffer(label, message, toBranch) {
+  const [pi, host] = verdicts(message);
+  if (pi !== toBranch || host !== toBranch) {
+    throw new Error(`${label}: expected ${toBranch ? "branch" : "main"}, got pi=${pi} host=${host}`);
+  }
+}
+
+// One batch names a decision span for winbox and a routine done[corr] span
+// for winbox-ru: the branch claims only the routine row.
+present("winbox", hold);
+present("winbox-ru", hold);
+appendFileSync(`${state}/winbox.status`, "needs-decision [key=new-call]: pick an option\n");
+appendFileSync(`${state}/winbox-ru.status`, "done [corr=ac35a329913b9212]: re-read done, nothing changed (via-helper)\n");
+writeFileSync(`${state}/.wake-queue`,
+  row(1, "signal", "winbox.status", "signal: winbox.status") + "\n" +
+  row(2, "signal", "winbox-ru.status", "signal: winbox-ru.status") + "\n");
+expectOffer("decision mate plus routine mate", `signal: ${state}/winbox.status ${state}/winbox-ru.status`, true);
+{
+  const scope = scopeForUnreadWake(state, false, false, false);
+  if (JSON.stringify(scope.eligibleSeqs) !== '["2"]') throw new Error(`routine mate claim wrong: ${JSON.stringify(scope)}`);
+  if (!scope.needsDecisionKeys.includes("winbox.status")) throw new Error(`decision row lost: ${JSON.stringify(scope)}`);
+  if (scope.eligibleTasks.includes("winbox")) throw new Error(`decision mate claimable: ${JSON.stringify(scope)}`);
+}
+
+// The same decision trigger alone still reaches main: nothing is claimable.
+writeFileSync(`${state}/.wake-queue`, row(1, "signal", "winbox.status", "signal: winbox.status") + "\n");
+expectOffer("lone decision span", `signal: ${state}/winbox.status`, false);
+
+// A marked escalation alone in the queue still reaches main this cycle.
+present("winbox", hold);
+appendFileSync(`${state}/winbox.status`, "needs-decision [key=fresh-call]: pick one\n");
+writeFileSync(`${state}/.wake-queue`, row(1, "signal", "winbox.status", "needs-decision: winbox.status") + "\n");
+expectOffer("lone marked escalation", `signal: ${state}/winbox.status`, false);
+
+// A mixed span, a same-key update, and a resolution closing an open
+// decision stay on main even with a routine mate co-queued.
+const stays = [
+  ["mixed span", "done: sample merged\nneeds-decision [key=new-call]: pick an option\n"],
+  ["same-key update", "working [key=old-hold]: still gathering evidence\n"],
+  ["closing resolution", "resolved [key=old-hold]: answered\n"],
+];
+for (const [label, span] of stays) {
+  present("winbox", hold);
+  appendFileSync(`${state}/winbox.status`, span);
+  writeFileSync(`${state}/.wake-queue`,
+    row(1, "signal", "winbox.status", "signal: winbox.status") + "\n" +
+    row(2, "signal", "winbox-ru.status", "signal: winbox-ru.status") + "\n");
+  expectOffer(label, `signal: ${state}/winbox.status ${state}/winbox-ru.status`, true);
+  const scope = scopeForUnreadWake(state, false, false, false);
+  if (scope.eligibleSeqs.includes("1")) throw new Error(`${label} claimed a decision row: ${JSON.stringify(scope)}`);
+}
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "routine second-mate spans must survive unrelated decision rows: $out"
+  [ -z "$out" ] || fail "Pi second-mate routine-span test printed output: $out"
+  pass "a routine second-mate span reaches the branch beside unrelated decision rows while decision spans stay on main"
+}
+
+# End to end through the real dispatcher: a batch naming a decision-owned
+# second mate and a routine second mate is offered to the branch, so the
+# routine rows stop costing a main turn. The excluded decision rows stay
+# queued for main's own cycle.
+test_pi_secondmate_batch_offers_routine_mate_to_branch() {
+  local repo home plugin log stop out status
+  repo="$TMP_ROOT/pi-secondmate-batch-root"
+  home="$TMP_ROOT/pi-secondmate-batch-home"
+  log="$TMP_ROOT/pi-secondmate-batch.log"
+  stop="$TMP_ROOT/pi-secondmate-batch.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config" "$home/projects/approved"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  printf 'project=%s/projects/approved\nwindow=fm-winbox\nkind=secondmate\n' "$home" > "$home/state/winbox.meta"
+  printf 'project=%s/projects/approved\nwindow=fm-winbox-ru\nkind=secondmate\n' "$home" > "$home/state/winbox-ru.meta"
+  printf 'needs-decision [at=1790000000] [key=old-hold]: deferred captain call\n' > "$home/state/winbox.status"
+  printf 'needs-decision [at=1790000000] [key=old-hold]: deferred captain call\n' > "$home/state/winbox-ru.status"
+  CLASSIFY_LIB="$ROOT/bin/fm-classify-lib.sh" FM_STATE="$home/state" bash -c '
+    set -e; . "$CLASSIFY_LIB"
+    snapshot=""
+    for mate in winbox winbox-ru; do
+      ident=$(_fm_open_decisions_file_ident "$FM_STATE/$mate.status")
+      bytes=$(wc -c < "$FM_STATE/$mate.status"); bytes=${bytes//[[:space:]]/}
+      printf -v row "%s\t%s\t%s\n" "$mate" "$bytes" "$ident"
+      snapshot+="$row"
+    done
+    status_commit_presentation_snapshot "$FM_STATE" "$snapshot"'
+  printf 'needs-decision [key=new-call]: pick an option\n' >> "$home/state/winbox.status"
+  printf 'done [corr=ac35a329913b9212]: re-read done, nothing changed (via-helper)\n' >> "$home/state/winbox-ru.status"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then exit 0; fi
+printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+if [ "$count" -eq 1 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  printf 'signal: winbox.status winbox-ru.status\n'
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" \
+    node --input-type=module 2>&1 <<'EOF'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const offers = [];
+let prompt = "";
+let tool = null;
+const handlers = new Map();
+const bus = {
+  on(channel, handler) {
+    handlers.set(channel, [...(handlers.get(channel) ?? []), handler]);
+    return () => {};
+  },
+  emit(channel, data) {
+    for (const handler of handlers.get(channel) ?? []) handler(data);
+  },
+};
+bus.on("fm-branch-supervision:dispatch", (offer) => {
+  offers.push({ message: offer.message, eligible: offer.eligible });
+  if (offer.eligible) offer.accept();
+});
+const pi = {
+  on() {},
+  events: bus,
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async (message) => {
+    prompt = message;
+  },
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+writeFileSync(
+  `${process.env.FM_HOME}/state/.wake-queue`,
+  "1\t1\tsignal\twinbox.status\tsignal: winbox.status\n" +
+    "2\t2\tsignal\twinbox-ru.status\tsignal: winbox-ru.status\n",
+);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-secondmate-batch", {}, undefined, undefined, {});
+for (let i = 0; i < 250 && offers.length === 0; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+for (let i = 0; i < 100 && !prompt; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (offers.length !== 1 || offers[0].eligible !== true) {
+  throw new Error(`a mixed second-mate batch was kept from the branch: ${JSON.stringify(offers)}`);
+}
+if (prompt) {
+  throw new Error(`a mixed second-mate batch with a routine span woke main: ${prompt}`);
+}
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+process.exit(0);
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "a mixed second-mate batch must reach the branch: $out"
+  [ -z "$out" ] || fail "Pi second-mate batch test printed output: $out"
+  pass "a mixed second-mate batch offers the routine mate to the branch"
+}
+
 # Independent heartbeat handling: a needs-decision row sitting elsewhere in the
 # unread queue is excluded and non-vetoing exactly like a check-kind row, so it
 # must neither block nor ride along with a co-present, otherwise-eligible
@@ -5258,6 +5476,8 @@ test_pi_main_only_check_classes_stay_on_main
 test_pi_captain_held_signal_stays_on_main
 test_pi_unread_pending_reply_forces_later_stale_alias_to_main
 test_pi_distinct_files_mixed_batch_routes_whole_batch_to_main
+test_pi_routine_secondmate_span_survives_unrelated_decision
+test_pi_secondmate_batch_offers_routine_mate_to_branch
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_needs_decision
 test_pi_heartbeat_restoration_failure_stays_on_main
 test_pi_watcher_failure_never_offered_to_branch

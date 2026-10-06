@@ -41,7 +41,8 @@ The branch then merges each outcome back into the captain conversation's transcr
 Some wakes stay on main:
 
 - Ordinary main-only rows remain on main even when eligible task-local rows share their queue.
-- A decision-owned signal or stale trigger keeps its entire coalesced trigger batch on main.
+- A decision-owned stale trigger, or a decision-owned signal trigger for a single-task log, keeps its entire coalesced trigger batch on main.
+- A second-mate signal trigger never forces main by itself: the branch claims its routine spans while the excluded decision rows stay queued for main.
 - An unresolvable row makes the scan unsafe and returns the whole wake to main.
 - Every watcher-failure alarm also stays on main.
 
@@ -127,10 +128,13 @@ It excludes the row when any `needs-decision` remains open or the current meanin
 An unreadable or symlinked status log fails the scope closed rather than influencing routing.
 
 Before cross-referencing them, the dispatcher resolves trigger keys and every currently unread excluded decision row to task identity.
-The cross-reference then applies two rules:
+The cross-reference then applies four rules:
 
-- Any signal or stale trigger containing a decision-owned task goes wholly to main, including a batch that also contains routine rows.
-- An unread decision for one task keeps every later signal or stale trigger for that same task on main until the decision row is read.
+- Any stale trigger containing a decision-owned task goes wholly to main, including a batch that also contains routine rows.
+- Any signal trigger for a single-task log containing a decision-owned task goes wholly to main, including a batch that also contains routine rows.
+- A signal trigger naming a second mate never forces main by itself.
+  Its decision rows are already excluded per row, its routine spans stay claimable, and whatever stays queued wakes main on its own cycle.
+- An unread decision for one task keeps every later stale trigger, or every later signal for the same single-task log, on main until the decision row is read.
   This holds regardless of whether the rows use its status-file key or window alias.
 
 Other tasks remain independently eligible.
@@ -681,8 +685,10 @@ For the away posture:
 
 Other tests remain where they were:
 
-- The branch-offer, heartbeat-offer, heartbeat-not-ridden-by-main-only-rows, main-only-check-class, captain-held-stale-stays-on-main, and mixed-signal-routing tests remain in `tests/fm-pi-watch-extension.test.sh`.
+- The branch-offer, heartbeat-offer, heartbeat-not-ridden-by-main-only-rows, main-only-check-class, captain-held-stale-stays-on-main, mixed-signal-routing, second-mate-routine-span, and second-mate-batch-split tests remain in `tests/fm-pi-watch-extension.test.sh`.
   The last two routing classes exercise `offerWakeToBranch`'s trigger-key cross-reference end to end.
+  The second-mate routine-span and batch-split classes pin the per-mate exemption.
+  Routine spans stay claimable beside unread decision rows while decision spans stay excluded and queued.
 - The recovery test remains in `tests/fm-session-start.test.sh`.
 - The per-actor consume regression remains in `tests/fm-wake-queue.test.sh`.
 

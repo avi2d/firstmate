@@ -129,6 +129,10 @@ export interface UnreadWakeScope {
    * to main.
    */
   needsDecisionKeys: string[];
+  // Tasks registered as second mates. A signal trigger naming one never
+  // vetoes the offer: decision rows are excluded per row and whatever stays
+  // queued wakes main on its own cycle.
+  secondmates: string[];
   /**
    * The check-kind rows included in eligibleSeqs. Non-empty only in the away
    * posture, where the branch takes main's rows too; a check row names no
@@ -152,6 +156,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: false,
   needsDecisionKeys: [],
+  secondmates: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -164,6 +169,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   eligibleTasks: [],
   corrupted: true,
   needsDecisionKeys: [],
+  secondmates: [],
   checkSeqs: [],
   heartbeatSeqs: [],
   taskByWakeKey: {},
@@ -562,6 +568,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     eligibleTasks: [...eligibleTasks],
     corrupted: false,
     needsDecisionKeys,
+    secondmates: [...secondmates],
     checkSeqs,
     heartbeatSeqs,
     taskByWakeKey: Object.fromEntries(taskByKey),
@@ -594,11 +601,15 @@ export interface BranchOfferVerdict {
 // still reach the branch on this cycle; it must never also let a check-kind
 // trigger itself slip past main's delivery.
 //
-// A signal close containing a needs-decision status file, or a stale close for
-// a captain-held task, gets the identical main-only treatment as a check-kind
-// trigger. The cross-reference deliberately includes every unread decision
-// row: until that row is read, a later signal or stale trigger for the same
-// task stays on main. Other tasks and heartbeat handling remain independent.
+// A stale close for a captain-held task, or a signal close for a
+// single-task log containing a needs-decision file, gets the identical
+// main-only treatment as a check-kind trigger. The cross-reference
+// deliberately includes every unread decision row: until that row is read, a
+// later stale trigger, or a later signal for the same single-task log, stays
+// on main. A signal trigger naming a second mate never forces main by
+// itself: that mate's decision rows are already excluded per row, its
+// routine spans stay claimable, and whatever stays queued wakes main on its
+// own cycle. Other tasks remain independently eligible.
 //
 // The away posture collapses that partition: every actionable row is
 // branch-eligible and the trigger class no longer forces anything to main
@@ -619,7 +630,15 @@ export function branchOfferForWake(state: string, message: string, afk: boolean,
   const taskIdentity = (key: string): string =>
     scope.taskByWakeKey[key] ?? scope.taskByWakeKey[key.replace(/^fm-/, "")] ?? key;
   const needsDecisionTasks = new Set(scope.needsDecisionKeys.map(taskIdentity));
-  const isNeedsDecisionTrigger = triggerKeys.some((key) => needsDecisionTasks.has(taskIdentity(key)));
+  // A second-mate signal file never vetoes the offer: its decision rows are
+  // excluded per row above, routine spans stay claimable, and whatever stays
+  // queued wakes main on its own cycle. Single-task logs keep the batch
+  // veto, as do stale triggers.
+  const isSignalTrigger = /^signal:/.test(message);
+  const isNeedsDecisionTrigger = triggerKeys.some((key) => {
+    if (isSignalTrigger && scope.secondmates.includes(taskIdentity(key))) return false;
+    return needsDecisionTasks.has(taskIdentity(key));
+  });
   const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && (
     afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible
   );
