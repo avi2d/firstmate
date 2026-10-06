@@ -401,6 +401,15 @@ export const Type = {
   Number(options) {
     return { type: "number", ...(options ?? {}) };
   },
+  Integer(options) {
+    return { type: "integer", ...(options ?? {}) };
+  },
+  Null(options) {
+    return { type: "null", ...(options ?? {}) };
+  },
+  Array(items, options) {
+    return { type: "array", items, ...(options ?? {}) };
+  },
   Boolean(options) {
     return { type: "boolean", ...(options ?? {}) };
   },
@@ -5388,6 +5397,102 @@ JS
 # moving that work off the thread must not cost: responsiveness during a
 # delivery, and the ordering, exactly-once, and cancellation guarantees that
 # the single thread used to provide for free.
+# Codemode scripts receive a tool's structuredContent in place of its text,
+# and Pi does not check it against the declared outputSchema, so this checks
+# both supervision tools' real results against their schemas with the real
+# TypeBox validator from the installed Pi package.
+test_main_outcome_tools_return_structured_content_matching_their_output_schemas() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo "skip: node not found for the Pi outcome tool output-schema test"
+    return
+  fi
+  local package_dir repo home out status
+  package_dir=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+  if [ ! -f "$package_dir/package.json" ]; then
+    echo "skip: installed @earendil-works/pi-coding-agent package not found for the output-schema test"
+    return
+  fi
+  [ -d "$package_dir/node_modules/typebox" ] \
+    || fail "installed Pi package at $package_dir has no typebox to build and check output schemas"
+  repo="$TMP_ROOT/output-schema-root"
+  home="$TMP_ROOT/output-schema-home"
+  mkdir -p "$home/state" "$home/config"
+  install_pi_branch_extension_fixture "$repo"
+  rm -rf "$repo/node_modules/typebox"
+  ln -s "$package_dir/node_modules/typebox" "$repo/node_modules/typebox"
+  (cd "$repo" && PLUGIN="$repo/.pi/extensions/fm-branch-supervision.ts" FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    DRIVER_PRELUDE="$DRIVER_PRELUDE" node --input-type=module > "$TMP_ROOT/node-output" 2>&1) <<'EOF'
+const prelude = process.env.DRIVER_PRELUDE;
+await eval(`(async () => { ${prelude}; globalThis.__t = { fire, mainTools, outcomeScript, defaultSessionCtx, home }; })()`);
+const { fire, mainTools, outcomeScript, defaultSessionCtx, home } = globalThis.__t;
+import { writeFileSync } from "node:fs";
+const { Value } = await import("typebox/value");
+
+const outcomesTool = mainTools.find((tool) => tool.name === "fm_branch_outcomes");
+const processedTool = mainTools.find((tool) => tool.name === "fm_branch_processed");
+if (!outcomesTool?.outputSchema || !processedTool?.outputSchema) throw new Error("a main outcome tool declares no outputSchema");
+const expectMatches = (tool, result) => {
+  if (result.isError) throw new Error(`${tool.name} failed: ${JSON.stringify(result)}`);
+  if (!Value.Check(tool.outputSchema, result.structuredContent)) {
+    throw new Error(`${tool.name} structuredContent ${JSON.stringify(result.structuredContent)} does not match its outputSchema: ${JSON.stringify([...Value.Errors(tool.outputSchema, result.structuredContent)])}`);
+  }
+};
+for (const tool of [outcomesTool, processedTool]) {
+  if (Value.Check(tool.outputSchema, { outcomes: [{ seq: "1" }], through: "1" })) throw new Error(`${tool.name} outputSchema accepts a malformed result`);
+}
+
+await fire("session_start", {}, defaultSessionCtx);
+const empty = await outcomesTool.execute("empty", {}, undefined, undefined, {});
+expectMatches(outcomesTool, empty);
+if (empty.content[0].text !== "(no branch outcomes recorded)" || empty.structuredContent.outcomes.length !== 0) {
+  throw new Error(`an empty store changed its result: ${JSON.stringify(empty)}`);
+}
+await fire("session_shutdown", {});
+
+// A legacy row without `silent` lists as a visible outcome.
+writeFileSync(`${home}/state/branch-outcomes.jsonl`, `${JSON.stringify({ seq: 1, epoch: 1700000000, task: "legacy", wake: "", verdict: "routine", summary: "recorded before silent existed" })}\n`);
+outcomeScript(["append", "--task", "task-1", "--verdict", "routine", "--summary", "worker healthy", "--wake", "signal: working", "--silent", "true"]);
+const firstCaptain = Number(outcomeScript(["append", "--task", "task-2", "--verdict", "captain", "--summary", "PR https://example.com/pr/2 is ready"]));
+const secondCaptain = Number(outcomeScript(["append", "--task", "task-3", "--verdict", "captain", "--summary", "decision needed"]));
+await fire("session_start", {}, defaultSessionCtx);
+
+const listed = await outcomesTool.execute("list", { recent: 20 }, undefined, undefined, {});
+expectMatches(outcomesTool, listed);
+const storeLines = outcomeScript(["list", "--recent", "20"]);
+if (listed.content[0].text !== storeLines) throw new Error(`fm_branch_outcomes changed its text: ${listed.content[0].text}`);
+const expected = storeLines.split("\n").map((line) => {
+  const { seq, epoch, task, wake, verdict, summary, silent } = JSON.parse(line);
+  return { seq, epoch, task, wake, verdict, summary, silent: silent === true };
+});
+if (JSON.stringify(listed.structuredContent.outcomes) !== JSON.stringify(expected)) {
+  throw new Error(`fm_branch_outcomes structuredContent ${JSON.stringify(listed.structuredContent)} is not the listed rows ${JSON.stringify(expected)}`);
+}
+if (expected[0].silent !== false || expected[1].silent !== true) throw new Error("the listed rows do not cover a legacy and a silent outcome");
+
+const partial = await processedTool.execute("ack-first", { through: firstCaptain }, undefined, undefined, {});
+expectMatches(processedTool, partial);
+if (partial.content[0].text !== `processed through seq ${firstCaptain}; 1 newer captain outcome(s) remain unprocessed (seq ${secondCaptain}) and will be presented again`) {
+  throw new Error(`fm_branch_processed changed its text: ${partial.content[0].text}`);
+}
+if (JSON.stringify(partial.structuredContent) !== JSON.stringify({ through: firstCaptain, unprocessed: [secondCaptain] })) {
+  throw new Error(`fm_branch_processed structuredContent does not name the remaining outcome: ${JSON.stringify(partial.structuredContent)}`);
+}
+const complete = await processedTool.execute("ack-second", { through: secondCaptain }, undefined, undefined, {});
+expectMatches(processedTool, complete);
+if (complete.content[0].text !== `processed through seq ${secondCaptain}; no captain outcome remains unprocessed`) {
+  throw new Error(`fm_branch_processed changed its text: ${complete.content[0].text}`);
+}
+if (JSON.stringify(complete.structuredContent) !== JSON.stringify({ through: secondCaptain, unprocessed: [] })) {
+  throw new Error(`fm_branch_processed structuredContent does not report nothing remaining: ${JSON.stringify(complete.structuredContent)}`);
+}
+process.exit(0);
+EOF
+  status=$?
+  out=$(cat "$TMP_ROOT/node-output")
+  expect_code 0 "$status" "fm_branch_outcomes and fm_branch_processed must return structuredContent matching their outputSchema: $out"
+  pass "fm_branch_outcomes and fm_branch_processed return structuredContent that matches their declared outputSchema, with unchanged text"
+}
+
 test_delivery_keeps_the_event_loop_live_and_ordered() {
   local repo home out status
   repo="$TMP_ROOT/delivery-responsiveness-root"
@@ -5951,6 +6056,7 @@ EOF
 
 test_outcomes_tool_call_headers_follow_the_loaded_pi_version
 test_outcomes_tool_uses_stock_execution_and_export_consumers
+test_main_outcome_tools_return_structured_content_matching_their_output_schemas
 test_real_pi_picker_primitives_stay_bounded_and_searchable
 test_branch_dispatch_two_stage_filter_and_prefix_contract
 test_requested_healthy_outcome_and_unsolicited_routine_outcome_delivery

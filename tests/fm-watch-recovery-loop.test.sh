@@ -53,8 +53,14 @@ JS
 JSON
   cat > "$repo/node_modules/typebox/index.js" <<'JS'
 export const Type = {
-  Object(properties) {
-    return { type: "object", properties, additionalProperties: false };
+  Object(properties, options) {
+    return { type: "object", properties, additionalProperties: false, ...(options ?? {}) };
+  },
+  Boolean(options) {
+    return { type: "boolean", ...(options ?? {}) };
+  },
+  String(options) {
+    return { type: "string", ...(options ?? {}) };
   },
 };
 JS
