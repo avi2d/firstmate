@@ -114,3 +114,60 @@ fm_agent_process_classify() {  # <name> <argv0> <args> [pid] -> agent|shell|othe
     printf 'other'
   fi
 }
+
+# A launch's working directory and task marker are read from the kernel, never
+# from the pane, because a multiplexer reports the pane shell's directory rather
+# than the agent's.
+fm_agent_process_proc_root() {
+  printf '%s' "${FM_AGENT_PROCESS_PROC_ROOT:-/proc}"
+}
+
+fm_agent_process_cwd() {  # <pid>
+  local pid=$1 root cwd
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  root=$(fm_agent_process_proc_root)
+  if [ -d "$root/$pid" ]; then
+    cwd=$(readlink "$root/$pid/cwd" 2>/dev/null) || return 1
+  else
+    command -v lsof >/dev/null 2>&1 || return 1
+    cwd=$(LC_ALL=C lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+  fi
+  case "$cwd" in /*) printf '%s' "$cwd" ;; *) return 1 ;; esac
+}
+
+# Prints the FM_TASK_ID the process was started with, or nothing when it had
+# none. macOS keeps a process's environment in the argument block that a node
+# harness overwrites with its title, so only a /proc environ is evidence.
+fm_agent_process_task_marker() {  # <pid>
+  local pid=$1 environ
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  environ="$(fm_agent_process_proc_root)/$pid/environ"
+  [ -r "$environ" ] || return 1
+  tr '\0' '\n' < "$environ" 2>/dev/null | sed -n 's/^FM_TASK_ID=//p' | tail -1
+}
+
+# Prints exactly one of:
+#   isolated             runs at or under <worktree>, with this task's marker
+#                        or with no readable environment to contradict it
+#   outside <cwd>        runs anywhere else
+#   unmarked             its readable environment has no task marker
+#   mismarked <task-id>  its readable environment names another task
+#   unreadable           its working directory cannot be read
+fm_agent_process_launch_isolation() {  # <pid> <worktree> <task-id>
+  local pid=$1 worktree=$2 id=$3 cwd want marker
+  cwd=$(fm_agent_process_cwd "$pid") || { printf 'unreadable'; return 0; }
+  want=$(cd "$worktree" 2>/dev/null && pwd -P) || { printf 'unreadable'; return 0; }
+  cwd=$(cd "$cwd" 2>/dev/null && pwd -P) || { printf 'unreadable'; return 0; }
+  case "$cwd/" in
+    "$want"/*) ;;
+    *) printf 'outside %s' "$cwd"; return 0 ;;
+  esac
+  marker=$(fm_agent_process_task_marker "$pid") || { printf 'isolated'; return 0; }
+  if [ -z "$marker" ]; then
+    printf 'unmarked'
+  elif [ "$marker" != "$id" ]; then
+    printf 'mismarked %s' "$marker"
+  else
+    printf 'isolated'
+  fi
+}

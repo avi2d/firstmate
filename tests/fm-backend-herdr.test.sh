@@ -600,6 +600,106 @@ test_registered_agent_with_a_live_foreground_process_stays_alive() {
   pass "herdr stale registration: a registered agent with a live Pi foreground process still reads alive"
 }
 
+# --- launch isolation of the agent a pane is running --------------------------
+#
+# A Herdr server restart resumes a registered agent by typing its resume command
+# into a fresh pane shell in the tab's creation directory with none of the
+# launch's exports. The verdict reads the outermost harness process from the
+# kernel, against real processes whose working directories this test chooses.
+
+isolation_case() {  # <dir-suffix> <process-info-body> <worktree> <task-id>
+  local dir="$TMP_ROOT/isolation-$1" resp log fb
+  mkdir -p "$dir/responses"; resp="$dir/responses"; log="$dir/log"; : > "$log"
+  printf '%s\n' "$2" > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_task_isolation herdr fmtest:w1:p2 "$1" "$2"' "$ROOT" "$3" "$4"
+}
+
+pi_process_info() {  # <pid>...
+  local list="" pid
+  for pid in "$@"; do
+    list="${list:+$list,}{\"pid\":$pid,\"name\":\"node\",\"argv0\":\"pi\",\"argv\":[\"pi\"],\"cmdline\":\"pi\"}"
+  done
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":%s,"foreground_process_group_id":%s,"foreground_processes":[%s]}}}' "$$" "$1" "$list"
+}
+
+test_task_isolation_reads_the_agent_directory_from_the_kernel() {
+  local dir="$TMP_ROOT/isolation-dirs" pid out primary
+  mkdir -p "$dir/wt/sub" "$dir/primary"
+  primary=$(cd "$dir/primary" && pwd -P)
+  (cd "$dir/primary" && exec sleep 120) >/dev/null 2>&1 &
+  pid=$!
+  out=$(isolation_case outside "$(pi_process_info "$pid")" "$dir/wt" iso-task)
+  kill "$pid" 2>/dev/null || true
+  [ "$out" = "outside $primary" ] \
+    || fail "a Pi resumed in the primary checkout must read outside it, got '$out'"
+  (cd "$dir/wt/sub" && exec sleep 120) >/dev/null 2>&1 &
+  pid=$!
+  out=$(isolation_case inside "$(pi_process_info "$pid")" "$dir/wt" iso-task)
+  kill "$pid" 2>/dev/null || true
+  case "$out" in
+    isolated|unmarked) ;;
+    *) fail "a Pi running under its worktree must not read outside it, got '$out'" ;;
+  esac
+  pass "herdr task isolation: the agent's own kernel cwd decides inside or outside the worktree"
+}
+
+test_task_isolation_judges_only_the_outermost_harness() {
+  local dir="$TMP_ROOT/isolation-nested" parent child out
+  mkdir -p "$dir/wt" "$dir/scratch"
+  (cd "$dir/wt" && exec bash -c 'cd "$1" && sleep 120 & wait' _ "$dir/scratch") >/dev/null 2>&1 &
+  parent=$!
+  for _ in $(seq 1 50); do
+    child=$(ps -axo pid=,ppid= | awk -v p="$parent" '$2 == p { print $1; exit }')
+    [ -z "$child" ] || break
+    sleep 0.1
+  done
+  [ -n "$child" ] || { kill "$parent" 2>/dev/null; fail "the nested fixture never started its child"; }
+  out=$(isolation_case nested-control "$(pi_process_info "$child")" "$dir/wt" iso-task)
+  case "$out" in
+    outside\ *) ;;
+    *) kill "$child" "$parent" 2>/dev/null; fail "the child alone sits outside the worktree, so the control must read outside, got '$out'" ;;
+  esac
+  out=$(isolation_case nested "$(pi_process_info "$parent" "$child")" "$dir/wt" iso-task)
+  kill "$child" "$parent" 2>/dev/null || true
+  case "$out" in
+    isolated|unmarked) ;;
+    *) fail "a harness started by the worker must not be judged in place of the worker, got '$out'" ;;
+  esac
+  pass "herdr task isolation: a harness the worker started elsewhere is not the worker"
+}
+
+test_task_isolation_without_a_harness_or_a_readable_view() {
+  local out
+  out=$(isolation_case shell-only "$(shell_only_process_info "$$")" "$TMP_ROOT" iso-task)
+  [ "$out" = no-agent ] || fail "a shell-only pane has no agent to judge, got '$out'"
+  out=$(isolation_case garbled '{"result":{"type":"something_else"}}' "$TMP_ROOT" iso-task)
+  [ "$out" = unreadable ] || fail "an unparseable process view must read unreadable, got '$out'"
+  out=$(isolation_case gone-pid "$(pi_process_info 4194305)" "$TMP_ROOT" iso-task)
+  [ "$out" = unreadable ] || fail "a harness pid whose cwd cannot be read must read unreadable, got '$out'"
+  out=$(bash -c '. "$0/bin/fm-backend.sh"; fm_backend_task_isolation tmux fm:fm-x "$1" iso-task' "$ROOT" "$TMP_ROOT")
+  [ "$out" = unverified ] || fail "a backend that never resumes agents must read unverified, got '$out'"
+  pass "herdr task isolation: no harness, an unreadable view, and other backends never claim a verdict"
+}
+
+test_task_isolation_reads_the_task_marker_where_the_kernel_exposes_it() {
+  local dir="$TMP_ROOT/isolation-marker" pid out
+  [ -r "/proc/$$/environ" ] || { pass "herdr task isolation: task-marker read skipped where /proc is absent"; return; }
+  mkdir -p "$dir/wt"
+  (cd "$dir/wt" && exec env -u FM_TASK_ID sleep 120) >/dev/null 2>&1 &
+  pid=$!
+  out=$(isolation_case unmarked "$(pi_process_info "$pid")" "$dir/wt" iso-task)
+  kill "$pid" 2>/dev/null || true
+  [ "$out" = unmarked ] || fail "a resumed Pi with no task marker must read unmarked, got '$out'"
+  (cd "$dir/wt" && FM_TASK_ID=iso-task exec sleep 120) >/dev/null 2>&1 &
+  pid=$!
+  out=$(isolation_case marked "$(pi_process_info "$pid")" "$dir/wt" iso-task)
+  kill "$pid" 2>/dev/null || true
+  [ "$out" = isolated ] || fail "a Pi launched with its own marker in its worktree must read isolated, got '$out'"
+  pass "herdr task isolation: a readable environment without the task marker reads unmarked"
+}
+
 # --- the bound agent session reference (relaunch session continuity) --------
 #
 # Herdr applies only reports carrying the session identity it bound to a pane,
@@ -5891,6 +5991,10 @@ test_stale_registration_ignores_status_and_reads_the_process
 test_pane_agent_session_ref_reports_a_resumable_reference_with_its_agent
 test_pane_agent_session_ref_degrades_to_nothing_when_not_resumable
 test_registered_agent_with_a_live_foreground_process_stays_alive
+test_task_isolation_reads_the_agent_directory_from_the_kernel
+test_task_isolation_judges_only_the_outermost_harness
+test_task_isolation_without_a_harness_or_a_readable_view
+test_task_isolation_reads_the_task_marker_where_the_kernel_exposes_it
 test_registered_agent_with_a_non_shell_foreground_process_stays_alive
 test_transient_prompt_helper_settles_into_stale_agent
 test_exhausted_settle_window_keeps_a_non_shell_foreground_live

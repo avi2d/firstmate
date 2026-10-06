@@ -1021,6 +1021,19 @@ fm_backend_agent_state() {  # <backend> <target>
   esac
 }
 
+# Only Herdr resumes an agent into a restored pane, so every other backend
+# prints `unverified` rather than a verdict.
+fm_backend_task_isolation() {  # <backend> <target> <worktree> <task-id>
+  local backend=$1
+  case "$backend" in
+    herdr)
+      fm_backend_source herdr || { printf 'unverified'; return 0; }
+      fm_backend_herdr_task_isolation "$2" "$3" "$4"
+      ;;
+    *) printf 'unverified' ;;
+  esac
+}
+
 # Backward-compatible three-state view for existing callers. An
 # authoritatively missing endpoint is confidently not a live agent, while every
 # ambiguous, unreadable, or unverified result stays unknown.

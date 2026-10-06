@@ -1788,6 +1788,45 @@ ok - real herdr 0.9.0 + pi 0.85.1: the registration left behind by a quit pi rea
 `tests/fm-crew-state.test.sh` pins the recovery classifier: a stale registration over a shell-only pane reports agent gone rather than alive or unreachable, and a stale `working` record never reports the pane working.
 A stale-registration pane is never a husk: create, reclaim, presentation recovery, and session cleanup keep refusing it, and only recovery reuses it.
 
+### Agents resumed by a restart
+
+Measured 2026-10-06 on macOS aarch64 against Herdr 0.9.3 and Pi 1.0.3 in an isolated `fm-lab-` session, with `session.resume_agents_on_restore` at its default.
+A pane created in `primary/` ran a nested `bash --norc`, which entered `wt/`, exported `FM_TASK_ID`, and started `pi --session wt/session.jsonl`; the lab server was then stopped and provisioned again:
+
+```sh
+herdr pane get "$PANE" --session "$LAB" | jq -c '.result.pane | {cwd, foreground_cwd, agent_session}'
+herdr pane process-info --pane "$PANE" --session "$LAB" | jq -c '.result.process_info | {shell_pid, fg: [.foreground_processes[] | {pid, name, argv0}]}'
+lsof -a -p "$PI_PID" -d cwd -Fn
+```
+
+```text
+before: {"cwd":".../primary","foreground_cwd":".../wt","agent_session":{"agent":"pi","kind":"path","source":"herdr:pi","value":".../wt/session.jsonl"}}
+before: {"shell_pid":31016,"fg":[{"pid":32223,"name":"node","argv0":"pi"}]} cwd .../wt
+after:  {"cwd":".../primary","foreground_cwd":".../primary","agent_session":{"agent":"pi","kind":"path","source":"herdr:pi","value":".../wt/session.jsonl"}}
+after:  {"shell_pid":33573,"fg":[{"pid":33822,"name":"node","argv0":"pi"}]} cwd .../primary
+```
+
+Herdr resumed Pi on its recorded session, directly under a fresh pane shell in the top shell's directory, and the pane's terminal id changed.
+In the same lab, an OSC 7 report printed from the nested shell left `.result.pane.cwd` unchanged, and a variable set with `tab create --env` was unset in the restored shell.
+A `cd` in the pane's top shell does move `.result.pane.cwd`, and the restored shell starts there.
+`ps -E` printed no environment for the Pi process, because Node overwrites the argument block macOS keeps the environment in.
+
+The live guard that refreshes this record runs by default wherever Herdr and Pi are installed, spends no model token, and fails naming both versions:
+
+```sh
+tests/fm-herdr-restore-isolation-live-e2e.test.sh
+```
+
+Observed 2026-10-06:
+
+```text
+ok - real herdr 0.9.3 + pi 1.0.3: a launched worker in its worktree is not flagged
+# herdr resumed pi with launch-isolation verdict: outside /private/var/folders/.../fm-herdr-restore-isolation.yJeEMd/primary
+ok - real herdr 0.9.3 + pi 1.0.3: a worker resumed by a server restart reads as an unsafe blocked worker
+```
+
+`tests/fm-backend-herdr.test.sh` pins the verdict over real processes with canned `process-info` bodies, and `tests/fm-crew-state.test.sh` pins the blocked state, the task-marker read through a `/proc` fixture, and the secondmate exemption.
+
 ### Fullscreen Pi scrollbar and the stale hash
 
 [`bin/fm-pane-hash-lib.sh`](../../bin/fm-pane-hash-lib.sh) owns the hash the watcher compares between polls, and [`tests/captures/pi-1.0.2-herdr-0.9.3/README.md`](../../tests/captures/pi-1.0.2-herdr-0.9.3/README.md) holds the replay captures behind its portable test.
