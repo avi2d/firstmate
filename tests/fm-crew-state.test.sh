@@ -257,7 +257,7 @@ case "${1:-}" in
         # it), and anything else answers nothing (unreadable).
         pane=""; args=("$@"); for ((i=0; i<${#args[@]}; i++)); do [ "${args[$i]}" = --pane ] && pane=${args[$((i+1))]:-}; done
         case "${FM_FAKE_HERDR_PROCESS:-agent}" in
-          agent) printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_process_group_id":424242,"foreground_processes":[{"pid":424242,"name":"claude","argv0":"claude"}]}}}\n' "$pane" "${FM_FAKE_HERDR_SHELL_PID:-$PPID}" ;;
+          agent) printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_process_group_id":%s,"foreground_processes":[{"pid":%s,"name":"claude","argv0":"claude"}]}}}\n' "$pane" "${FM_FAKE_HERDR_SHELL_PID:-$PPID}" "${FM_FAKE_HERDR_AGENT_PID:-4194305}" "${FM_FAKE_HERDR_AGENT_PID:-4194305}" ;;
           shell) printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_process_group_id":%s,"foreground_processes":[{"pid":%s,"name":"zsh","argv0":"zsh","argv":["-zsh"]}]}}}\n' "$pane" "${FM_FAKE_HERDR_SHELL_PID:-$PPID}" "${FM_FAKE_HERDR_SHELL_PID:-$PPID}" "${FM_FAKE_HERDR_SHELL_PID:-$PPID}" ;;
         esac
         exit 0 ;;
@@ -334,6 +334,7 @@ reset_fakes() {
   FM_FAKE_HERDR_AGENT_STATUS=""
   FM_FAKE_HERDR_PROCESS=agent
   FM_FAKE_HERDR_SHELL_PID=$$
+  FM_FAKE_HERDR_AGENT_PID=4194305
   FM_FAKE_CI_LOGS=""
   FM_FAKE_DAEMON_DOWN=0
   FM_FAKE_DAEMON_TIMEOUT=0
@@ -353,7 +354,7 @@ reset_fakes() {
   FM_FAKE_GERRIT_READ_LOG=
   unset FM_FAKE_PR_47_STATE FM_FAKE_PR_47_MERGED FM_FAKE_PR_48_STATE FM_FAKE_PR_48_MERGED
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING FM_FAKE_TMUX_UNREADABLE
-  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_PROCESS FM_FAKE_HERDR_SHELL_PID FM_FAKE_CI_LOGS
+  export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_READ_FAIL FM_FAKE_HERDR_HUSK FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_HERDR_PROCESS FM_FAKE_HERDR_SHELL_PID FM_FAKE_HERDR_AGENT_PID FM_FAKE_CI_LOGS
   export FM_FAKE_DAEMON_DOWN FM_FAKE_DAEMON_TIMEOUT FM_FAKE_DAEMON_PROBE_LOG FM_FAKE_AXI_HOME
   export FM_FAKE_AXI_HOME_ERROR FM_FAKE_AXI_STATUS_RUN_ERROR FM_FAKE_AXI_STATUS_ERROR
   export FM_FAKE_PR_STATE FM_FAKE_PR_MERGED FM_FAKE_PR_READ_FAIL FM_FAKE_PR_READ_LOG FM_FAKE_PR_STATE_AXI
@@ -2669,6 +2670,96 @@ test_no_run_herdr_stale_working_record_is_never_busy() {
   out=$(run_crew_state "$d" feat-herdr-stale-working)
   assert_contains "$out" "state: working" "the same working record with a live harness process must still read working"
   pass "herdr stale working record never reports a shell-only pane busy"
+}
+
+# A Herdr server restart resumes a registered agent by typing its resume
+# command into a fresh pane shell in the tab's creation directory, the
+# project's primary checkout, with none of the launch's exports. Its live,
+# busy agent must read as an unsafe worker, never as working.
+test_herdr_agent_outside_its_worktree_reads_blocked() {
+  command -v jq >/dev/null 2>&1 || { pass "herdr launch-isolation test skipped without jq"; return; }
+  reset_fakes
+  local d pid out primary
+  d=$(new_case herdr-restored-outside)
+  make_repo_on_branch "$d/wt" fm/feat-restored
+  mkdir -p "$d/primary"
+  primary=$(cd "$d/primary" && pwd -P)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-restored.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=ship" \
+    "backend=herdr" "harness=pi"
+  FM_FAKE_TMUX_MISSING=1
+  FM_FAKE_HERDR_BUSY=1
+  FM_FAKE_HERDR_AGENT_STATUS=working
+  (cd "$d/primary" && exec sleep 120) >/dev/null 2>&1 &
+  pid=$!
+  FM_FAKE_HERDR_AGENT_PID=$pid
+  out=$(run_crew_state "$d" feat-restored)
+  assert_contains "$out" "state: blocked" "an agent running outside its worktree must read blocked"
+  assert_contains "$out" "source: pane" "the unsafe verdict comes from the pane's own process"
+  assert_contains "$out" "unsafe worker: its agent runs in $primary" "the verdict must name where the agent actually runs"
+  assert_contains "$out" "bin/fm-control.sh feat-restored relaunch" "the verdict must name the relaunch remedy"
+  kill "$pid" 2>/dev/null || true
+  (cd "$d/wt" && exec sleep 120) >/dev/null 2>&1 &
+  pid=$!
+  FM_FAKE_HERDR_AGENT_PID=$pid
+  out=$(run_crew_state "$d" feat-restored)
+  kill "$pid" 2>/dev/null || true
+  assert_contains "$out" "state: working" "the same busy agent inside its worktree must still read working"
+  assert_not_contains "$out" "unsafe worker" "an agent inside its worktree is not unsafe"
+  pass "herdr: a live agent outside its recorded worktree reads blocked, inside it reads working"
+}
+
+# Where the kernel exposes the agent's environment, a missing or foreign task
+# marker is the restored launch even when the tab was created in the worktree.
+test_herdr_agent_task_marker_is_judged_from_its_environment() {
+  command -v jq >/dev/null 2>&1 || { pass "herdr task-marker test skipped without jq"; return; }
+  reset_fakes
+  local d out proc
+  d=$(new_case herdr-restored-unmarked)
+  make_repo_on_branch "$d/wt" fm/feat-unmarked
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-unmarked.meta" "window=default:w1:p2" "worktree=$d/wt" "kind=scout" \
+    "backend=herdr" "harness=pi"
+  FM_FAKE_TMUX_MISSING=1
+  FM_FAKE_HERDR_BUSY=1
+  FM_FAKE_HERDR_AGENT_STATUS=working
+  proc="$d/proc/$FM_FAKE_HERDR_AGENT_PID"
+  mkdir -p "$proc"
+  ln -s "$d/wt" "$proc/cwd"
+  printf 'PATH=/bin\0HOME=/nowhere\0' > "$proc/environ"
+  out=$(FM_AGENT_PROCESS_PROC_ROOT="$d/proc" run_crew_state "$d" feat-unmarked)
+  assert_contains "$out" "state: blocked" "an agent with no task marker must read blocked"
+  assert_contains "$out" "without its task environment" "the verdict must name the missing task environment"
+  printf 'PATH=/bin\0FM_TASK_ID=other-task\0' > "$proc/environ"
+  out=$(FM_AGENT_PROCESS_PROC_ROOT="$d/proc" run_crew_state "$d" feat-unmarked)
+  assert_contains "$out" "state: blocked" "an agent marked for another task must read blocked"
+  assert_contains "$out" "task environment of other-task" "the verdict must name the foreign task"
+  printf 'PATH=/bin\0FM_TASK_ID=feat-unmarked\0' > "$proc/environ"
+  out=$(FM_AGENT_PROCESS_PROC_ROOT="$d/proc" run_crew_state "$d" feat-unmarked)
+  assert_contains "$out" "state: working" "an agent with its own marker inside its worktree reads working"
+  pass "herdr: a readable environment without this task's marker reads blocked"
+}
+
+# A secondmate legitimately runs outside any task worktree with no task marker.
+test_herdr_secondmate_is_never_judged_for_launch_isolation() {
+  command -v jq >/dev/null 2>&1 || { pass "herdr secondmate isolation test skipped without jq"; return; }
+  reset_fakes
+  local d pid out
+  d=$(new_case herdr-secondmate-isolation)
+  mkdir -p "$d/home" "$d/elsewhere"
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/mate-a.meta" "window=default:w1:p2" "worktree=$d/home" "kind=secondmate" \
+    "backend=herdr" "harness=pi"
+  FM_FAKE_TMUX_MISSING=1
+  FM_FAKE_HERDR_AGENT_STATUS=idle
+  (cd "$d/elsewhere" && exec sleep 120) >/dev/null 2>&1 &
+  pid=$!
+  FM_FAKE_HERDR_AGENT_PID=$pid
+  out=$(run_crew_state "$d" mate-a)
+  kill "$pid" 2>/dev/null || true
+  assert_not_contains "$out" "unsafe worker" "a secondmate is never judged for task isolation"
+  assert_not_contains "$out" "state: blocked" "a secondmate's own home is not an unsafe launch"
+  pass "herdr: a secondmate is exempt from the task launch-isolation check"
 }
 
 # Decision follow-up (2026-09-05 review): a husk pane (pane present,
@@ -5714,6 +5805,9 @@ test_unresolved_terminal_row_is_history_not_current
 test_runs_list_continuation_found_when_axi_answers_other_branch
 test_no_run_herdr_stale_registration_over_shell_reads_agent_gone
 test_no_run_herdr_stale_working_record_is_never_busy
+test_herdr_agent_outside_its_worktree_reads_blocked
+test_herdr_agent_task_marker_is_judged_from_its_environment
+test_herdr_secondmate_is_never_judged_for_launch_isolation
 test_capped_competing_live_runs_report_both_ids
 test_capped_overview_without_branch_rows_reports_both_ids
 test_capped_overview_with_no_branch_runs_reports_absent
