@@ -2997,6 +2997,21 @@ test_retained_row_artifacts_survive_captain_answers() {
     || fail "could not release the approved merge"
   show=$(tasks_in "$home" show "$approved_id" --full) || fail "the approved merge disappeared"
   assert_not_contains "$show" "hold_kind: captain" "merge approval retained its captain hold kind"
+  approved_head=$(git -C "$wt" rev-parse HEAD) \
+    || fail "could not read the approved merge head"
+  cat > "$home/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr view")
+    case " \$* " in
+      *"state,headRefOid,url"*) printf '%s\t%s\t%s\n' 'MERGED' '$approved_head' '$approved_pr' ; exit 0 ;;
+      *"headRefOid"*) printf '%s\n' '$approved_head' ; exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$home/fakebin/gh"
   run_teardown "$home" "$approved_id" > "$home/approved-teardown.out" \
     2> "$home/approved-teardown.err" \
     || fail "approved merge cleanup failed: $(cat "$home/approved-teardown.err")"

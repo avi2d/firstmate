@@ -2134,8 +2134,13 @@ SH
 # run in groups of their own, orphaned; each worker must notice its owner is
 # gone and take its ShellCheck child down with it.
 fm_lint_orphan_pids() {  # <fixed-marker> <fixed-kind>
-  ps -A -o pid= -o args= 2>/dev/null | awk -v marker="$1" -v kind="$2" '
-    index($0, marker) > 0 && index($0, kind) > 0 { print $1 }'
+  local scan
+  scan=$(mktemp "${TMPDIR:-/tmp}/fm-lint-orphan-scan.XXXXXX") || return 1
+  ps -A -o pid= -o args= > "$scan" 2>/dev/null || { rm -f "$scan"; return 1; }
+  # The match terms sit on the filter's own command line, so a live scan can count itself.
+  awk -v marker="$1" -v kind="$2" '
+    index($0, marker) > 0 && index($0, kind) > 0 { print $1 }' "$scan"
+  rm -f "$scan"
 }
 
 test_orphaned_workers_stop_when_owner_dies() {
