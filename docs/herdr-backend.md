@@ -662,11 +662,31 @@ No Herdr-specific copy of that protocol exists.
 ### Husks after a server restart
 
 Stopping and restarting a named Herdr server preserves workspace, tab, pane, and label ids.
-The underlying harness processes and live agent registrations do not survive.
+The underlying harness processes do not survive.
 A restored same-labeled tab with a missing pane or no registered agent is a husk.
+A pane whose agent Herdr resumes is not a husk; [Agents resumed by a restart](#agents-resumed-by-a-restart) covers it.
 
 Create replaces only a confidently dead or no-agent husk, creates the replacement before closing the old tab, and refuses live or unknown states.
 This prevents closing the workspace's last tab before a replacement exists.
+
+### Agents resumed by a restart
+
+Herdr's `session.resume_agents_on_restore` setting, on by default, resumes a pane whose agent reported a session reference by typing that agent's resume command, such as `pi --session <file>`, into the restored pane shell.
+That shell starts in the directory of the pane's top shell, which for a crew pane is the project's primary checkout, because `treehouse get` enters the worktree in a subshell that Herdr does not track.
+It carries none of the launch's exports, so the resumed agent has no `FM_TASK_ID`, task inbox, launch environment boundary, or model and effort flags.
+Firstmate cannot make that command safe: a `cd` in the subshell, an OSC 7 directory report, and a `tab create --env` value all fail to survive the restart.
+
+So `bin/fm-crew-state.sh` judges the live agent of every ship and scout before any other source, through `fm_backend_task_isolation`.
+It reads the working directory of the pane's outermost harness process from the kernel, and its environment where `/proc` exposes one.
+An agent outside the recorded worktree, or one whose environment lacks this task's `FM_TASK_ID`, reads `blocked` from the pane, naming the cause and `bin/fm-control.sh <id> relaunch`.
+The watcher's stale path then no longer absorbs that worker as provably working, so its next quiet spell reaches Firstmate.
+On macOS a Node harness such as Pi overwrites the argument block that holds its environment, so there only the directory decides.
+An unreadable process view, a pane with no harness, and every other backend claim no verdict.
+Secondmates and primaries run outside any task worktree with no task marker, so they are never judged.
+
+The relaunch exits the resumed agent, moves the pane shell into the recorded worktree, and starts a Firstmate launch on the same Pi session reference.
+The pane's top shell then sits in the worktree, so a later restart resumes into the right copy, still without the launch environment.
+`tests/fm-herdr-restore-isolation-live-e2e.test.sh` measures the resume against real Herdr and Pi, and [verification](verification/runtime-backends.md#agents-resumed-by-a-restart) records the result.
 
 ### Stale agent registrations
 
@@ -847,6 +867,7 @@ tests/fm-backend-herdr-presentation-e2e.test.sh
 tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
 tests/fm-herdr-pi-fullscreen-scrollbar-live-e2e.test.sh
+tests/fm-herdr-restore-isolation-live-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
 tests/fm-control-herdr-smoke.test.sh
 tests/fm-herdr-session-cleanup.test.sh

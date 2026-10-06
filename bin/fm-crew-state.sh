@@ -340,6 +340,25 @@ crew_busy_verdict() {  # <target>
   fm_busy_classify "$TASK_BACKEND" "$1" "$HARNESS" "$ID" "$STATE" "$tail40"
 }
 
+# Checked before the run-step, because a live validation run says nothing about
+# where the agent editing this task's files is running. A secondmate runs in
+# its own home with no task marker, so it is never judged here.
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  ISOLATION_REMEDY="so it is not the agent firstmate launched (a Herdr server restart resumes agents without their launch); relaunch it with bin/fm-control.sh $ID relaunch"
+  ISOLATION=$(fm_backend_task_isolation "$TASK_BACKEND" "$BACKEND_TARGET" "$WT" "$ID")
+  case "$ISOLATION" in
+    outside\ *)
+      emit blocked pane "unsafe worker: its agent runs in ${ISOLATION#outside }, not its isolated copy $WT, $ISOLATION_REMEDY"
+      ;;
+    unmarked)
+      emit blocked pane "unsafe worker: its agent runs without its task environment (no FM_TASK_ID), $ISOLATION_REMEDY"
+      ;;
+    mismarked\ *)
+      emit blocked pane "unsafe worker: its agent carries the task environment of ${ISOLATION#mismarked }, not $ID, $ISOLATION_REMEDY"
+      ;;
+  esac
+fi
+
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
 # trim, strip_quotes, the bounded nm_run call, nm_field's TOON parse, and the
 # attribution helpers below are thin wrappers over the ONE owner in

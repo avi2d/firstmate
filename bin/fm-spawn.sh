@@ -4403,9 +4403,8 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
 fi
 
 # Re-assert the durable task copy after either treehouse acquisition or endpoint
-# adoption. This also updates Herdr's restored pane shell before any harness is
-# started, so a later host restart inherits the task worktree rather than the
-# tab's original project directory.
+# adoption. Inside a treehouse subshell this cannot move the pane shell Herdr
+# restores after a server restart, which stays in the project directory.
 spawn_enter_recorded_worktree
 spawn_assert_agent_worktree
 
