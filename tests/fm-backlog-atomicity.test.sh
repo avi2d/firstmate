@@ -2898,6 +2898,24 @@ test_configured_adapter_refuses_a_data_directory_outside_the_home() {
 }
 
 
+stub_github_pr_merged() {  # <case-dir> <pr-url> <head>
+  cat > "$1/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr view") printf '%s\n' "pull_request:" "  state: MERGED" ; exit 0 ;;
+esac
+exit 0
+SH
+  cat > "$1/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr view") printf '%s\t%s\t%s\n' MERGED '$3' '$2' ; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$1/fakebin/gh-axi" "$1/fakebin/gh"
+}
+
 test_dispatch_and_completion_are_structural() {
   local case_dir home id meta out pr
   id=fm-structural-b15
@@ -2922,6 +2940,7 @@ test_dispatch_and_completion_are_structural() {
 
   meta="$home/state/$id.meta"
   printf 'pr=%s\n' "$pr" >> "$meta"
+  stub_github_pr_merged "$case_dir" "$pr" "$(git -C "$case_dir/wt" rev-parse HEAD)"
   out=$(run_teardown "$case_dir" "$id") \
     || fail "structural teardown failed: $out"
   [ "$(row_state "$case_dir" "$id")" = "done" ] \
