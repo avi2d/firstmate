@@ -146,6 +146,23 @@ SH
   : > "$home/gh-axi.log"
 }
 
+configure_merged_pr_for_head() {  # <home> <pr-url> <head>
+  local home=$1 pr=$2 head=$3
+  cat > "$home/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr view")
+    case " \$* " in
+      *"state,headRefOid,url"*) printf '%s\t%s\t%s\n' 'MERGED' '$head' '$pr' ; exit 0 ;;
+      *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$home/fakebin/gh"
+}
+
 run_pr_merge() {  # <home> <id> <url>
   local home=$1
   shift
@@ -2999,19 +3016,7 @@ test_retained_row_artifacts_survive_captain_answers() {
   assert_not_contains "$show" "hold_kind: captain" "merge approval retained its captain hold kind"
   approved_head=$(git -C "$wt" rev-parse HEAD) \
     || fail "could not read the approved merge head"
-  cat > "$home/fakebin/gh" <<SH
-#!/usr/bin/env bash
-case "\${1:-} \${2:-}" in
-  "pr view")
-    case " \$* " in
-      *"state,headRefOid,url"*) printf '%s\t%s\t%s\n' 'MERGED' '$approved_head' '$approved_pr' ; exit 0 ;;
-      *"headRefOid"*) printf '%s\n' '$approved_head' ; exit 0 ;;
-    esac
-    ;;
-esac
-exit 0
-SH
-  chmod +x "$home/fakebin/gh"
+  configure_merged_pr_for_head "$home" "$approved_pr" "$approved_head"
   run_teardown "$home" "$approved_id" > "$home/approved-teardown.out" \
     2> "$home/approved-teardown.err" \
     || fail "approved merge cleanup failed: $(cat "$home/approved-teardown.err")"
@@ -3582,6 +3587,9 @@ test_merge_approval_releases_before_zero_done_retention() {
     "merge approval completed the zero-retention row before landing"
   assert_contains "$show" "Resolution mode: released" \
     "merge approval did not record the existing release mode"
+  zero_head=$(git -C "$wt" rev-parse HEAD) \
+    || fail "could not read the zero-retention merge head"
+  configure_merged_pr_for_head "$home" "$pr" "$zero_head"
   run_teardown "$home" "$id" > "$home/teardown.out" 2> "$home/teardown.err" \
     || fail "zero-retention cleanup failed: $(cat "$home/teardown.err")"
   assert_no_grep "$id" "$home/data/backlog.md" \

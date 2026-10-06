@@ -2708,7 +2708,7 @@ test_herdr_agent_outside_its_worktree_reads_blocked() {
   FM_FAKE_TMUX_MISSING=1
   FM_FAKE_HERDR_BUSY=1
   FM_FAKE_HERDR_AGENT_STATUS=working
-  (cd "$d/primary" && exec sleep 120) >/dev/null 2>&1 &
+  (cd "$d/primary" && FM_TASK_ID=feat-restored exec sleep 120) >/dev/null 2>&1 &
   pid=$!
   wait_agent_settled_in "$pid" "$d/primary" \
     || fail "the outside-worktree agent never settled in $primary"
@@ -2719,7 +2719,7 @@ test_herdr_agent_outside_its_worktree_reads_blocked() {
   assert_contains "$out" "unsafe worker: its agent runs in $primary" "the verdict must name where the agent actually runs"
   assert_contains "$out" "bin/fm-control.sh feat-restored relaunch" "the verdict must name the relaunch remedy"
   kill "$pid" 2>/dev/null || true
-  (cd "$d/wt" && exec sleep 120) >/dev/null 2>&1 &
+  (cd "$d/wt" && FM_TASK_ID=feat-restored exec sleep 120) >/dev/null 2>&1 &
   pid=$!
   wait_agent_settled_in "$pid" "$d/wt" \
     || fail "the in-worktree agent never settled in $d/wt"
