@@ -5094,7 +5094,8 @@ preserve_relaunch_meta() {
   [ -z "$WORKER_ACCOUNT" ] || echo "account=$WORKER_ACCOUNT_DECLARED"
   [ -z "$WORKER_ACCOUNT_PROVIDER" ] || echo "account_provider=$WORKER_ACCOUNT_PROVIDER"
   [ -z "$CLAUDE_ACCOUNT" ] || echo "claude_account=$CLAUDE_ACCOUNT"
-  [ -z "${FM_QUOTA_GATE_NOTE:-}" ] || echo "quota_gate=$FM_QUOTA_GATE_NOTE"
+  gate_note=$(fm_quota_spawn_gate_note)
+  [ -z "$gate_note" ] || echo "quota_gate=$gate_note"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   echo "spawn_gen=$SPAWN_GEN"
   # Default-off writes no traceparent= line.
