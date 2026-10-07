@@ -204,6 +204,42 @@ test_full_acceptance_matrix() {
   pass "cd-guard acceptance matrix: ${#MATRIX_IDS[@]} cases x 5 harness entry forms, block/allow all correct"
 }
 
+# --- return-to-home allowance ---------------------------------------------
+
+test_home_root_allow() {
+  local link cmd entry
+  link="$TMP_ROOT/homelink"
+  ln -s "$PRIMARY" "$link"
+  for cmd in \
+    "cd $PRIMARY" \
+    "cd $PRIMARY/" \
+    "cd -- $PRIMARY" \
+    "pushd $PRIMARY" \
+    "cd \"$PRIMARY\"" \
+    "cd $link" \
+    "cd $PRIMARY && cd $PRIMARY" \
+    "cd $PRIMARY; sleep 1; bin/x report 2>&1 | head -60"
+  do
+    for entry in codex claude grok opencode pi; do
+      run_matrix_entry "H-allow" allow "$entry" "$cmd"
+    done
+  done
+  for cmd in \
+    "cd $PRIMARY/bin" \
+    "cd $PRIMARY/projects" \
+    "cd $PRIMARY $PRIMARY" \
+    'cd $HOME' \
+    "pushd $PRIMARY extra" \
+    "cd $PRIMARY; cd projects/foo" \
+    "cd projects/foo; cd $PRIMARY"
+  do
+    for entry in codex claude grok opencode pi; do
+      run_matrix_entry "H-deny" deny "$entry" "$cmd"
+    done
+  done
+  pass "cd-guard: return-to-home cd/pushd allows, every other rooted shape still denies (x 5 harness entry forms)"
+}
+
 # --- primary-checkout scoping ----------------------------------------------
 
 test_fires_in_secondmate_home() {
@@ -368,6 +404,10 @@ test_policy_cli_direct() {
     || fail "policy CLI must allow a subshell-local cd"
   [ "$(node "$policy")" = allow ] \
     || fail "policy CLI must allow when no command is supplied"
+  [ "$(node "$policy" --command "cd $PRIMARY" --home "$PRIMARY" | cut -f1)" = allow ] \
+    || fail "policy CLI must allow a cd whose single target is the passed --home root"
+  [ "$(node "$policy" --command "cd $PRIMARY" | cut -f1)" = deny ] \
+    || fail "policy CLI must keep today's deny for a rooted cd without --home"
   pass "cd-guard: fm-cd-command-policy.mjs CLI honors the deny/allow output contract"
 }
 
@@ -386,6 +426,7 @@ test_scripts_are_shellcheck_clean() {
 }
 
 test_full_acceptance_matrix
+test_home_root_allow
 test_fires_in_secondmate_home
 test_inert_in_child_worktree
 test_inert_when_not_firstmate_repo

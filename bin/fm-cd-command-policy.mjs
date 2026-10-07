@@ -16,6 +16,7 @@
 // it inspects lexical command positions only.
 
 import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
+import path from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -50,6 +51,23 @@ function deny(code) {
   return { decision: "deny", code, reason: REASONS[code] };
 }
 
+// A cd/pushd to the primary checkout root is already home: allowing it avoids
+// a wasted tool round-trip for the redundant return-to-home agents emit.
+function isHomeTarget(words, homeReal) {
+  if (!homeReal) return false;
+  let targets = words;
+  if (targets.length > 0 && targets[0].value === "--" && targets[0].literal && targets[0].subs.length === 0) targets = targets.slice(1);
+  if (targets.length !== 1) return false;
+  const word = targets[0];
+  if (!word.literal || word.subs.length > 0 || word.unquotedExpansion) return false;
+  if (!path.isAbsolute(word.value)) return false;
+  try {
+    return realpathSync(word.value) === homeReal;
+  } catch {
+    return false;
+  }
+}
+
 function hasPathQualifiedCommandPrefix(position) {
   return position.words
     .slice(position.prefixAssignments, position.index)
@@ -68,13 +86,21 @@ function hasCommandQueryPrefix(position) {
   return false;
 }
 
-function decision(command) {
+function decision(command, home) {
   const lexed = new Lexer(command).tokenize();
   // Fail open on syntax this classifier cannot tokenize. The cd-guard's threat
   // model is agent mistakes - an accidental bare `cd projects/foo` always
   // tokenizes - so we prioritize zero false blocks over catching malformed or
   // deliberately obfuscated bypasses, which stay out of scope by design.
   if (lexed.error) return { decision: "allow" };
+  let homeReal = "";
+  if (home) {
+    try {
+      homeReal = realpathSync(home);
+    } catch {
+      homeReal = "";
+    }
+  }
 
   const { nodes, separators } = splitProgram(lexed.tokens);
   for (let index = 0; index < nodes.length; index += 1) {
@@ -85,34 +111,39 @@ function decision(command) {
     const position = commandPosition(nodes[index]);
     if (hasPathQualifiedCommandPrefix(position)) continue;
     if (hasCommandQueryPrefix(position)) continue;
-    let command = position.command;
+    let commandWord = position.command;
     let wordIndex = position.index;
-    while (command && (command.value === "builtin" || command.value === "command")) {
+    while (commandWord && (commandWord.value === "builtin" || commandWord.value === "command")) {
       wordIndex += 1;
-      command = position.words[wordIndex];
+      commandWord = position.words[wordIndex];
     }
-    if (!command) continue;
-    if (!CD_BUILTINS.has(command.value)) continue;
+    if (!commandWord) continue;
+    if (!CD_BUILTINS.has(commandWord.value)) continue;
     if (position.wrappers.some((wrapper) => FORKING_WRAPPERS.has(wrapper))) continue;
+    if ((commandWord.value === "cd" || commandWord.value === "pushd") && isHomeTarget(position.words.slice(wordIndex + 1), homeReal)) continue;
     return deny("persistent-cd");
   }
   return { decision: "allow" };
 }
 
 function parseArguments(argv) {
-  const result = { command: "", commandSet: false };
+  const result = { command: "", commandSet: false, home: "" };
   for (let i = 0; i < argv.length; i += 1) {
     const name = argv[i];
-    if (name === "--command") {
-      if (i + 1 >= argv.length) throw new Error("--command requires a value");
-      result.command = argv[i + 1];
-      result.commandSet = true;
+    if (name === "--command" || name === "--home") {
+      if (i + 1 >= argv.length) throw new Error(`${name} requires a value`);
+      result[name.slice(2)] = argv[i + 1];
+      if (name === "--command") result.commandSet = true;
       i += 1;
       continue;
     }
     if (name.startsWith("--command=")) {
       result.command = name.slice("--command=".length);
       result.commandSet = true;
+      continue;
+    }
+    if (name.startsWith("--home=")) {
+      result.home = name.slice("--home=".length);
       continue;
     }
     throw new Error(`unknown argument: ${name}`);
@@ -137,7 +168,7 @@ if (invokedDirectly()) {
     if (!args.commandSet || !args.command) {
       process.stdout.write("allow\n");
     } else {
-      const result = decision(args.command);
+      const result = decision(args.command, args.home);
       if (result.decision === "allow") {
         process.stdout.write("allow\n");
       } else {
