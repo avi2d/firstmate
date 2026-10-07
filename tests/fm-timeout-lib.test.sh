@@ -18,7 +18,7 @@ TMP_ROOT=$(fm_test_tmproot fm-timeout-lib)
 # timeout variant: fm_exec_timed must take its perl watchdog here.
 PERL_ONLY="$TMP_ROOT/perl-only-bin"
 mkdir -p "$PERL_ONLY"
-for tool in perl bash sleep; do
+for tool in perl bash sleep cat mktemp rm; do
   ln -s "$(command -v "$tool")" "$PERL_ONLY/$tool"
 done
 
@@ -394,7 +394,40 @@ test_run_timed_passes_a_natural_exit_through_a_fired_bound() {
   pass 'fm_run_timed passes a natural exit through when the bound fired after completion'
 }
 
+run_timed_plain() {
+  (
+    . "$ROOT/bin/fm-timeout-lib.sh"
+    fm_run_timed "$@"
+  )
+}
+
+test_run_timed_preserves_a_redirected_stdin() {
+  local mechanism out expected
+  printf 'batch-line-one\nbatch-line-two\n' > "$TMP_ROOT/stdin-batch"
+  expected=$(printf 'batch-line-one\nbatch-line-two')
+  for mechanism in perl bash timeout; do
+    case "$mechanism" in
+      perl) out=$(PATH="$PERL_ONLY" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
+      bash) out=$(FM_TIMEOUT_MECHANISM_OVERRIDE=bash PATH="$PERL_ONLY" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
+      timeout)
+        { [ -x /usr/bin/timeout ] || [ -x /bin/timeout ]; } || continue
+        out=$(PATH="/usr/bin:/bin" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
+    esac
+    [ "$out" = "$expected" ] \
+      || fail "a redirected stdin did not reach the bounded command ($mechanism: [$out])"
+    case "$mechanism" in
+      perl) out=$(printf 'batch-line-one\nbatch-line-two\n' | PATH="$PERL_ONLY" run_timed_plain 10 cat) ;;
+      bash) out=$(printf 'batch-line-one\nbatch-line-two\n' | FM_TIMEOUT_MECHANISM_OVERRIDE=bash PATH="$PERL_ONLY" run_timed_plain 10 cat) ;;
+      timeout) out=$(printf 'batch-line-one\nbatch-line-two\n' | PATH="/usr/bin:/bin" run_timed_plain 10 cat) ;;
+    esac
+    [ "$out" = "$expected" ] \
+      || fail "a piped stdin did not reach the bounded command ($mechanism: [$out])"
+  done
+  pass 'fm_run_timed forwards a redirected and a piped stdin on every mechanism'
+}
+
 test_passes_the_command_status_and_output_through
+test_run_timed_preserves_a_redirected_stdin
 test_system_bash_preserves_completion_and_signal_statuses
 test_run_timed_reports_the_bound_when_the_wrapper_records_a_signal_death
 test_run_timed_passes_a_natural_exit_through_a_fired_bound
