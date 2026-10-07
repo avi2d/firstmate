@@ -549,7 +549,7 @@ test_herdr_lab_contract_is_explicit_and_complete() {
     "Herdr lab brief missing the per-call session option contract"
   assert_grep "direct \`herdr server stop\`" "$brief" \
     "Herdr lab brief missing the forbidden server-global command list"
-  assert_grep "records the live default session before provisioning" "$brief" \
+  assert_grep "records every running fleet session before provisioning" "$brief" \
     "Herdr lab brief missing the before tripwire"
   assert_grep "verifies the identical fleet state after teardown" "$brief" \
     "Herdr lab brief missing the after tripwire"

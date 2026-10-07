@@ -36,14 +36,27 @@ lab_state=absent
 
 case "$1 ${2:-}" in
   "session list")
-    if [ "$lab_state" = absent ] || [ "$lab_state" = deleted ]; then
-      jq -nc --arg socket "$default_socket" '{sessions:[{default:true,name:"default",running:true,socket_path:$socket}]}'
-    else
+    default_running=true
+    [ ! -s "$state/default-running" ] || default_running=$(cat "$state/default-running")
+    case "$default_running" in true|false) : ;; *) default_running=false ;; esac
+    fleet_json=null
+    if [ -s "$state/fleet-extra" ]; then
+      fleet_name=$(cat "$state/fleet-extra")
+      fleet_socket="/tmp/$fleet_name.sock"
+      [ ! -s "$state/fleet-extra-socket" ] || fleet_socket=$(cat "$state/fleet-extra-socket")
+      fleet_json=$(jq -nc --arg name "$fleet_name" --arg socket "$fleet_socket" \
+        '{default:false,name:$name,running:true,socket_path:$socket}')
+    fi
+    lab_json=null
+    if [ "$lab_state" != absent ] && [ "$lab_state" != deleted ]; then
       running=false
       [ "$lab_state" = running ] && running=true
-      jq -nc --arg socket "$default_socket" --arg name "$session" --argjson running "$running" \
-        '{sessions:[{default:true,name:"default",running:true,socket_path:$socket},{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}]}'
+      lab_json=$(jq -nc --arg name "$session" --argjson running "$running" \
+        '{default:false,name:$name,running:$running,socket_path:("/tmp/" + $name + ".sock")}')
     fi
+    jq -nc --arg socket "$default_socket" --argjson running "$default_running" \
+      --argjson fleet "$fleet_json" --argjson lab "$lab_json" \
+      '{sessions: ([{default:true,name:"default",running:$running,socket_path:$socket}] + (if $fleet == null then [] else [$fleet] end) + (if $lab == null then [] else [$lab] end))}'
     ;;
   "server --session")
     if [ "${FM_FAKE_HERDR_SERVER_DELAY:-0}" != 0 ]; then
@@ -197,6 +210,56 @@ test_run_scopes_session_before_double_dash() {
 
   run_with_fake fm_herdr_lab_teardown "$name" || fail "double-dash fixture teardown failed"
   pass "fm-herdr-lab: run keeps the lab session a Herdr option before any -- delimiter"
+}
+
+test_mac_shape_snapshots_running_default() {
+  local name="fm-lab-mac-shape-$$" snapshot
+  run_with_fake fm_herdr_lab_provision "$name" || fail "mac-shape fixture provision failed"
+  snapshot=$(cat "$TRIPWIRES/$name.fleet-state.json")
+  printf '%s' "$snapshot" | jq -e \
+    '. == [{name:"default",default:true,running:true,socket_path:"/home/test/.config/herdr/herdr.sock"}]' >/dev/null \
+    || fail "mac shape did not snapshot the running default: $snapshot"
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "mac-shape fixture teardown failed"
+  pass "fm-herdr-lab: the mac shape snapshots the running default session"
+}
+
+test_winbox_shape_provisions_and_tears_down() {
+  local name="fm-lab-winbox-$$" snapshot
+  printf '%s\n' false > "$FAKE_STATE/default-running"
+  printf '%s\n' fm-remote > "$FAKE_STATE/fleet-extra"
+  run_with_fake fm_herdr_lab_provision "$name" || fail "winbox-shape provision failed"
+  snapshot=$(cat "$TRIPWIRES/$name.fleet-state.json")
+  printf '%s' "$snapshot" | jq -e 'map(.name) == ["fm-remote"]' >/dev/null \
+    || fail "winbox shape did not snapshot the running fleet session: $snapshot"
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "winbox-shape teardown failed"
+  rm -f "$FAKE_STATE/default-running" "$FAKE_STATE/fleet-extra"
+  pass "fm-herdr-lab: the winbox shape provisions on the running fleet session"
+}
+
+test_no_running_fleet_session_refuses_provision() {
+  local name="fm-lab-no-fleet-$$" status=0
+  printf '%s\n' false > "$FAKE_STATE/default-running"
+  : > "$FAKE_LOG"
+  run_with_fake fm_herdr_lab_provision "$name" >/dev/null 2>&1 || status=$?
+  rm -f "$FAKE_STATE/default-running"
+  expect_code 1 "$status" "provision with no running fleet session must be refused"
+  assert_no_grep "server --session $name" "$FAKE_LOG" "refused provision still started a server"
+  assert_absent "$TRIPWIRES/$name.fleet-state.json" "refused provision left a tripwire behind"
+  [ ! -f "$FAKE_STATE/$name" ] || fail "refused provision started a lab session"
+  pass "fm-herdr-lab: no running fleet session refuses provision"
+}
+
+test_fleet_session_change_trips_teardown() {
+  local name="fm-lab-fleet-change-$$" status=0 out
+  run_with_fake fm_herdr_lab_provision "$name" || fail "fleet-change fixture provision failed"
+  printf '%s\n' fm-remote > "$FAKE_STATE/fleet-extra"
+  out=$(run_with_fake fm_herdr_lab_teardown "$name" 2>&1) || status=$?
+  rm -f "$FAKE_STATE/fleet-extra"
+  expect_code 1 "$status" "a fleet session starting mid-run must fail teardown"
+  assert_contains "$out" "fleet session changed during lab work" "the tripwire failure did not name the fleet change"
+  assert_present "$TRIPWIRES/$name.fleet-state.json" "failed tripwire should retain evidence"
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "teardown after restoring the fleet failed"
+  pass "fm-herdr-lab: a fleet change during lab work is a hard failure"
 }
 
 test_missing_tripwire_blocks_destruction() {
@@ -539,6 +602,10 @@ test_provision_run_and_guarded_teardown
 test_run_scopes_session_before_double_dash
 test_missing_tripwire_blocks_destruction
 test_changed_default_trips_after_teardown
+test_mac_shape_snapshots_running_default
+test_winbox_shape_provisions_and_tears_down
+test_no_running_fleet_session_refuses_provision
+test_fleet_session_change_trips_teardown
 test_stopped_owned_lab_can_reprovision
 test_failed_delete_retains_tripwire
 test_timed_out_provision_cancels_late_launch
