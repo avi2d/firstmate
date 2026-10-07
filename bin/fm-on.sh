@@ -129,7 +129,7 @@ SSH_ARGS=(
 )
 if [ -n "$CALL_TIMEOUT" ]; then
   if [ "$STDIN_MODE" = caller ]; then
-    fm_run_timed "$CALL_TIMEOUT" "$SSH_BIN" "${SSH_ARGS[@]}"
+    FM_RUN_TIMED_STAGE_STDIN=1 fm_run_timed "$CALL_TIMEOUT" "$SSH_BIN" "${SSH_ARGS[@]}"
   else
     fm_run_timed "$CALL_TIMEOUT" "$SSH_BIN" "${SSH_ARGS[@]}" < /dev/null
   fi

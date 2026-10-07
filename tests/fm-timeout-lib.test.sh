@@ -401,24 +401,39 @@ run_timed_plain() {
   )
 }
 
+test_run_timed_leaves_an_enclosing_read_loop_alone() {
+  local row seen
+  printf 'one\ntwo\nthree\n' > "$TMP_ROOT/loop-rows"
+  seen=""
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    seen="$seen$row;"
+    FM_TIMEOUT_MECHANISM_OVERRIDE=bash PATH="$PERL_ONLY" run_timed_plain 10 : >/dev/null \
+      || fail "a bounded call inside a read loop failed"
+  done < "$TMP_ROOT/loop-rows"
+  [ "$seen" = "one;two;three;" ] \
+    || fail "a bounded call consumed its read loop's input (saw [$seen])"
+  pass 'fm_run_timed without staged stdin leaves an enclosing read loop alone'
+}
+
 test_run_timed_preserves_a_redirected_stdin() {
   local mechanism out expected
   printf 'batch-line-one\nbatch-line-two\n' > "$TMP_ROOT/stdin-batch"
   expected=$(printf 'batch-line-one\nbatch-line-two')
   for mechanism in perl bash timeout; do
     case "$mechanism" in
-      perl) out=$(PATH="$PERL_ONLY" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
-      bash) out=$(FM_TIMEOUT_MECHANISM_OVERRIDE=bash PATH="$PERL_ONLY" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
+      perl) out=$(FM_RUN_TIMED_STAGE_STDIN=1 PATH="$PERL_ONLY" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
+      bash) out=$(FM_RUN_TIMED_STAGE_STDIN=1 FM_TIMEOUT_MECHANISM_OVERRIDE=bash PATH="$PERL_ONLY" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
       timeout)
         { [ -x /usr/bin/timeout ] || [ -x /bin/timeout ]; } || continue
-        out=$(PATH="/usr/bin:/bin" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
+        out=$(FM_RUN_TIMED_STAGE_STDIN=1 PATH="/usr/bin:/bin" run_timed_plain 10 cat < "$TMP_ROOT/stdin-batch") ;;
     esac
     [ "$out" = "$expected" ] \
       || fail "a redirected stdin did not reach the bounded command ($mechanism: [$out])"
     case "$mechanism" in
-      perl) out=$(printf 'batch-line-one\nbatch-line-two\n' | PATH="$PERL_ONLY" run_timed_plain 10 cat) ;;
-      bash) out=$(printf 'batch-line-one\nbatch-line-two\n' | FM_TIMEOUT_MECHANISM_OVERRIDE=bash PATH="$PERL_ONLY" run_timed_plain 10 cat) ;;
-      timeout) out=$(printf 'batch-line-one\nbatch-line-two\n' | PATH="/usr/bin:/bin" run_timed_plain 10 cat) ;;
+      perl) out=$(printf 'batch-line-one\nbatch-line-two\n' | FM_RUN_TIMED_STAGE_STDIN=1 PATH="$PERL_ONLY" run_timed_plain 10 cat) ;;
+      bash) out=$(printf 'batch-line-one\nbatch-line-two\n' | FM_RUN_TIMED_STAGE_STDIN=1 FM_TIMEOUT_MECHANISM_OVERRIDE=bash PATH="$PERL_ONLY" run_timed_plain 10 cat) ;;
+      timeout) out=$(printf 'batch-line-one\nbatch-line-two\n' | FM_RUN_TIMED_STAGE_STDIN=1 PATH="/usr/bin:/bin" run_timed_plain 10 cat) ;;
     esac
     [ "$out" = "$expected" ] \
       || fail "a piped stdin did not reach the bounded command ($mechanism: [$out])"
@@ -427,6 +442,7 @@ test_run_timed_preserves_a_redirected_stdin() {
 }
 
 test_passes_the_command_status_and_output_through
+test_run_timed_leaves_an_enclosing_read_loop_alone
 test_run_timed_preserves_a_redirected_stdin
 test_system_bash_preserves_completion_and_signal_statuses
 test_run_timed_reports_the_bound_when_the_wrapper_records_a_signal_death

@@ -87,10 +87,13 @@ fm_timeout_mechanism() {
   fi
 }
 
-# An async runner below cannot inherit a redirected stdin (it reads EOF),
-# so a staged copy is redirected explicitly onto the background command.
+# A backgrounded runner cannot inherit a redirected stdin (it reads EOF), so a
+# caller whose command reads stdin stages a copy first. Staging stays opt-in
+# through FM_RUN_TIMED_STAGE_STDIN: an unconditional copy would drain an
+# enclosing read loop's input.
 fm_run_staged_stdin() {
   local staged
+  [ -n "${FM_RUN_TIMED_STAGE_STDIN:-}" ] || return 0
   [ -t 0 ] || {
     staged=$(mktemp "${TMPDIR:-/tmp}/fm-timeout-stdin.XXXXXX" 2>/dev/null) || return 0
     if cat > "$staged" 2>/dev/null; then
