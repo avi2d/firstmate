@@ -523,7 +523,28 @@ fm_herdr_lab_usage() {
     '  fm-herdr-lab.sh teardown <session>' \
     '' \
     'Session names must begin with "fm-lab-" and can never be "default".' \
-    'Provision records every running fleet session as a fleet-state tripwire and teardown requires that record to be identical afterward.'
+    'The name command sanitizes the label, caps it at 16 characters, and appends' \
+    'process/random suffixes to keep generated socket paths short.' \
+    'Every Herdr call made here carries --session <session>: trailing, or' \
+    'immediately before the first -- delimiter so it stays a Herdr option instead' \
+    'of becoming a passthrough argument such as an agent start argument.' \
+    'The run command rejects caller-supplied --session flags, any leading option' \
+    'before the subcommand, all session lifecycle operations, and every server' \
+    'operation.' \
+    'Session stop is available only through guarded stop or teardown, and session' \
+    'delete is available only through teardown.' \
+    'Both paths perform a fresh refuse-default check immediately before each' \
+    'destructive call.' \
+    'Provision records every running fleet session as a fleet-state tripwire and' \
+    'teardown requires that record to be identical afterward.' \
+    'The viewer command attaches or detaches one real foreground Herdr client on' \
+    'an owned lab session over a fixed 40-row by 120-column pty;' \
+    'bin/fm-herdr-lab-viewer.py owns the pty mechanics.' \
+    'Start succeeds only when that session reports a foreground client and the' \
+    'recorded viewer process still matches its launch identity.' \
+    'Stop signals only identity-matched recorded processes and retains its' \
+    'ownership record until detach is confirmed or the session is stopped or' \
+    'absent; teardown refuses when that stop cannot be confirmed.'
 }
 
 fm_herdr_lab_main() {
