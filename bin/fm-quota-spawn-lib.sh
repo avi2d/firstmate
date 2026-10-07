@@ -14,7 +14,7 @@ fm_quota_spawn_profiles() {
 
 fm_quota_spawn_assess() {
   local row=$1 model=$2 floor=$3
-  jq -c --arg model "$model" --argjson floor "$floor" "$FM_QUOTA_ASSESSMENT_JQ"'
+  jq -c --arg model "$model" --argjson floor "$floor" "$(fm_quota_assessment_jq)"'
     . as $row |
     (quota_applicable_rows($row; $model)) as $rows |
     (quota_runway_exhausted_rows($rows)) as $exhausted |
@@ -36,6 +36,9 @@ fm_quota_spawn_assess() {
   ' <<< "$row"
 }
 
+fm_quota_spawn_gate_note() {
+  printf '%s' "${FM_QUOTA_GATE_NOTE:-}"
+}
 fm_quota_spawn_gate() {
   local config=$1 harness=$2 model=$3 effort=$4 account=$5 override=$6
   local profiles count snapshot='' profile provider lane floor row assessment blocked=0 unmeasured=0 result reason reset account_name clauth_snapshot=''

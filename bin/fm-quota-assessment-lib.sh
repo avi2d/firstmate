@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-FM_QUOTA_ASSESSMENT_JQ=$(cat <<'JQ'
+fm_quota_assessment_jq() {
+  cat <<'JQ'
   def quota_rows($row): ($row | .quotaSemantics.effectiveAvailability // []);
   def quota_bare_model($model): ($model | split("/") | last);
   def quota_applicable_rows($row; $model):
@@ -20,4 +21,4 @@ FM_QUOTA_ASSESSMENT_JQ=$(cat <<'JQ'
   def quota_runway_exhausted_rows($rows):
     [$rows[] | select((.runway.status // "") == "exhausted_now")];
 JQ
-)
+}

@@ -387,7 +387,8 @@ leave_dead_link_locks() {  # <state> <lock>...
   ' _ "$LIB" "$@" >/dev/null 2>&1 &
   holder=$!
   i=0
-  while [ "$i" -lt 50 ] && [ ! -s "$last/pid" ]; do
+  # Sourcing the lock library can take seconds on a loaded runner.
+  while [ "$i" -lt 500 ] && [ ! -s "$last/pid" ]; do
     sleep 0.02
     i=$((i + 1))
   done
