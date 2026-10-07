@@ -366,22 +366,26 @@ queue_result_wake() {  # <state>
 # Once the deadline passes, a still-live claimant is no longer waited for: the
 # wake decision is made as if it were gone, exactly as the old iteration cap did.
 await_delivery() {  # <generation> <state>
-  local generation=$1 state=$2 claim_record claim_generation claim_pid claim_live
+  local generation=$1 state=$2 claim_record claim_generation claim_pid claim_live delivery_stamp
+  delivery_stamp=$(fm_timing_now_ms)
   while :; do
     claim_live=0
     if ! take_lock "$PUBLISH_LOCK" "$(seconds_until "$DELIVERY_DEADLINE")"; then
       # A live holder outlived the whole delivery budget, so the claim cannot be
       # judged under the lock. A possible duplicate of an inline print is
       # cheaper than an actionable result nobody is woken for.
+      FM_TIMING_LOG=$TIMINGS_FILE fm_timing_record stage delivery-wait "$delivery_stamp"
       ! report_requires_wake "$state" || queue_result_wake "$state"
       return 1
     fi
     if [ "$(status_get generation)" != "$generation" ]; then
       fm_lock_release "$PUBLISH_LOCK"
+      FM_TIMING_LOG=$TIMINGS_FILE fm_timing_record stage delivery-wait "$delivery_stamp"
       return 0
     fi
     if [ -f "$DELIVERED_FILE" ]; then
       fm_lock_release "$PUBLISH_LOCK"
+      FM_TIMING_LOG=$TIMINGS_FILE fm_timing_record stage delivery-wait "$delivery_stamp"
       return 0
     fi
     if [ -f "$CLAIM_FILE" ] && [ "$(now)" -lt "$DELIVERY_DEADLINE" ]; then
@@ -400,6 +404,7 @@ EOF
     if [ "$claim_live" -eq 0 ]; then
       ! report_requires_wake "$state" || queue_result_wake "$state"
       fm_lock_release "$PUBLISH_LOCK"
+      FM_TIMING_LOG=$TIMINGS_FILE fm_timing_record stage delivery-wait "$delivery_stamp"
       return 0
     fi
     fm_lock_release "$PUBLISH_LOCK"
@@ -417,7 +422,7 @@ record_result() {  # <generation> <state> <phases> <locked> <started> <rc> <outp
   # A timing record is diagnostic only, so a failure to publish it is discarded
   # rather than downgrading the run - the report itself is the contract.
   if [ -n "$timings" ] && [ -f "$timings" ]; then
-    write_atomic "$TIMINGS_FILE" < "$timings" || true
+    write_atomic "$TIMINGS_FILE" < "$timings" || rm -rf "$TIMINGS_FILE" 2>/dev/null || true
   fi
   if ! write_atomic "$REPORT_FILE" < "$out"; then
     state=failed
@@ -441,12 +446,15 @@ EOF
 }
 
 publish() {  # <generation> <state> <phases> <locked> <started> <rc> <output-file> <timing-file>
-  local generation=$1 state=$2 phases=$3 locked=$4 started=$5 rc=$6 out=$7 timings=${8:-}
+  local generation=$1 state=$2 phases=$3 locked=$4 started=$5 rc=$6 out=$7 timings=${8:-} publish_stamp
+  publish_stamp=$(fm_timing_now_ms)
   DELIVERY_DEADLINE=$(( $(now) + $(delivery_budget) ))
   if ! take_lock "$PUBLISH_LOCK" "$(seconds_until "$DELIVERY_DEADLINE")"; then
+    fm_timing_record stage publish-wait "$publish_stamp"
     publish_lock_held "$generation" "$phases" "$locked" "$started" "$PUBLISH_LOCK" "$out" "$timings"
     return 1
   fi
+  fm_timing_record stage publish-wait "$publish_stamp"
   if [ "$(status_get generation)" != "$generation" ]; then
     fm_lock_release "$PUBLISH_LOCK"
     return 0
@@ -478,7 +486,7 @@ publish_lock_held() {  # <generation> <phases> <locked> <started> <lockdir> <out
 }
 
 cmd_run() {  # <locked> <lock-pid> <generation>
-  local locked=$1 lock_pid=$2 generation=$3 phases started budget out rc sweep_locked=0 downgraded=0 internal=0 lease_held=0 timings stage_started stage_deadline
+  local locked=$1 lock_pid=$2 generation=$3 phases started budget out rc sweep_locked=0 downgraded=0 internal=0 lease_held=0 timings stage_started stage_deadline __fm_entry_stamp
   mkdir -p "$STATE" 2>/dev/null || return 1
   started=$(now)
   budget=$(stage_budget)
@@ -495,7 +503,9 @@ cmd_run() {  # <locked> <lock-pid> <generation>
   timings=$(mktemp "${TMPDIR:-/tmp}/fm-startup-network-timings.XXXXXX" 2>/dev/null) || timings=
   [ -z "$timings" ] || fm_timing_start "$timings"
   if [ -n "$generation" ]; then
+    __fm_entry_stamp=$(fm_timing_now_ms)
     if ! take_lock "$PUBLISH_LOCK" "$(seconds_until "$stage_deadline")"; then
+      fm_timing_record stage entry-lock "$__fm_entry_stamp"
       publish_lock_held "$generation" "$phases" "$locked" "$started" "$PUBLISH_LOCK" "$out" "$timings"
       run_cleanup "$out" "$timings"
       return 1
@@ -505,6 +515,7 @@ cmd_run() {  # <locked> <lock-pid> <generation>
       started=$(status_get started)
     fi
     fm_lock_release "$PUBLISH_LOCK"
+    fm_timing_record stage entry-lock "$__fm_entry_stamp"
     [ "$internal" -eq 1 ] || { run_cleanup "$out" "$timings"; return 1; }
   elif [ "$locked" = 1 ] && ! fm_session_lock_owned_by_self "$STATE"; then
     downgraded=1
@@ -522,7 +533,9 @@ cmd_run() {  # <locked> <lock-pid> <generation>
 
   if [ "$internal" -eq 0 ]; then
     generation="$(now).$$.manual"
+    __fm_entry_stamp=$(fm_timing_now_ms)
     if ! take_lock "$PUBLISH_LOCK" "$(seconds_until "$stage_deadline")"; then
+      fm_timing_record stage entry-lock "$__fm_entry_stamp"
       publish_lock_held "$generation" "$phases" "$sweep_locked" "$started" "$PUBLISH_LOCK" "$out" "$timings"
       run_cleanup "$out" "$timings"
       return 1
@@ -532,6 +545,7 @@ cmd_run() {  # <locked> <lock-pid> <generation>
       run_cleanup "$out" "$timings"
       return 1
     fi
+    fm_timing_record stage entry-lock "$__fm_entry_stamp"
     write_atomic "$STATUS_FILE" <<EOF || true
 state=running
 pid=$$
@@ -547,7 +561,9 @@ EOF
   stage_started=$(fm_timing_now_ms)
   rc=0
   if [ "$sweep_locked" -eq 1 ]; then
+    __fm_entry_stamp=$(fm_timing_now_ms)
     if ! take_lock "$STATE/.lock.acquire" "$(seconds_until "$stage_deadline")"; then
+      fm_timing_record stage lease "$__fm_entry_stamp"
       # The lease is what makes a takeover wait for a settled sweep; a live
       # holder past the budget means no sweep can safely start, so this is a
       # failed stage to rerun, published through the ordinary bounded path.
@@ -558,6 +574,7 @@ EOF
       return 1
     fi
     lease_held=1
+    fm_timing_record stage lease "$__fm_entry_stamp"
     if ! lock_unchanged "$lock_pid"; then
       sweep_locked=0
       phases=probe
@@ -577,7 +594,10 @@ EOF
       FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_NETWORK_LOCK_PID="$lock_pid" \
       bash -c '
         script_dir=$1
+        . "$script_dir/fm-timing-lib.sh"
+        scan_stamp=$(fm_timing_now_ms)
         "$script_dir/fm-inactive-reconcile.sh" scan --startup >/dev/null 2>&1 || true
+        fm_timing_record stage inactive-scan "$scan_stamp"
         exec "$script_dir/fm-bootstrap.sh"
       ' _ "$SCRIPT_DIR" >"$out" 2>&1 || rc=$?
   else

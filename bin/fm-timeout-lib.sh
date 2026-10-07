@@ -87,20 +87,48 @@ fm_timeout_mechanism() {
   fi
 }
 
+# A backgrounded runner cannot inherit a redirected stdin (it reads EOF), so a
+# caller whose command reads stdin stages a copy first. Staging stays opt-in
+# through FM_RUN_TIMED_STAGE_STDIN: an unconditional copy would drain an
+# enclosing read loop's input.
+fm_run_staged_stdin() {
+  local staged
+  [ -n "${FM_RUN_TIMED_STAGE_STDIN:-}" ] || return 0
+  [ -t 0 ] || {
+    staged=$(mktemp "${TMPDIR:-/tmp}/fm-timeout-stdin.XXXXXX" 2>/dev/null) || return 0
+    if cat > "$staged" 2>/dev/null; then
+      printf '%s\n' "$staged"
+    else
+      rm -f "$staged" 2>/dev/null || true
+    fi
+  }
+}
+
 fm_run_bash_timeout() {
-  local seconds=$1 command_status deadline_status child_pid watchdog_pid command_rc recorded_rc monitor_was_on=0
+  local seconds=$1 command_status deadline_status stdin_file child_pid watchdog_pid command_rc recorded_rc monitor_was_on=0
   shift
   command_status=$(mktemp "${TMPDIR:-/tmp}/fm-bash-timeout-command.XXXXXX" 2>/dev/null) || return 124
   deadline_status="${command_status}.deadline"
+  stdin_file=$(fm_run_staged_stdin)
   case $- in *m*) monitor_was_on=1 ;; esac
   set -m
-  (
-    set +m
-    "$@"
-    command_rc=$?
-    printf '%s\n' "$command_rc" > "$command_status"
-    exit "$command_rc"
-  ) &
+  if [ -n "$stdin_file" ]; then
+    (
+      set +m
+      "$@"
+      command_rc=$?
+      printf '%s\n' "$command_rc" > "$command_status"
+      exit "$command_rc"
+    ) < "$stdin_file" &
+  else
+    (
+      set +m
+      "$@"
+      command_rc=$?
+      printf '%s\n' "$command_rc" > "$command_status"
+      exit "$command_rc"
+    ) &
+  fi
   child_pid=$!
   (
     set +m
@@ -129,27 +157,40 @@ fm_run_bash_timeout() {
     case "$recorded_rc" in ''|*[!0-9]*) ;; *) command_rc=$recorded_rc ;; esac
   fi
   rm -f "$command_status" "$deadline_status" 2>/dev/null || true
+  if [ -n "$stdin_file" ]; then rm -f "$stdin_file" 2>/dev/null || true; fi
   return "$command_rc"
 }
 
 fm_run_external_timeout() {
-  local runner=$1 seconds=$2 status_file runner_pid runner_rc command_rc
+  local runner=$1 seconds=$2 status_file stdin_file runner_pid runner_rc command_rc
   shift 2
   status_file=$(mktemp "${TMPDIR:-/tmp}/fm-timeout-status.XXXXXX" 2>/dev/null) || return 124
+  stdin_file=$(fm_run_staged_stdin)
   # Run timeout asynchronously so its pid - also the process-group id created
   # by GNU/BSD timeout without --foreground - remains available for cleanup.
   # A shell wrapper can exit promptly on TERM while one of its descendants
   # ignores TERM; timeout then considers the command finished and does not send
   # its configured KILL. Explicitly reap that leftover group on a real timeout.
   # shellcheck disable=SC2016  # Expansion is deliberately deferred to the child shell.
-  "$runner" -k 1 "$seconds" bash -c '
-    status_file=$1
-    shift
-    "$@"
-    command_rc=$?
-    printf "%s\n" "$command_rc" > "$status_file"
-    exit "$command_rc"
-  ' _ "$status_file" "$@" &
+  if [ -n "$stdin_file" ]; then
+    "$runner" -k 1 "$seconds" bash -c '
+      status_file=$1
+      shift
+      "$@"
+      command_rc=$?
+      printf "%s\n" "$command_rc" > "$status_file"
+      exit "$command_rc"
+    ' _ "$status_file" "$@" < "$stdin_file" &
+  else
+    "$runner" -k 1 "$seconds" bash -c '
+      status_file=$1
+      shift
+      "$@"
+      command_rc=$?
+      printf "%s\n" "$command_rc" > "$status_file"
+      exit "$command_rc"
+    ' _ "$status_file" "$@" &
+  fi
   runner_pid=$!
   if wait "$runner_pid"; then
     runner_rc=0
@@ -158,6 +199,7 @@ fm_run_external_timeout() {
   fi
   command_rc=$(cat "$status_file" 2>/dev/null || true)
   rm -f "$status_file" 2>/dev/null || true
+  if [ -n "$stdin_file" ]; then rm -f "$stdin_file" 2>/dev/null || true; fi
   case "$command_rc" in
     ''|*[!0-9]*) ;;
     *)

@@ -950,7 +950,6 @@ make_remote_leg_ssh_stub() { # <w> -> echoes the fakebin dir
   cat > "$fb/fake-ssh" <<'SH'
 #!/usr/bin/env bash
 set -u
-cat > /dev/null
 while [ "$#" -gt 0 ]; do
   case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
 done
@@ -1363,6 +1362,125 @@ test_bootstrap_reports_outdated_host_actionably() {
   pass "R10 a host too old for a parent-targeted sync is reported with the command that fixes it"
 }
 
+make_forwarding_leg_ssh_stub() {
+  local w=$1 fb
+  fb=$(fm_fakebin "$w/fwdssh")
+  : > "$w/leg-calls.log"
+  cat > "$fb/underlying-ssh" <<SH
+#!/usr/bin/env bash
+set -u
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
+done
+shift 2
+decode() { printf '%s' "\$1" | base64 --decode 2>/dev/null || printf '%s' "\$1" | base64 -D; }
+remote_home=\$(decode "\$3")
+rargs=()
+while IFS= read -r -d '' a; do rargs+=("\$a"); done < <(decode "\$4")
+printf '%s %s\\n' "\${rargs[0]}" "\${rargs[1]:-}" >> "$w/leg-calls.log"
+[ "\${rargs[0]}" != fm-remote-doctor.sh ] || exit 0
+rc=0
+env FM_HOME="\$remote_home" FM_ROOT_OVERRIDE="\$FM_REMOTE_CODE_ROOT" \
+  "\$FM_TEST_REPO_ROOT/bin/\${rargs[0]}" "\${rargs[@]:1}" || rc=\$?
+exit "\$rc"
+SH
+  chmod +x "$fb/underlying-ssh"
+  cat > "$fb/fake-ssh" <<SH
+#!/usr/bin/env bash
+exec "$fb/underlying-ssh" "\$@"
+SH
+  chmod +x "$fb/fake-ssh"
+  printf '%s\n' "$fb"
+}
+
+test_bootstrap_pushes_inherited_material_in_one_transport_call() {
+  local w c1 c2 home fakebin out batches
+  w=$(new_remote_world remote-batch-push)
+  cp "$ROOT"/bin/fm-remote-*.sh "$w/main/bin/"
+  git -C "$w/main" add -A
+  git -C "$w/main" commit -qm "primary tooling"
+  git -C "$w/main" push -q origin main
+  c1=$(head_of "$w/main")
+  add_remote_home "$w" sm "$w/forge.git" "$c1"
+  bump_primary "$w" instr
+  c2=$(head_of "$w/main")
+  git -C "$w/main" push -q origin main
+  home="$w/home"
+  mkdir -p "$home/config" "$home/projects"
+  printf 'harness-pin\n' > "$home/config/crew-harness"
+  printf -- '- sm - remote fixture (host: host-sm; root: %s; home: %s; scope: remote work; projects: alpha; added 2026-08-02)\n' \
+    "$w/coderoot" "$w/sm" > "$home/data/secondmates.md"
+  fm_write_secondmate_meta "$home/state/sm.meta" "$w/sm"
+  printf 'remote_host=host-sm\n' >> "$home/state/sm.meta"
+  mkdir -p "$w/sm/state/parent-route"
+  fm_write_meta "$w/sm/state/parent-route/sm.meta" \
+    'window=fm-remote:p1' 'endpoint_task_id=sm' 'worktree=-' 'project=-' \
+    'backend=herdr' 'harness=codex' 'herdr_session=fm-remote' \
+    'herdr_workspace_id=w1' 'herdr_tab_id=t1' 'herdr_pane_id=p1'
+
+  fakebin=$(make_forwarding_leg_ssh_stub "$w")
+  fm_fake_exit0 "$fakebin" gh treehouse tmux node
+  out=$(PATH="$fakebin:$BASE_PATH" \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$w/main" \
+    FM_BOOTSTRAP_NETWORK=only \
+    FM_SSH_BIN="$fakebin/fake-ssh" FM_REMOTE_CODE_ROOT="$w/coderoot" \
+    FM_TEST_REPO_ROOT="$ROOT" \
+    FM_INHERITABLE_CONFIG='crew-harness' FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_SEND_SETTLE=0 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>&1)
+
+  [ "$(head_of "$w/sm")" = "$c2" ] \
+    || fail "session start left the remote home off the primary's commit (out: $out)"
+  batches=$(grep -c '^fm-remote-inherit.sh batch$' "$w/leg-calls.log")
+  [ "$batches" -eq 1 ] \
+    || fail "the convergence pushed inherited material over $batches transport calls instead of one: $(cat "$w/leg-calls.log")"
+  cmp -s "$home/config/crew-harness" "$w/sm/config/crew-harness" \
+    || fail "the batched push did not carry the pin (out: $out)"
+  pass "R11 session start pushes inherited material over one transport call"
+}
+
+test_bootstrap_hung_host_fails_soft_inside_per_call_bound() {
+  local w c1 home fakebin out rc=0
+  w=$(new_remote_world remote-hung-host)
+  cp "$ROOT"/bin/fm-remote-*.sh "$w/main/bin/"
+  git -C "$w/main" add -A
+  git -C "$w/main" commit -qm "primary tooling"
+  git -C "$w/main" push -q origin main
+  c1=$(head_of "$w/main")
+  add_remote_home "$w" sm "$w/forge.git" "$c1"
+  bump_primary "$w" instr
+  home="$w/home"
+  mkdir -p "$home/config" "$home/projects"
+  printf -- '- sm - remote fixture (host: host-sm; root: %s; home: %s; scope: remote work; projects: alpha; added 2026-08-02)\n' \
+    "$w/coderoot" "$w/sm" > "$home/data/secondmates.md"
+  fm_write_secondmate_meta "$home/state/sm.meta" "$w/sm"
+  printf 'remote_host=host-sm\n' >> "$home/state/sm.meta"
+
+  fakebin=$(fm_fakebin "$w/hungssh")
+  printf '#!/usr/bin/env bash\nexec sleep 30\n' > "$fakebin/sleep-ssh"
+  chmod +x "$fakebin/sleep-ssh"
+  fm_fake_exit0 "$fakebin" gh treehouse tmux node
+  # shellcheck source=bin/fm-timeout-lib.sh
+  . "$ROOT/bin/fm-timeout-lib.sh"
+  out=$(fm_run_timed 120 env PATH="$fakebin:$BASE_PATH" \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$w/main" \
+    FM_BOOTSTRAP_NETWORK=only \
+    FM_SSH_BIN="$fakebin/sleep-ssh" FM_REMOTE_CODE_ROOT="$w/coderoot" \
+    FM_TEST_REPO_ROOT="$ROOT" FM_SECOND_MATE_STARTUP_CALL_TIMEOUT=2 \
+    FM_INHERITABLE_CONFIG='' FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_SEND_SETTLE=0 \
+    bash "$ROOT/bin/fm-bootstrap.sh" 2>&1) || rc=$?
+
+  [ "$rc" -ne 124 ] \
+    || fail "a hung remote host wedged the deferred network stage past the test's own bound"
+  [ "$rc" -eq 0 ] || fail "a hung remote host failed the stage instead of skipping it (rc=$rc out: $out)"
+  assert_contains "$out" "did not answer within 2s" \
+    "the hung host skip does not name the per-call bound that fired"
+  assert_contains "$out" "route preserved" \
+    "the hung host skip does not say the route was preserved"
+  assert_contains "$out" "SECONDMATE_SYNC: secondmate sm: skipped:" \
+    "the hung host convergence did not skip cleanly"
+  pass "R12 a hung remote host fails soft inside its per-call bound with the route preserved"
+}
+
 # --- R9: a remote launch never re-targets the host's own Firstmate copy --------
 # The launch leg runs a host-local spawn whose FM_ROOT is that host's Firstmate
 # copy. Once the parent has synced the home to ITS commit, that spawn must leave
@@ -1444,5 +1562,7 @@ test_remote_update_keeps_code_root_with_unique_content
 test_bootstrap_syncs_remote_home_to_primary_commit
 test_bootstrap_reports_outdated_host_actionably
 test_remote_launch_does_not_retarget_host_copy
+test_bootstrap_pushes_inherited_material_in_one_transport_call
+test_bootstrap_hung_host_fails_soft_inside_per_call_bound
 
 echo "# all fm-secondmate-sync tests passed"

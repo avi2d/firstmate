@@ -44,6 +44,14 @@ EMPTY="$TMP/empty"
 EMPTY_HASH=$(sha256_file "$EMPTY") || die "cannot hash empty inheritance payload"
 
 ITEMS=$(fm_config_inherit_items)
+BATCH="$TMP/batch.in"
+: > "$BATCH" || die "cannot stage batched inheritance"
+BATCH_ITEMS=0
+BATCH_FAILED=0
+batch_item_error() {
+  printf 'error: %s\n' "$1"
+  BATCH_FAILED=1
+}
 while IFS= read -r rel; do
   [ -n "$rel" ] || continue
   if [ "${FM_CONFIG_INHERIT_LIVE:-0}" = 1 ]; then
@@ -66,28 +74,56 @@ while IFS= read -r rel; do
     # (crew-dispatch.json into the skills repo); follow it to the target bytes.
     # `-f` still refuses a link that does not resolve to a regular file.
     if [ "$rel" = data/captain-shared.md ]; then
-      [ -f "$source" ] && [ ! -L "$source" ] || die "inherited source is unsafe: $source"
-    else
-      [ -f "$source" ] || die "inherited source is unsafe: $source"
+      if ! { [ -f "$source" ] && [ ! -L "$source" ]; }; then
+        batch_item_error "inherited source is unsafe: $source"
+        continue
+      fi
+    elif [ ! -f "$source" ]; then
+      batch_item_error "inherited source is unsafe: $source"
+      continue
     fi
-    [ "$(file_link_count "$source")" = 1 ] || die "inherited source is hardlinked: $source"
+    if [ "$(file_link_count "$source")" != 1 ]; then
+      batch_item_error "inherited source is hardlinked: $source"
+      continue
+    fi
     if [ "$rel" = data/captain-shared.md ]; then
       if ! missing=$(shared_captain_header_valid "$source"); then
         reason="shared captain preferences have no valid primary-authoritative header"
         [ -z "$missing" ] || reason="$reason: missing \"$missing\""
-        die "$reason"
+        batch_item_error "$reason"
+        continue
       fi
     fi
     snapshot="$TMP/$(printf '%s' "$rel" | tr '/' '_')"
-    cp -p -- "$source" "$snapshot" || die "cannot snapshot inherited source: $source"
-    [ -f "$snapshot" ] && [ ! -L "$snapshot" ] || die "inherited source snapshot is unsafe: $source"
+    cp -p -- "$source" "$snapshot" || { batch_item_error "cannot snapshot inherited source: $source"; continue; }
+    if ! { [ -f "$snapshot" ] && [ ! -L "$snapshot" ]; }; then
+      batch_item_error "inherited source snapshot is unsafe: $source"
+      continue
+    fi
     bytes=$(LC_ALL=C wc -c < "$snapshot" | tr -d ' ')
-    hash=$(sha256_file "$snapshot") || die "cannot hash inherited source: $source"
-    "$SCRIPT_DIR/fm-on.sh" --stdin "$ID" fm-remote-inherit.sh put "$rel" "$bytes" "$hash" "$GENERATION" < "$snapshot"
+    if ! hash=$(sha256_file "$snapshot"); then
+      batch_item_error "cannot hash inherited source: $source"
+      continue
+    fi
+    if [ "$bytes" -gt 1048576 ]; then
+      batch_item_error "inherited source exceeds the byte bound: $source"
+      continue
+    fi
+    printf 'put %s %s %s\n' "$rel" "$bytes" "$hash" >> "$BATCH" || exit 1
+    printf 'content %s\n' "$(base64 < "$snapshot" | tr -d '\n')" >> "$BATCH" || exit 1
+    BATCH_ITEMS=$((BATCH_ITEMS + 1))
   else
-    # This loop's heredoc is its control stream, not remote command input.
-    "$SCRIPT_DIR/fm-on.sh" "$ID" fm-remote-inherit.sh absent "$rel" 0 "$EMPTY_HASH" "$GENERATION" < /dev/null
+    printf 'absent %s 0 %s\n' "$rel" "$EMPTY_HASH" >> "$BATCH" || exit 1
+    BATCH_ITEMS=$((BATCH_ITEMS + 1))
   fi
 done <<EOF
 $ITEMS
 EOF
+if [ "$BATCH_ITEMS" -gt 0 ]; then
+  # One transport call carries every item; this loop's heredoc stays the
+  # control stream because the remote call reads its own explicit redirect.
+  if ! "$SCRIPT_DIR/fm-on.sh" --stdin "$ID" fm-remote-inherit.sh batch "$GENERATION" < "$BATCH"; then
+    BATCH_FAILED=1
+  fi
+fi
+[ "$BATCH_FAILED" -eq 0 ] || exit 1

@@ -251,14 +251,16 @@ remote_sync_failure_reason() { # <exit-status> <output>
   first_line "$2"
 }
 
-# Translate a remote inheritance push's combined output into an operator-
-# actionable reason. The push prints one "unchanged: <item>" line per item that
-# already matched before failing on the item that stopped it, so the plain
-# first line usually names an unrelated unchanged item rather than the error;
-# prefer the push's own "error: ..." line and fall back to the first line only
-# when it emitted none (an interrupted or unrecognized-shape failure).
+# Prefer the push's own "error: ..." line; a usage-shaped refusal means that
+# host's copy predates batched transfer.
 remote_inherit_failure_reason() { # <output>
   local err
+  case "$1" in
+    *fm-remote-inherit.sh\ put\ *)
+      printf '%s\n' "the Firstmate copy on that host is too old for batched inheritance transfer; run /updatefirstmate"
+      return 0
+      ;;
+  esac
   err=$(printf '%s\n' "$1" | grep -m1 '^error:') || true
   if [ -n "$err" ]; then
     first_line "$err"

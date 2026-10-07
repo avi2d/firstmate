@@ -183,6 +183,12 @@ cmd_route() {
   fi
   print_route "$id"
 }
+cmd_state_route() { # <id>
+  if remote_endpoint_load "$1" 2>/dev/null; then
+    print_route "$1"
+  fi
+  state_value "$1"
+}
 
 cmd_launch() {
   local id=$1 harness=$2 model=$3 effort=$4 selected_backend=$5 traceparent=${6:-}
@@ -462,7 +468,7 @@ cmd_retire() {
 case "${1:-}" in
   launch) shift; [ "$#" -ge 5 ] && [ "$#" -le 6 ] || usage; cmd_launch "$@" ;;
   relaunch) shift; [ "$#" -eq 4 ] || usage; cmd_relaunch "$@" ;;
-  state) shift; [ "$#" -eq 1 ] || usage; validate_id "$1"; validate_home "$1"; state_value "$1" ;;
+  state) shift; { [ "$#" -eq 1 ] || [ "$#" -eq 2 ]; } || usage; validate_id "$1"; validate_home "$1"; { [ "$#" -eq 1 ] || [ "$2" = route ]; } || usage; if [ "$#" -eq 2 ]; then cmd_state_route "$1"; else state_value "$1"; fi ;;
   route) shift; [ "$#" -eq 1 ] || usage; cmd_route "$1" ;;
   send) shift; [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage; cmd_send "$@" ;;
   key) shift; [ "$#" -eq 2 ] || usage; cmd_key "$@" ;;

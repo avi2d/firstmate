@@ -156,8 +156,14 @@ IFS=$'\t' read -r command_name _command_action command_rel <<EOF
 $command_fields
 EOF
 case "${FM_FAKE_SSH_MODE:-normal}:$command_name:$command_rel" in
-  inherit-partial:fm-remote-inherit.sh:config/crew-harness) exit 255 ;;
-  inherit-block:fm-remote-inherit.sh:data/captain-shared.md)
+  inherit-partial:fm-remote-inherit.sh:*)
+    cat > "$FM_FAKE_INHERIT_PAYLOAD"
+    sed -E -e 's/^(put config\/crew-harness [0-9]+) [0-9a-f]{64}$/\1 0000000000000000000000000000000000000000000000000000000000000000/' \
+      -e 's/^(absent config\/crew-harness 0) [0-9a-f]{64}$/\1 0000000000000000000000000000000000000000000000000000000000000000/' \
+      "$FM_FAKE_INHERIT_PAYLOAD" | "$FM_FAKE_REMOTE_ENTRYPOINT" "$@"
+    exit $?
+    ;;
+  inherit-block:fm-remote-inherit.sh:*)
     cat > "$FM_FAKE_INHERIT_PAYLOAD"
     touch "$FM_FAKE_INHERIT_ENTERED"
     while [ ! -f "$FM_FAKE_INHERIT_RELEASE" ]; do sleep 0.02; done
