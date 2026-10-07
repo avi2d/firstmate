@@ -632,14 +632,22 @@ secondmate_sync() {
       case "$sync_out" in synced:*) nudge_needed=1 ;; esac
     else
       sync_rc=$?
-      echo "SECONDMATE_SYNC: secondmate $id: skipped: remote tracked-file sync failed on $remote_host: $(remote_sync_failure_reason "$sync_rc" "$sync_out")"
+      if fm_timed_out "$sync_rc"; then
+        echo "SECONDMATE_SYNC: secondmate $id: skipped: remote tracked-file sync did not answer within ${FM_SECOND_MATE_STARTUP_CALL_TIMEOUT:-30}s on $remote_host"
+      else
+        echo "SECONDMATE_SYNC: secondmate $id: skipped: remote tracked-file sync failed on $remote_host: $(remote_sync_failure_reason "$sync_rc" "$sync_out")"
+      fi
       converged=0
     fi
     if inherit_out=$(FM_CONFIG_INHERIT_LIVE=1 \
       "$SCRIPT_DIR/fm-remote-inherit-push.sh" "$id" "$remote_generation" 2>&1); then
       if printf '%s\n' "$inherit_out" | grep -Eq '^(pushed|removed):'; then nudge_needed=1; fi
     else
-      echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance failed on $remote_host: $(remote_inherit_failure_reason "$inherit_out")"
+      if fm_timed_out "$?"; then
+        echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance did not answer within ${FM_SECOND_MATE_STARTUP_CALL_TIMEOUT:-30}s on $remote_host"
+      else
+        echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance failed on $remote_host: $(remote_inherit_failure_reason "$inherit_out")"
+      fi
       converged=0
     fi
     [ "$remote_pending" -eq 0 ] || nudge_needed=1
@@ -1599,6 +1607,8 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     fi
   fi
   if network_phase; then
+    FM_SECOND_MATE_STARTUP_CALL_TIMEOUT=$(fm_startup_remote_call_timeout)
+    export FM_SECOND_MATE_STARTUP_CALL_TIMEOUT
     if network_sweep_authorized 'dead-secondmate relaunch'; then
       __fm_timing_stamp=$(fm_timing_now_ms)
       secondmate_liveness_sweep
@@ -1614,6 +1624,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
       secondmate_handoff_resume
       fm_timing_record phase handoff-delivery "$__fm_timing_stamp"
     fi
+    unset FM_SECOND_MATE_STARTUP_CALL_TIMEOUT
   fi
   # x_mode_setup writes local Relay artifacts only and never leaves the machine.
   local_phase && x_mode_setup

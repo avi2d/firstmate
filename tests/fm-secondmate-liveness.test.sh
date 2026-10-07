@@ -688,6 +688,39 @@ test_remote_poll_probe_maps_states() {
   pass "poll probe: remote states map to the same contract as local, one call each"
 }
 
+test_remote_full_probe_merges_state_and_route_in_one_call() {
+  local w out route_reply
+  w=$(make_remote_probe_world probe-full-merged)
+  route_reply=$(printf 'schema=fm-remote-secondmate-control.v1\nbackend=herdr\ntarget=fm-remote:w1:p1\nherdr_session=fm-remote\nalive')
+
+  out=$(probe_remote "$w" full FM_FAKE_REMOTE_REPLY="$route_reply")
+  [ "$out" = 'alive|alive|0|||' ] || fail "a full probe over one state call should stay alive, got: $out"
+  [ "$(wc -l < "$w/ssh.log" | tr -d ' ')" -eq 2 ] \
+    || fail "a full probe should spend one readiness call plus one merged state call: $(cat "$w/ssh.log")"
+
+  out=$(probe_remote "$w" full FM_FAKE_REMOTE_REPLY=alive)
+  [ "$out" = 'skipped|alive|0|||alive remote endpoint route is unreadable on lab-host; inspect and migrate or retire it explicitly' ] \
+    || fail "an alive reply with no route block must stay explicit, got: $out"
+  pass "full probe: one merged state call keeps the alive contract and names a missing route"
+}
+
+test_remote_full_probe_timeout_preserves_route() {
+  local w out fakebin
+  w=$(make_remote_probe_world probe-full-timeout)
+  fakebin="$w/fakebin"
+  cat > "$fakebin/ssh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_FAKE_SSH_LOG:?}"
+exec sleep 30
+SH
+  chmod +x "$fakebin/ssh"
+
+  out=$(probe_remote "$w" full FM_SECOND_MATE_STARTUP_CALL_TIMEOUT=1)
+  [ "$out" = 'skipped|unknown|0|||remote host did not answer within 1s; route preserved on lab-host' ] \
+    || fail "a hung remote host must fail soft inside the per-call bound, got: $out"
+  pass "full probe: a hung remote call fails soft inside its bound with the route preserved"
+}
+
 test_remote_poll_probe_unreachable_preserves_route() {
   local w out
   w=$(make_remote_probe_world probe-unreachable)
@@ -725,5 +758,7 @@ test_sweep_skips_mate_whose_liveness_lock_is_held
 test_sweep_refuses_relaunch_on_ledger_errors
 test_remote_poll_probe_maps_states
 test_remote_poll_probe_unreachable_preserves_route
+test_remote_full_probe_merges_state_and_route_in_one_call
+test_remote_full_probe_timeout_preserves_route
 
 echo "# all fm-secondmate-liveness tests passed"

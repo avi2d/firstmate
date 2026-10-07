@@ -20,7 +20,54 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/fm-config-inherit-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; [ "${1:-}" != batch ] || printf '  fm-remote-inherit.sh batch <generation> < batch-stdin\n'; exit 2; }
+BATCH_MAX_ITEMS=64
+batch_apply() {
+  local generation=$1 header cmd rel bytes hash payload_line b64 tmp out items=0 failures=0
+  case "$generation" in ''|*[!0-9]*) die "generation must be a positive integer" ;; esac
+  [ "${#generation}" -le 18 ] && [ "$generation" -ge 1 ] || die "generation is outside the supported range"
+  while IFS= read -r header || [ -n "$header" ]; do
+    [ -n "$header" ] || die "batched inheritance record is empty"
+    IFS=' ' read -r cmd rel bytes hash extra <<EOF
+$header
+EOF
+    case "$cmd" in put|absent) ;; *) die "batched inheritance command is outside put/absent" ;; esac
+    [ -z "${extra:-}" ] || die "batched inheritance record has extra fields"
+    case "$rel" in ''|*" "*) die "batched inheritance path is invalid" ;; esac
+    items=$((items + 1))
+    [ "$items" -le "$BATCH_MAX_ITEMS" ] || die "batched inheritance carries too many items"
+    if [ "$cmd" = put ]; then
+      IFS= read -r payload_line || die "batched inheritance item is missing its payload"
+      case "$payload_line" in 'content '*) ;; *) die "batched inheritance item is missing its payload" ;; esac
+      b64=${payload_line#content }
+      [ "${#b64}" -le 1398112 ] || die "batched inheritance payload exceeds the byte bound"
+      tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-inherit-batch.XXXXXX") || die "cannot stage batched inheritance payload"
+      if ! printf '%s' "$b64" | base64 --decode > "$tmp" 2>/dev/null && ! printf '%s' "$b64" | base64 -D > "$tmp" 2>/dev/null; then
+        rm -f -- "$tmp"
+        printf 'error: batched inheritance payload is not valid base64: %s\n' "$rel"
+        failures=$((failures + 1))
+        continue
+      fi
+      if out=$("$SCRIPT_DIR/fm-remote-inherit.sh" put "$rel" "$bytes" "$hash" "$generation" < "$tmp" 2>&1); then
+        printf '%s\n' "$out"
+      else
+        printf '%s\n' "$out"
+        failures=$((failures + 1))
+      fi
+      rm -f -- "$tmp"
+    else
+      if out=$("$SCRIPT_DIR/fm-remote-inherit.sh" absent "$rel" "$bytes" "$hash" "$generation" < /dev/null 2>&1); then
+        printf '%s\n' "$out"
+      else
+        printf '%s\n' "$out"
+        failures=$((failures + 1))
+      fi
+    fi
+  done
+  [ "$items" -ge 1 ] || die "batched inheritance carries no items"
+  [ "$failures" -eq 0 ] || return 1
+  return 0
+}
 file_link_count() {
   if [ "$(uname)" = Darwin ]; then /usr/bin/stat -f %l "$1" 2>/dev/null; else stat -c %h "$1" 2>/dev/null; fi
 }
@@ -43,8 +90,14 @@ EOF
   return 1
 }
 
-[ "$#" -eq 5 ] || usage
+[ "$#" -ge 1 ] || usage
 COMMAND=$1
+if [ "$COMMAND" = batch ]; then
+  [ "$#" -eq 2 ] || usage
+  batch_apply "$2"
+  exit $?
+fi
+[ "$#" -eq 5 ] || usage
 REL=$2
 EXPECTED_BYTES=$3
 EXPECTED_HASH=$4

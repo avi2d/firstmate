@@ -111,6 +111,15 @@ fm_secondmate_liveness_recent_attempts() {  # <id> <window-secs>
     "$ledger" 2>/dev/null
 }
 
+fm_startup_remote_call_timeout() {
+  case "${FM_SECOND_MATE_STARTUP_CALL_TIMEOUT:-30}" in
+    ''|*[!0-9]*) printf '30\n' ;;
+    *) [ "${FM_SECOND_MATE_STARTUP_CALL_TIMEOUT:-30}" -gt 0 ] \
+        && printf '%s\n' "${FM_SECOND_MATE_STARTUP_CALL_TIMEOUT:-30}" \
+        || printf '30\n' ;;
+  esac
+}
+
 # fm_secondmate_liveness_probe <meta> <id> <full|poll>
 #
 # Read-only probe of one registered secondmate's recorded endpoint. Populates:
@@ -133,17 +142,30 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
   local meta=$1 id=$2 mode=$3
   FM_SM_LIVE_STATUS=skipped FM_SM_LIVE_STATE=unknown FM_SM_LIVE_KILL=0
   FM_SM_LIVE_CAUSE='' FM_SM_LIVE_WHERE='' FM_SM_LIVE_REASON='' FM_SM_LIVE_LINE=''
-  local window harness remote_host remote_rc out agent_state readiness_reason route_out remote_backend
+  local window harness remote_host remote_rc out agent_state readiness_reason remote_backend startup_call_budget
   window=$(fm_meta_get "$meta" window)
   [ -n "$window" ] || { FM_SM_LIVE_STATUS=silent; return 0; }
   harness=$(fm_meta_get "$meta" harness)
   remote_host=$(fm_meta_get "$meta" remote_host)
   if [ -n "$remote_host" ]; then
+    startup_call_budget=
+    if [ "$mode" = full ]; then
+      startup_call_budget=$(fm_startup_remote_call_timeout)
+      FM_SECOND_MATE_STARTUP_CALL_TIMEOUT=$startup_call_budget
+      export FM_SECOND_MATE_STARTUP_CALL_TIMEOUT
+    fi
     if [ "$mode" = full ]; then
       remote_rc=0
       fm_remote_readiness_ensure "$FM_SM_LIVE_LIB_DIR" "$id" || remote_rc=$?
+      if [ "$remote_rc" -ne 0 ] && [ "$remote_rc" -ne 255 ] && [ -z "$FM_REMOTE_READINESS_OUT" ]; then
+        remote_rc=124
+      fi
       if [ "$remote_rc" -eq 255 ]; then
         FM_SM_LIVE_REASON="remote host unavailable or endpoint state unknown; route preserved on $remote_host"
+        return 0
+      fi
+      if fm_timed_out "$remote_rc"; then
+        FM_SM_LIVE_REASON="remote host did not answer within ${startup_call_budget}s; route preserved on $remote_host"
         return 0
       fi
       if [ "$remote_rc" -ne 0 ]; then
@@ -155,13 +177,25 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
         return 0
       fi
     fi
-    if out=$("$FM_SM_LIVE_LIB_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" < /dev/null 2>/dev/null); then
-      remote_rc=0
+    if [ "$mode" = full ]; then
+      if out=$("$FM_SM_LIVE_LIB_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" route < /dev/null 2>/dev/null); then
+        remote_rc=0
+      else
+        remote_rc=$?
+      fi
     else
-      remote_rc=$?
+      if out=$("$FM_SM_LIVE_LIB_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" < /dev/null 2>/dev/null); then
+        remote_rc=0
+      else
+        remote_rc=$?
+      fi
     fi
     if [ "$remote_rc" -eq 255 ]; then
       FM_SM_LIVE_REASON="remote host unavailable or endpoint state unknown; route preserved on $remote_host"
+      return 0
+    fi
+    if fm_timed_out "$remote_rc"; then
+      FM_SM_LIVE_REASON="remote host did not answer within ${startup_call_budget}s; route preserved on $remote_host"
       return 0
     fi
     if [ "$remote_rc" -ne 0 ]; then
@@ -173,20 +207,11 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
     case "$agent_state" in
       alive)
         if [ "$mode" = full ]; then
-          if route_out=$("$FM_SM_LIVE_LIB_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh route "$id" < /dev/null 2>/dev/null); then
-            remote_rc=0
-          else
-            remote_rc=$?
-          fi
-          if [ "$remote_rc" -eq 255 ]; then
-            FM_SM_LIVE_REASON="remote host unavailable or endpoint route unknown; route preserved on $remote_host"
-            return 0
-          fi
-          if [ "$remote_rc" -ne 0 ]; then
+          remote_backend=$(printf '%s\n' "$out" | sed -n 's/^backend=//p' | tail -1)
+          if [ -z "$remote_backend" ]; then
             FM_SM_LIVE_REASON="alive remote endpoint route is unreadable on $remote_host; inspect and migrate or retire it explicitly"
             return 0
           fi
-          remote_backend=$(printf '%s\n' "$route_out" | sed -n 's/^backend=//p' | tail -1)
           if [ "$remote_backend" != herdr ]; then
             FM_SM_LIVE_REASON="alive remote endpoint is recorded on backend '${remote_backend:-missing}'; migrate or retire it explicitly"
             return 0

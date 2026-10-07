@@ -103,6 +103,53 @@ await_worker_record() {  # <home>
   [ -s "$home/state/.startup-network.status" ] || fail "the detached worker never recorded itself"
 }
 
+test_a_finished_run_accounts_for_every_wait_region() {
+  local rec home root log timings
+  rec=$(new_world waits-accounted)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  printf '%s\n' $$ > "$home/state/.lock"
+
+  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_OUT='sweep finding' \
+    FM_FAKE_TIMING_PHASE=fleet-sync \
+    run_stage "$home" "$root" run --locked 1
+
+  timings="$home/state/.startup-network.timings"
+  assert_present "$timings" "a finished run published no timing record"
+  assert_grep 'stage	entry-lock' "$timings" "the entry lock wait is unattributed"
+  assert_grep 'stage	lease' "$timings" "the takeover lease wait is unattributed"
+  assert_grep 'stage	inactive-scan' "$timings" "the inactive scan is unattributed"
+  assert_grep 'stage	publish-wait' "$timings" "the publish lock wait is unattributed"
+  assert_grep 'stage	delivery-wait' "$timings" "the delivery wait is unattributed"
+  assert_grep 'stage	network-checks' "$timings" "the bounded total is missing"
+  pass "fm-startup-network: a finished run accounts for every wait region"
+}
+
+test_a_failed_timings_publish_leaves_no_stale_record() {
+  local rec home root log report_out
+  rec=$(new_world timings-no-stale)
+  IFS='|' read -r home root log <<EOF
+$rec
+EOF
+  printf '%s\n' $$ > "$home/state/.lock"
+  rm -f "$home/state/.startup-network.timings"
+  mkdir -p "$home/state/.startup-network.timings"
+  printf 'v1\tstage\tnetwork-checks\t0\t100\tstale-run\n' > "$home/state/.startup-network.timings/stale.tsv"
+
+  FM_FAKE_BOOTSTRAP_LOG="$log" FM_FAKE_BOOTSTRAP_OUT='sweep finding' \
+    run_stage "$home" "$root" run --locked 1
+
+  assert_no_grep 'stale-run' "$home/state/.startup-network.timings" \
+    "a failed timings publish left a previous run's record behind"
+  [ "$(sed -n 's/^state=//p' "$home/state/.startup-network.status")" = "done" ] \
+    || fail "the run itself should still publish its result"
+  report_out=$(run_stage "$home" "$root" report)
+  assert_not_contains "$report_out" "stale-run" \
+    "report printed a previous run's timings as this run's"
+  pass "fm-startup-network: a failed timings publish leaves no stale record"
+}
+
 test_wait_fails_without_a_published_stage() {
   local rec home root log
   rec=$(new_world wait-without-stage)
@@ -779,8 +826,8 @@ GITHUB_TOKEN=ghp_supersecretvalue" \
   assert_grep 'unrecordable' "$home/state/.startup-network.timings" \
     "free text was silently dropped instead of being marked unrecordable"
   lines=$(grep -c . "$home/state/.startup-network.timings")
-  [ "$lines" -eq 2 ] \
-    || fail "one sweep record plus the stage total should be 2 lines, got $lines"
+  [ "$lines" -eq 7 ] \
+    || fail "one sweep record plus the five wait-region rows plus the stage total should be 7 lines, got $lines"
 
   # The step itself is still measured - only its untrustworthy label is refused,
   # so a sweep that mislabels itself still shows up as time spent.
@@ -880,4 +927,6 @@ test_timings_are_published_and_only_the_on_demand_report_prints_them
 test_a_bounded_run_still_publishes_the_timings_it_managed_to_record
 test_the_timing_artifact_cannot_carry_a_command_line_or_forge_records
 test_a_held_publish_lock_cannot_keep_the_worker_alive_past_its_budget
+test_a_finished_run_accounts_for_every_wait_region
+test_a_failed_timings_publish_leaves_no_stale_record
 echo "# fm-startup-network.test.sh: all assertions passed"

@@ -43,6 +43,8 @@ PROTOCOL=1
 
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -110,6 +112,12 @@ case "$ALIVE_INTERVAL" in ''|*[!0-9]*) die "FM_SSH_ALIVE_INTERVAL must be a posi
 case "$ALIVE_COUNT_MAX" in ''|*[!0-9]*) die "FM_SSH_ALIVE_COUNT_MAX must be a positive integer: $ALIVE_COUNT_MAX" ;; esac
 [ "$ALIVE_INTERVAL" -gt 0 ] || die "FM_SSH_ALIVE_INTERVAL must be a positive integer: $ALIVE_INTERVAL"
 [ "$ALIVE_COUNT_MAX" -gt 0 ] || die "FM_SSH_ALIVE_COUNT_MAX must be a positive integer: $ALIVE_COUNT_MAX"
+CALL_TIMEOUT=${FM_SECOND_MATE_STARTUP_CALL_TIMEOUT:-}
+case "$CALL_TIMEOUT" in
+  '') ;;
+  *[!0-9]*) die "FM_SECOND_MATE_STARTUP_CALL_TIMEOUT must be a positive integer: $CALL_TIMEOUT" ;;
+  *) [ "$CALL_TIMEOUT" -gt 0 ] || die "FM_SECOND_MATE_STARTUP_CALL_TIMEOUT must be a positive integer: $CALL_TIMEOUT" ;;
+esac
 
 SSH_ARGS=(
   -o ForwardAgent=no
@@ -119,7 +127,15 @@ SSH_ARGS=(
   -o "ServerAliveCountMax=$ALIVE_COUNT_MAX"
   -- "$HOST" fm-remote-entrypoint.sh "$PROTOCOL" "$ROOT_B64" "$HOME_B64" "$ARGV_B64"
 )
-if [ "$STDIN_MODE" = caller ]; then
-  exec "$SSH_BIN" "${SSH_ARGS[@]}"
+if [ -n "$CALL_TIMEOUT" ]; then
+  if [ "$STDIN_MODE" = caller ]; then
+    fm_run_timed "$CALL_TIMEOUT" "$SSH_BIN" "${SSH_ARGS[@]}"
+  else
+    fm_run_timed "$CALL_TIMEOUT" "$SSH_BIN" "${SSH_ARGS[@]}" < /dev/null
+  fi
+else
+  if [ "$STDIN_MODE" = caller ]; then
+    exec "$SSH_BIN" "${SSH_ARGS[@]}"
+  fi
+  exec "$SSH_BIN" "${SSH_ARGS[@]}" < /dev/null
 fi
-exec "$SSH_BIN" "${SSH_ARGS[@]}" < /dev/null
