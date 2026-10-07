@@ -67,8 +67,14 @@ JS
 JSON
   cat > "$repo/node_modules/typebox/index.js" <<'JS'
 export const Type = {
-  Object(properties) {
-    return { type: "object", properties, additionalProperties: false };
+  Object(properties, options) {
+    return { type: "object", properties, additionalProperties: false, ...(options ?? {}) };
+  },
+  Boolean(options) {
+    return { type: "boolean", ...(options ?? {}) };
+  },
+  String(options) {
+    return { type: "string", ...(options ?? {}) };
   },
 };
 JS
@@ -212,6 +218,77 @@ EOF
   expect_code 0 "$status" "Pi custom tool must expose first-cycle or repair-only metadata and return Pi's AgentToolResult shape"
   [ -z "$out" ] || fail "Pi tool-result test printed output: $out"
   pass "Pi custom tool exposes repair-only metadata and returns automatic-continuation guidance"
+}
+
+# Codemode scripts receive structuredContent in place of the text, and Pi does
+# not check it against the declared outputSchema, so the real TypeBox validator
+# from the installed Pi package checks both arm outcomes here.
+test_pi_tool_structured_content_matches_its_output_schema() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo "skip: node not found for the Pi watch tool output-schema test"
+    return
+  fi
+  local package_dir repo home plugin out status
+  package_dir=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+  if [ ! -f "$package_dir/package.json" ]; then
+    echo "skip: installed @earendil-works/pi-coding-agent package not found for the output-schema test"
+    return
+  fi
+  [ -d "$package_dir/node_modules/typebox" ] \
+    || fail "installed Pi package at $package_dir has no typebox to build and check output schemas"
+  repo="$TMP_ROOT/pi-tool-output-schema-root"
+  home="$TMP_ROOT/pi-tool-output-schema-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  rm -rf "$repo/node_modules/typebox"
+  ln -s "$package_dir/node_modules/typebox" "$repo/node_modules/typebox"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(cd "$repo" && PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" node --input-type=module 2>&1 <<'EOF'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { Value } from "typebox/value";
+
+let tool = null;
+const pi = {
+  on() {},
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async () => {},
+};
+const lock = `${process.env.FM_HOME}/state/.lock`;
+writeFileSync(lock, "1\n");
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+if (!tool?.outputSchema) throw new Error("fm_watch_arm_pi declares no outputSchema");
+if (Value.Check(tool.outputSchema, { ok: "true", message: 1 })) throw new Error("fm_watch_arm_pi outputSchema accepts a malformed result");
+const expectMatches = (result, ok, fragment) => {
+  const text = result.content[0]?.text ?? "";
+  if (result.details?.ok !== ok || result.details?.message !== text || !text.includes(fragment)) {
+    throw new Error(`unexpected arm result: ${JSON.stringify(result)}`);
+  }
+  if (JSON.stringify(result.structuredContent) !== JSON.stringify({ ok, message: text })) {
+    throw new Error(`structuredContent is not the arm result: ${JSON.stringify(result.structuredContent)}`);
+  }
+  if (!Value.Check(tool.outputSchema, result.structuredContent)) {
+    throw new Error(`structuredContent does not match the outputSchema: ${JSON.stringify([...Value.Errors(tool.outputSchema, result.structuredContent)])}`);
+  }
+};
+expectMatches(await tool.execute("refused", {}, undefined, undefined, {}), false, "read-only - session lock is held by another firstmate session");
+writeFileSync(lock, `${process.pid}\n`);
+expectMatches(await tool.execute("armed", {}, undefined, undefined, {}), true, "started Pi extension arm child");
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "fm_watch_arm_pi must return structuredContent matching its outputSchema"
+  [ -z "$out" ] || fail "Pi tool output-schema test printed output: $out"
+  pass "fm_watch_arm_pi returns structuredContent that matches its declared outputSchema, with unchanged text"
 }
 
 test_pi_redundant_tool_call_is_owned_noop() {
@@ -5464,6 +5541,7 @@ EOF
 
 test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
+test_pi_tool_structured_content_matches_its_output_schema
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
 test_pi_actionable_close_starts_single_successor_before_delivery

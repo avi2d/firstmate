@@ -40,7 +40,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Text, type Component } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { registerFirstmateTool } from "./lib/fm-native-contract.ts";
 import {
   afkPostureRecordPresent,
@@ -55,10 +55,11 @@ import {
 } from "./lib/fm-calm-visibility.ts";
 import { encodeFirstmateOperationalInput } from "./lib/fm-operational-input.ts";
 
-type ArmResult = {
-  ok: boolean;
-  message: string;
-};
+const ArmResultSchema = Type.Object({
+  ok: Type.Boolean({ description: "True when the extension owns a running or scheduled watcher cycle" }),
+  message: Type.String({ description: "The arm outcome, including what to do next" }),
+});
+type ArmResult = Static<typeof ArmResultSchema>;
 
 type LockOwnership = "owned" | "missing" | "other";
 
@@ -1253,6 +1254,7 @@ export default function (pi: ExtensionAPI) {
       "Call fm_watch_arm_pi only for the first required cycle or after a notification says the cycle is missing, failed, or unhealthy. Do not call it after ordinary work, turn completion, or ordinary signal, stale, check, or heartbeat handling because the Pi extension owns re-arming. Never run bin/fm-watch-arm.sh through bash.",
     ],
     parameters: Type.Object({}),
+    outputSchema: ArmResultSchema,
     renderShell: "self",
     renderCall: (_args, theme, context) => {
       if (calmHides("assistant-tool-call")) return new Container();
@@ -1284,6 +1286,7 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [{ type: "text", text: result.message }],
         details: result,
+        structuredContent: { ok: result.ok, message: result.message },
       };
     },
   });

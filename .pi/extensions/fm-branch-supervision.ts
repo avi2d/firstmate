@@ -101,7 +101,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, fuzzyFilter, Input, SelectList, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { registerFirstmateTool } from "./lib/fm-native-contract.ts";
 import { runCommandAsync } from "./lib/fm-async-exec.ts";
 import {
@@ -209,6 +209,27 @@ type OutcomeRow = {
   silent: boolean;
 };
 type VisibleOutcomeRecord = OutcomeRow & { version: 1 };
+const OutcomeListSchema = Type.Object({
+  outcomes: Type.Array(
+    Type.Object({
+      seq: Type.Integer({ description: "Store sequence number" }),
+      epoch: Type.Integer({ description: "Unix time in seconds when the outcome was recorded" }),
+      task: Type.String({ description: "Task id, or fleet" }),
+      wake: Type.String({ description: "The wake reason line the outcome answers; empty when none was recorded" }),
+      verdict: Type.Union([Type.Literal("routine"), Type.Literal("captain")]),
+      summary: Type.String(),
+      silent: Type.Boolean({ description: "True for a routine no-change outcome that was not rendered" }),
+    }),
+    { description: "Most recent outcomes, oldest first" },
+  ),
+});
+type ListedOutcome = Static<typeof OutcomeListSchema>["outcomes"][number];
+const ProcessedAcknowledgementSchema = Type.Object({
+  through: Type.Integer({ description: "The sequence acknowledged as processed" }),
+  unprocessed: Type.Union([Type.Array(Type.Integer()), Type.Null()], {
+    description: "Captain outcome sequences still unprocessed and to be presented again; null when they could not be read",
+  }),
+});
 // An unprocessed captain row with the store's "recordedAgo" (bin/fm-branch-outcome.sh
 // owns its wording).
 type UnprocessedOutcome = OutcomeRow & { recordedAgo: string };
@@ -492,6 +513,19 @@ function parseOutcomeRow(value: unknown): OutcomeRow | null {
   const silent = row.silent === true;
   if (silent && row.verdict !== "routine") return null;
   return { seq: row.seq, task: row.task, verdict: row.verdict, summary: row.summary, silent };
+}
+
+// Accepts every row bin/fm-branch-outcome.sh list accepts, so the listing never
+// fails where its text alone would have succeeded.
+function parseListedOutcome(value: unknown): ListedOutcome | null {
+  if (!value || typeof value !== "object") return null;
+  const { seq, epoch, task, wake, verdict, summary, silent } = value as Record<string, unknown>;
+  if (typeof seq !== "number" || !Number.isSafeInteger(seq) || seq < 1) return null;
+  if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 0) return null;
+  if (typeof task !== "string" || typeof wake !== "string" || typeof summary !== "string") return null;
+  if (verdict !== "routine" && verdict !== "captain") return null;
+  if (silent !== undefined && typeof silent !== "boolean") return null;
+  return { seq, epoch, task, wake, verdict, summary, silent: silent === true };
 }
 
 function parseVisibleOutcomeRecord(value: unknown): VisibleOutcomeRecord | null {
@@ -2272,6 +2306,7 @@ ${context.command}
     parameters: Type.Object({
       recent: Type.Optional(Type.Number({ description: "How many most-recent outcomes to read (default 20)" })),
     }),
+    outputSchema: OutcomeListSchema,
     renderShell: "self",
     renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
@@ -2313,9 +2348,28 @@ ${context.command}
           isError: true,
         };
       }
+      const outcomes: ListedOutcome[] = [];
+      for (const line of listed.stdout.split("\n")) {
+        if (!line) continue;
+        let outcome: ListedOutcome | null = null;
+        try {
+          outcome = parseListedOutcome(JSON.parse(line));
+        } catch {
+          outcome = null;
+        }
+        if (!outcome) {
+          return {
+            content: [{ type: "text", text: `could not read the outcome store: it listed a row that breaks its contract (${line.slice(0, 200)})` }],
+            details: undefined,
+            isError: true,
+          };
+        }
+        outcomes.push(outcome);
+      }
       return {
         content: [{ type: "text", text: listed.stdout || "(no branch outcomes recorded)" }],
         details: undefined,
+        structuredContent: { outcomes },
       };
     },
   });
@@ -2334,6 +2388,7 @@ ${context.command}
     parameters: Type.Object({
       through: Type.Number({ description: "The highest outcome sequence number this conversation has processed" }),
     }),
+    outputSchema: ProcessedAcknowledgementSchema,
     renderShell: "self",
     renderCall: (args, theme, context) => {
       if (calmPresentation.stockExportRendering) throw new Error("Use Pi stock export rendering");
@@ -2401,9 +2456,14 @@ ${context.command}
           : remaining.length === 0
             ? "no captain outcome remains unprocessed"
             : `${remaining.length} newer captain outcome(s) remain unprocessed (seq ${remaining.map((row) => row.seq).join(", ")}) and will be presented again`;
+        const acknowledgement: Static<typeof ProcessedAcknowledgementSchema> = {
+          through,
+          unprocessed: remaining === null ? null : remaining.map((row) => row.seq),
+        };
         return {
           content: [{ type: "text", text: `processed through seq ${through}; ${open}` }],
           details: undefined,
+          structuredContent: acknowledgement,
         };
       });
     },
