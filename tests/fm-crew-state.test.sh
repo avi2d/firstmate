@@ -303,6 +303,24 @@ new_case() {  # <name> -> echoes case dir with an empty state/
   printf '%s\n' "$d"
 }
 
+# A backgrounded sleeper reports its parent's directory until it is scheduled
+# and runs cd, so a verdict read before then judges the wrong directory.
+wait_agent_settled_in() {  # <pid> <dir>
+  local pid=$1 want=$2 i=0 cwd
+  want=$(cd "$want" && pwd -P) || return 1
+  while [ "$i" -lt 100 ]; do
+    if [ -d "/proc/$pid" ]; then
+      cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+    else
+      cwd=$(LC_ALL=C lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+    fi
+    case "$cwd/" in "$want"/*) return 0 ;; esac
+    i=$((i + 1))
+    sleep 0.1
+  done
+  return 1
+}
+
 arm_idle_record() {  # <state-dir> <id>
   local state=$1 id=$2 gen
   gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" "$id")
@@ -2690,8 +2708,10 @@ test_herdr_agent_outside_its_worktree_reads_blocked() {
   FM_FAKE_TMUX_MISSING=1
   FM_FAKE_HERDR_BUSY=1
   FM_FAKE_HERDR_AGENT_STATUS=working
-  (cd "$d/primary" && exec sleep 120) >/dev/null 2>&1 &
+  (cd "$d/primary" && FM_TASK_ID=feat-restored exec sleep 120) >/dev/null 2>&1 &
   pid=$!
+  wait_agent_settled_in "$pid" "$d/primary" \
+    || fail "the outside-worktree agent never settled in $primary"
   FM_FAKE_HERDR_AGENT_PID=$pid
   out=$(run_crew_state "$d" feat-restored)
   assert_contains "$out" "state: blocked" "an agent running outside its worktree must read blocked"
@@ -2699,8 +2719,10 @@ test_herdr_agent_outside_its_worktree_reads_blocked() {
   assert_contains "$out" "unsafe worker: its agent runs in $primary" "the verdict must name where the agent actually runs"
   assert_contains "$out" "bin/fm-control.sh feat-restored relaunch" "the verdict must name the relaunch remedy"
   kill "$pid" 2>/dev/null || true
-  (cd "$d/wt" && exec sleep 120) >/dev/null 2>&1 &
+  (cd "$d/wt" && FM_TASK_ID=feat-restored exec sleep 120) >/dev/null 2>&1 &
   pid=$!
+  wait_agent_settled_in "$pid" "$d/wt" \
+    || fail "the in-worktree agent never settled in $d/wt"
   FM_FAKE_HERDR_AGENT_PID=$pid
   out=$(run_crew_state "$d" feat-restored)
   kill "$pid" 2>/dev/null || true

@@ -1270,10 +1270,10 @@ TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
 expect_code 0 "$code" "ship request exits 0"
 assert_contains "$out" '  status: clear' "a ship brief still resolves"
 assert_equals '["default","rule_1","rule_2","rule_3","rule_4"]' "$(jq -c '.questions.rule.criteria | keys' "$LOG/body")" "a ship request omits rule_5 from the options"
-EXPECTED_INSTRUCTIONS=$(cat <<'EOF'
+IFS= read -r -d '' EXPECTED_INSTRUCTIONS <<'EOF' || true
 Which ONE dispatch rule best fits `task` (read `task.brief` and `task.project`)? Each option is the rule's own matching condition; pick `default` when no rule's condition is met, including when a rule's own exemption text excludes this task. Judge size by the whole pull request a worker will merge for this brief, not only the core code: new or changed tests, fixtures, docs, schema and config all count, and so does a decision record where the repository keeps them. A new option, field, check or command carried through code, schema, docs and tests, a fix that must first be reproduced by a new test, or work across several source files usually changes more than 150 lines. A version bump, a pin, a release, a single setting flip, or copying an existing file or workflow usually changes far fewer.
 EOF
-)
+EXPECTED_INSTRUCTIONS=${EXPECTED_INSTRUCTIONS%$'\n'}
 assert_equals "$EXPECTED_INSTRUCTIONS" "$(jq -r .questions.rule.instructions "$LOG/body")" "a ship request carries the size paragraph after one space, word for word"
 
 cat > "$RESPONSE" <<'JSON'
