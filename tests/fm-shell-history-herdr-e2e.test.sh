@@ -79,8 +79,8 @@ pane_capture() { # <pane>
 }
 
 wait_for_capture() { # <pane> <token>
-  local pane=$1 token=$2 i out
-  for i in $(seq 1 60); do
+  local pane=$1 token=$2 out
+  for _ in $(seq 1 60); do
     out=$(pane_capture "$pane") || true
     case "$out" in *"$token"*) return 0 ;; esac
     sleep 0.5
@@ -89,7 +89,7 @@ wait_for_capture() { # <pane> <token>
 }
 
 prove_shell() { # <zsh|bash>
-  local shell=$1 case_dir hist stage pane tab target launch capture
+  local shell=$1 case_dir hist stage pane tab launch capture
   local ready_token="HISTPROBE_READY_$shell" control="HISTPROBE_CONTROL_$shell"
   local export_token="HISTPROBE_EXPORT_$shell" sourced="HISTPROBE_SOURCED_$shell"
   local panerun="HISTPROBE_PANERUN_$shell" stage_base="hist-stage-$shell.sh"
@@ -121,7 +121,6 @@ prove_shell() { # <zsh|bash>
     || fail "$shell: could not create the lab tab"
   pane=$(printf '%s' "$tab" | jq -er '.result.root_pane.pane_id // .result.pane.pane_id') \
     || fail "$shell: could not read the pane id"
-  target="$pane"
   lab pane run "$pane" "$launch" >/dev/null || fail "$shell: could not start the inner shell"
   wait_for_capture "$pane" "$ready_token" \
     || fail "$shell: startup marker never printed, so HISTFILE routing is unproven"
@@ -155,8 +154,7 @@ prove_shell() { # <zsh|bash>
     || fail "$shell: could not type the guarded exit line"
   lab pane send-keys "$pane" enter >/dev/null \
     || fail "$shell: could not submit the guarded exit line"
-  local i
-  for i in $(seq 1 60); do
+  for _ in $(seq 1 60); do
     [ -f "$hist" ] && grep -qF "$control" "$hist" 2>/dev/null && break
     sleep 0.5
   done
