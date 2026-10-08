@@ -74,7 +74,7 @@ case "${1:-}" in
     payload=${1:-}
     if [ "$literal" = 1 ]; then
       case "$payload" in
-        ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
+        " . '"*"'") staged=${payload#" . '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
       esac
       printf '%s\n' "$payload" >> "$D/literal"
       case "$payload" in
@@ -90,13 +90,13 @@ case "${1:-}" in
     else
       printf '%s\n' "$payload" >> "$D/keys"
       case "$payload" in
-        'export GOTMPDIR='*)
+        ' export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
             : > "$FM_FAKE_TRACE_PREPARE"
             while [ ! -e "$FM_FAKE_TRACE_RELEASE" ]; do /bin/sleep 0.01; done
           fi
           ;;
-        'export TRACEPARENT='*)
+        ' export TRACEPARENT='*)
           [ -z "${FM_FAKE_TRACE_EXPORTED:-}" ] || : > "$FM_FAKE_TRACE_EXPORTED"
           ;;
       esac
@@ -2043,7 +2043,7 @@ case "${1:-} ${2:-}" in
     # and tests/fixtures.sh do.
     payload=${4:-}
     case "$payload" in
-      ". '"*"'") staged=${payload#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
+      " . '"*"'") staged=${payload#" . '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || payload=$(cat "$staged") ;;
     esac
     case "$payload" in
       *'encode launch-brief'* | *'Firstmate operational input waiting: read'*)

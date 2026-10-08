@@ -631,7 +631,7 @@ test_send_text_line_clears_partial_input_when_enter_fails() {
   status=$?
   [ "$status" -ne 0 ] || fail "send_text_line should report a failed Enter"
   log=$(cat "$dir/log")
-  assert_contains "$log" $'\x1f''paste'$'\x1f''--pane-id'$'\x1f''7'$'\x1f''--'$'\x1f''export TRACEPARENT=carrier' \
+  assert_contains "$log" $'\x1f''paste'$'\x1f''--pane-id'$'\x1f''7'$'\x1f''--'$'\x1f'' export TRACEPARENT=carrier' \
     "send_text_line did not paste the trace export before the simulated Enter failure"
   zellij_assert_call_order "$dir/log" $'\x1f''Enter' $'\x1f''Ctrl c' \
     "send_text_line did not clear the partial input after Enter failed"

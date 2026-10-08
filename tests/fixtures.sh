@@ -129,8 +129,8 @@ case "${1:-}" in
           # Direct literals past the terminal line buffer are truncated, so a
           # long launch only survives when it arrived through that short source.
           case "$a" in
-            ". '"*"'")
-              staged=${a#". '"}
+            " . '"*"'")
+              staged=${a#" . '"}
               staged=${staged%"'"}
               if [ -f "$staged" ]; then
                 a=$(cat "$staged")

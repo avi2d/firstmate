@@ -63,8 +63,8 @@ case "${1:-}" in
     payload=${1:-}
     if [ "$literal" = 1 ]; then
       case "$payload" in
-        ". '"*"'")
-          staged=${payload#". '"}
+        " . '"*"'")
+          staged=${payload#" . '"}
           staged=${staged%"'"}
           [ ! -f "$staged" ] || payload=$(cat "$staged")
           ;;

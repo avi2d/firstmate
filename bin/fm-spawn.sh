@@ -635,6 +635,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-secondmate-nudge-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-shell-line-lib.sh
+. "$SCRIPT_DIR/fm-shell-line-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-gate-refuse-lib.sh
@@ -3995,12 +3997,14 @@ spawn_current_path() { # <target>
   esac
 }
 spawn_send_literal() { # <target> <text>
+  local guarded
+  guarded=$(fm_shell_history_prefix "$2")
   case "$BACKEND" in
-  tmux) fm_backend_tmux_send_literal "$1" "$2" ;;
-  herdr) fm_backend_herdr_send_literal "$1" "$2" ;;
-  zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
-  orca) fm_backend_orca_send_literal "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
+  tmux) fm_backend_tmux_send_literal "$1" "$guarded" ;;
+  herdr) fm_backend_herdr_send_literal "$1" "$guarded" ;;
+  zellij) fm_backend_zellij_send_literal "$1" "$guarded" "$W" ;;
+  orca) fm_backend_orca_send_literal "$1" "$guarded" ;;
+  cmux) fm_backend_cmux_send_literal "$1" "$guarded" "$W" ;;
   esac
 }
 spawn_send_key() { # <target> <key>
