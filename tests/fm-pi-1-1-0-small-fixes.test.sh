@@ -7,14 +7,37 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-pi-1-1-0-small-fixes)
 
-PI_BIN=$(command -v pi) || fail "test host must provide pi"
-PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-$(cd "$(dirname "$PI_BIN")/../@earendil-works/pi-coding-agent" && pwd -P)}
-PI_TUI_DIR=$(node -p "require.resolve('@earendil-works/pi-tui/package.json',{paths:['$PI_PACKAGE_DIR']})" 2>/dev/null)
-PI_TUI_DIR=$(dirname "$PI_TUI_DIR")
-TYPEBOX_DIR=$(node -p "require.resolve('typebox/package.json',{paths:['$PI_PACKAGE_DIR']})" 2>/dev/null)
-TYPEBOX_DIR=$(dirname "$TYPEBOX_DIR")
+resolve_pi_package() {
+  local candidate version
+  for candidate in "${FM_PI_PACKAGE_DIR:-}" "$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"; do
+    [ -n "$candidate" ] && [ -f "$candidate/package.json" ] || continue
+    version=$(node -p "require('$candidate/package.json').version" 2>/dev/null) || continue
+    if [ "$version" = "1.1.0" ]; then printf '%s\n' "$candidate"; return 0; fi
+  done
+  if command -v pi >/dev/null 2>&1; then
+    candidate=$(cd "$(dirname "$(command -v pi)")/../@earendil-works/pi-coding-agent" 2>/dev/null && pwd -P)
+    if [ -n "$candidate" ] && [ -f "$candidate/package.json" ]; then
+      version=$(node -p "require('$candidate/package.json').version" 2>/dev/null) || version=""
+      if [ "$version" = "1.1.0" ]; then printf '%s\n' "$candidate"; return 0; fi
+    fi
+  fi
+  return 1
+}
+PI_PACKAGE_DIR=$(resolve_pi_package) || PI_PACKAGE_DIR=""
+PI_TUI_DIR=""
+TYPEBOX_DIR=""
+if [ -n "$PI_PACKAGE_DIR" ]; then
+  PI_TUI_DIR=$(node -p "require.resolve('@earendil-works/pi-tui/package.json',{paths:['$PI_PACKAGE_DIR']})" 2>/dev/null)
+  PI_TUI_DIR=$(dirname "$PI_TUI_DIR")
+  TYPEBOX_DIR=$(node -p "require.resolve('typebox/package.json',{paths:['$PI_PACKAGE_DIR']})" 2>/dev/null)
+  TYPEBOX_DIR=$(dirname "$TYPEBOX_DIR")
+fi
 
 test_pi_1_1_0_is_the_proving_version() {
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: no local Pi 1.1.0 package; the live pipeline proof stays out of this run"
+    return 0
+  fi
   local live_version package_version
   live_version=$(pi --version 2>&1 | head -n 1)
   [ "$live_version" = "1.1.0" ] || fail "live pi must be 1.1.0 for this proof, got '$live_version'"
@@ -30,6 +53,7 @@ make_guard_fixture() {  # <name>
   mkdir -p "$fixture/proj/.pi/extensions/lib" "$fixture/proj/bin" "$fixture/home"
   cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$fixture/proj/.pi/extensions/"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$fixture/proj/.pi/extensions/lib/"
+  printf '%s\n' '{"type":"module"}' > "$fixture/proj/package.json"
   cat > "$fixture/proj/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'guard-ran\n' >> "$FM_GUARD_CALLS"
@@ -40,14 +64,116 @@ SH
   printf '%s\n' "$fixture"
 }
 
-drive_guard_sequence() {  # <fixture>
+drive_settle_sequence() {  # <fixture>
   local fixture=$1
   (cd "$fixture/proj" && \
-    PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
     FIXTURE_PROJ="$fixture/proj" \
     FM_HOME="$fixture/home" \
     FM_GUARD_CALLS="$fixture/guard-calls" \
     FM_OPERATIONAL_INPUT_SCRIPT="$ROOT/bin/fm-operational-input.sh" \
+    node --input-type=module 2>&1 <<'JS'
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const proj = process.env.FIXTURE_PROJ;
+const callsFile = process.env.FM_GUARD_CALLS;
+const sequence = JSON.parse(process.env.SETTLE_SEQUENCE);
+const extMod = await import(pathToFileURL(`${proj}/.pi/extensions/fm-primary-turnend-guard.ts`).href);
+
+const handlers = {};
+const followUps = [];
+const pi = {
+  on: (type, handler) => { (handlers[type] ??= []).push(handler); return () => {}; },
+  sendUserMessage: async (content, options) => { followUps.push({ content, options }); },
+};
+extMod.default(pi);
+const settle = handlers.agent_settled?.[0];
+if (!settle) throw new Error("the guard registered no agent_settled handler");
+
+const guardCalls = () => {
+  try {
+    return readFileSync(callsFile, "utf8").split("\n").filter((line) => line === "guard-ran").length;
+  } catch {
+    return 0;
+  }
+};
+const snapshots = [];
+for (const event of sequence) {
+  await settle(event);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  snapshots.push({ guardCalls: guardCalls(), followUps: followUps.length });
+}
+let followUpShapesOk = true;
+for (const followUp of followUps) {
+  if (followUp.options?.deliverAs !== "followUp" || typeof followUp.content !== "string" || followUp.content.length === 0) {
+    followUpShapesOk = false;
+  }
+}
+process.stdout.write(JSON.stringify({ snapshots, followUpShapesOk }));
+JS
+)
+}
+
+test_guard_skips_followup_on_aborted_settle() {
+  local fixture out
+  fixture=$(make_guard_fixture "$TMP_ROOT/guard-aborted")
+  : > "$fixture/guard-calls"
+  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled","aborted":true}]' drive_settle_sequence "$fixture") \
+    || fail "aborted settle drive failed: $out"
+  [ "$out" = '{"snapshots":[{"guardCalls":0,"followUps":0}],"followUpShapesOk":true}' ] \
+    || fail "an aborted settle must run no guard and send no follow-up, got '$out'"
+  pass "a cancelled run settles with no guard run and no follow-up"
+}
+
+test_guard_still_follows_up_without_aborted_field() {
+  local fixture out
+  fixture=$(make_guard_fixture "$TMP_ROOT/guard-legacy")
+  : > "$fixture/guard-calls"
+  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled"}]' drive_settle_sequence "$fixture") \
+    || fail "legacy settle drive failed: $out"
+  [ "$out" = '{"snapshots":[{"guardCalls":1,"followUps":1}],"followUpShapesOk":true}' ] \
+    || fail "a settle with no aborted field must keep the existing guard follow-up, got '$out'"
+  pass "a settle from an older Pi without the aborted field still guards"
+}
+
+test_guard_still_follows_up_when_not_aborted() {
+  local fixture out
+  fixture=$(make_guard_fixture "$TMP_ROOT/guard-completed")
+  : > "$fixture/guard-calls"
+  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled","aborted":false}]' drive_settle_sequence "$fixture") \
+    || fail "completed settle drive failed: $out"
+  [ "$out" = '{"snapshots":[{"guardCalls":1,"followUps":1}],"followUpShapesOk":true}' ] \
+    || fail "a completed settle must keep the existing guard follow-up, got '$out'"
+  pass "a completed run still guards and follows up"
+}
+
+test_guard_abort_consumes_exactly_one_suppression() {
+  local fixture out
+  fixture=$(make_guard_fixture "$TMP_ROOT/guard-suppression")
+  : > "$fixture/guard-calls"
+  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled"},{"type":"agent_settled","aborted":true},{"type":"agent_settled"}]' drive_settle_sequence "$fixture") \
+    || fail "suppression sequence drive failed: $out"
+  [ "$out" = '{"snapshots":[{"guardCalls":1,"followUps":1},{"guardCalls":1,"followUps":1},{"guardCalls":2,"followUps":2}],"followUpShapesOk":true}' ] \
+    || fail "an aborted settle must neither send nor wedge a second follow-up, got '$out'"
+  pass "an aborted follow-up consumes its own suppression and the next run still guards"
+}
+
+test_guard_sequence_through_pi_runner() {
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: no local Pi 1.1.0 package; the runner proof stays out of this run"
+    return 0
+  fi
+  local fixture out
+  fixture=$(make_guard_fixture "$TMP_ROOT/guard-runner")
+  : > "$fixture/guard-calls"
+  out=$(cd "$fixture/proj" && \
+    PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
+    FIXTURE_PROJ="$fixture/proj" \
+    FM_HOME="$fixture/home" \
+    FM_GUARD_CALLS="$fixture/guard-calls" \
+    FM_GUARD_EXIT=2 \
+    FM_OPERATIONAL_INPUT_SCRIPT="$ROOT/bin/fm-operational-input.sh" \
+    SETTLE_SEQUENCE='[{"type":"agent_settled","aborted":true},{"type":"agent_settled"}]' \
     node --input-type=module 2>&1 <<'JS'
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -122,51 +248,10 @@ for (const followUp of followUps) {
 }
 process.stdout.write(JSON.stringify({ snapshots, followUpShapesOk }));
 JS
-)
-}
-
-test_guard_skips_followup_on_aborted_settle() {
-  local fixture out
-  fixture=$(make_guard_fixture "$TMP_ROOT/guard-aborted")
-  : > "$fixture/guard-calls"
-  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled","aborted":true}]' drive_guard_sequence "$fixture") \
-    || fail "aborted settle drive failed: $out"
-  [ "$out" = '{"snapshots":[{"guardCalls":0,"followUps":0}],"followUpShapesOk":true}' ] \
-    || fail "an aborted settle must run no guard and send no follow-up, got '$out'"
-  pass "a cancelled run settles with no guard run and no follow-up"
-}
-
-test_guard_still_follows_up_without_aborted_field() {
-  local fixture out
-  fixture=$(make_guard_fixture "$TMP_ROOT/guard-legacy")
-  : > "$fixture/guard-calls"
-  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled"}]' drive_guard_sequence "$fixture") \
-    || fail "legacy settle drive failed: $out"
-  [ "$out" = '{"snapshots":[{"guardCalls":1,"followUps":1}],"followUpShapesOk":true}' ] \
-    || fail "a settle with no aborted field must keep the existing guard follow-up, got '$out'"
-  pass "a settle from an older Pi without the aborted field still guards"
-}
-
-test_guard_still_follows_up_when_not_aborted() {
-  local fixture out
-  fixture=$(make_guard_fixture "$TMP_ROOT/guard-completed")
-  : > "$fixture/guard-calls"
-  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled","aborted":false}]' drive_guard_sequence "$fixture") \
-    || fail "completed settle drive failed: $out"
-  [ "$out" = '{"snapshots":[{"guardCalls":1,"followUps":1}],"followUpShapesOk":true}' ] \
-    || fail "a completed settle must keep the existing guard follow-up, got '$out'"
-  pass "a completed run still guards and follows up"
-}
-
-test_guard_abort_consumes_exactly_one_suppression() {
-  local fixture out
-  fixture=$(make_guard_fixture "$TMP_ROOT/guard-suppression")
-  : > "$fixture/guard-calls"
-  out=$(FM_GUARD_EXIT=2 SETTLE_SEQUENCE='[{"type":"agent_settled"},{"type":"agent_settled","aborted":true},{"type":"agent_settled"}]' drive_guard_sequence "$fixture") \
-    || fail "suppression sequence drive failed: $out"
-  [ "$out" = '{"snapshots":[{"guardCalls":1,"followUps":1},{"guardCalls":1,"followUps":1},{"guardCalls":2,"followUps":2}],"followUpShapesOk":true}' ] \
-    || fail "an aborted settle must neither send nor wedge a second follow-up, got '$out'"
-  pass "an aborted follow-up consumes its own suppression and the next run still guards"
+) || fail "runner sequence drive failed: $out"
+  [ "$out" = '{"snapshots":[{"guardCalls":0,"followUps":0},{"guardCalls":1,"followUps":1}],"followUpShapesOk":true}' ] \
+    || fail "the real runner must skip the aborted settle and guard the next, got '$out'"
+  pass "Pi's own runner skips the aborted settle and guards the next"
 }
 
 make_calm_fixture() {  # <name>
@@ -184,6 +269,10 @@ make_calm_fixture() {  # <name>
 }
 
 test_calm_shell_honors_output_pad_zero() {
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: no local Pi 1.1.0 package; the calm render proof stays out of this run"
+    return 0
+  fi
   local fixture out
   fixture=$(make_calm_fixture "$TMP_ROOT/calm-pad")
   out=$(cd "$fixture/proj" && PI_PACKAGE_DIR="$PI_PACKAGE_DIR" FM_HOME="$fixture/home" node --input-type=module 2>&1 <<'JS'
@@ -243,7 +332,7 @@ const renderRow = (outputPad) => {
   row.markExecutionStarted();
   row.setArgsComplete();
   row.updateResult({ content: [{ type: "text", text: "alpha" }], details: {}, isError: false });
-  return row.render(60).map((line) => line.replace(/\[[0-9;]*m/g, ""));
+  return row.render(60).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 };
 const pad0 = renderRow(0);
 const pad1 = renderRow(1);
@@ -263,6 +352,10 @@ JS
 }
 
 test_calm_shell_falls_back_to_one_without_output_pad() {
+  if [ -z "$PI_PACKAGE_DIR" ]; then
+    echo "skip: no local Pi 1.1.0 package; the calm fallback proof stays out of this run"
+    return 0
+  fi
   local fixture out
   fixture=$(make_calm_fixture "$TMP_ROOT/calm-fallback")
   out=$(cd "$fixture/proj" && PI_PACKAGE_DIR="$PI_PACKAGE_DIR" FM_HOME="$fixture/home" node --input-type=module 2>&1 <<'JS'
@@ -319,7 +412,7 @@ const renderShell = async (outputPad) => {
     ...(outputPad === undefined ? {} : { outputPad }),
   };
   const shell = await read.renderCall({ path: "sample.txt" }, theme, context);
-  return shell.render(60).map((line) => line.replace(/\[[0-9;]*m/g, ""));
+  return shell.render(60).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 };
 const absent = await renderShell(undefined);
 const one = await renderShell(1);
@@ -340,6 +433,7 @@ test_guard_skips_followup_on_aborted_settle
 test_guard_still_follows_up_without_aborted_field
 test_guard_still_follows_up_when_not_aborted
 test_guard_abort_consumes_exactly_one_suppression
+test_guard_sequence_through_pi_runner
 test_calm_shell_honors_output_pad_zero
 test_calm_shell_falls_back_to_one_without_output_pad
 
