@@ -1050,7 +1050,7 @@ test_pi_threads_model_and_max_effort() {
   expect_code 0 "$status" "pi spawn with max effort should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" pi openai-codex/gpt-5.6-sol max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
+  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi' --approve --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
     "pi launch did not thread the requested model and max thinking level in Pi's default TUI"
   assert_not_contains "$launch" "FM_FIRSTMATE_PI_LAUNCH_BRIEF=" \
     "pi launch still exports the removed Calm input-reroute binding"
@@ -1072,7 +1072,7 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity() {
   assert_contains "$out" "spawned $id harness=pi-signed" "pi-signed spawn did not preserve its visible identity"
   assert_meta_profile "$HOME_DIR/state/$id.meta" pi-signed openai-codex/gpt-5.6-sol max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
+  assert_contains "$launch" "FM_PI_HARNESS=pi-signed '$FAKEBIN_DIR/pi-signed' --approve --model 'openai-codex/gpt-5.6-sol' --thinking 'max' -e" \
     "pi-signed launch did not keep Pi's default TUI with Pi's model, thinking, and extension semantics"
   assert_contains "$launch" "fm-operational-input.sh' encode launch-brief" \
     "pi-signed launch lost the canonical typed launch-brief envelope"
@@ -1199,21 +1199,33 @@ test_pi_seeded_secondmate_preapproves_project_trust() {
   pass "seeded Pi/pi-signed secondmate launches carry session --approve when advertised"
 }
 
-test_pi_worker_launch_omits_seeded_home_approve() {
-  local rec id out status launch
-  id=profile-pi-worker-no-approve-z8f
-  rec=$(make_spawn_case profile-pi-worker-no-approve pi "$id")
-  read_case_record "$rec"
+test_pi_worker_launch_preapproves_project_trust() {
+  local harness rec id out status launch
+  for harness in pi pi-signed; do
+    id="profile-${harness}-ship-approve-z8f"
+    rec=$(make_spawn_case "profile-${harness}-ship-approve" "$harness" "$id")
+    read_case_record "$rec"
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
-  status=$?
-  expect_code 0 "$status" "pi ship spawn should succeed"
-  launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "FM_PI_HARNESS=pi '$FAKEBIN_DIR/pi'" \
-    "pi worker launch lost its probed executable"
-  assert_not_contains "$launch" "--approve" \
-    "ordinary Pi worker launches must not receive secondmate seeded-home --approve"
-  pass "ordinary Pi worker launches omit --approve"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+    status=$?
+    expect_code 0 "$status" "$harness ship spawn should succeed"
+    launch=$(cat "$LAUNCH_LOG")
+    assert_contains "$launch" "FM_PI_HARNESS=$harness '$FAKEBIN_DIR/$harness' --approve" \
+      "$harness ship spawn must pre-approve project trust when help advertises --approve"
+
+    id="profile-${harness}-scout-approve-z8f"
+    rec=$(make_spawn_case "profile-${harness}-scout-approve" "$harness" "$id")
+    read_case_record "$rec"
+
+    out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+      "$id" "$PROJ_DIR" --scout --harness "$harness")
+    status=$?
+    expect_code 0 "$status" "$harness scout spawn should succeed"
+    launch=$(cat "$LAUNCH_LOG")
+    assert_contains "$launch" "FM_PI_HARNESS=$harness '$FAKEBIN_DIR/$harness' --approve" \
+      "$harness scout spawn must pre-approve project trust when help advertises --approve"
+  done
+  pass "Pi/pi-signed ship and scout launches carry session --approve when advertised"
 }
 
 test_pi_approve_probe_omits_unsupported_flag() {
@@ -1235,7 +1247,32 @@ test_pi_approve_probe_omits_unsupported_flag() {
     assert_contains "$launch" "'$FAKEBIN_DIR/$harness'" \
       "$harness without --approve must still launch the probed executable"
     assert_not_contains "$launch" "--approve" \
-      "$harness without advertised --approve must omit the flag"
+      "$harness secondmate without advertised --approve must omit the flag"
+
+    id="profile-${harness}-worker-no-approve-z8g"
+    rec=$(make_spawn_case "profile-${harness}-worker-no-approve" codex "$id")
+    read_case_record "$rec"
+
+    out=$(FM_TEST_PI_VERSION=0.50.0 \
+      run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness "$harness")
+    status=$?
+    expect_code 0 "$status" "$harness ship without --approve must still spawn"
+    launch=$(cat "$LAUNCH_LOG")
+    assert_not_contains "$launch" "--approve" \
+      "$harness ship without advertised --approve must omit the flag"
+
+    id="profile-${harness}-scout-no-approve-z8g"
+    rec=$(make_spawn_case "profile-${harness}-scout-no-approve" codex "$id")
+    read_case_record "$rec"
+
+    out=$(FM_TEST_PI_VERSION=0.50.0 \
+      run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+      "$id" "$PROJ_DIR" --scout --harness "$harness")
+    status=$?
+    expect_code 0 "$status" "$harness scout without --approve must still spawn"
+    launch=$(cat "$LAUNCH_LOG")
+    assert_not_contains "$launch" "--approve" \
+      "$harness scout without advertised --approve must omit the flag"
   done
   pass "Pi approve probing omits --approve when help does not advertise it"
 }
@@ -2058,7 +2095,7 @@ test_pi_signed_threads_shared_pi_profile_and_preserves_identity
 test_pi_signed_missing_binary_refuses_before_endpoint_or_metadata
 test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity
 test_pi_seeded_secondmate_preapproves_project_trust
-test_pi_worker_launch_omits_seeded_home_approve
+test_pi_worker_launch_preapproves_project_trust
 test_pi_approve_probe_omits_unsupported_flag
 test_batch_forwards_shared_profile_flags
 test_claude_forwards_firstmate_config_dir_when_set

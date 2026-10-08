@@ -184,12 +184,11 @@
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters. For pi and pi-signed, fm-spawn resolves the selected executable
 #   name from PATH once and launches that same path in Pi's default TUI mode.
-#   A --secondmate launch of a Firstmate-seeded home (the existing
-#   .fm-secondmate-home marker validate_firstmate_home_for_spawn already requires)
-#   also adds --approve when that executable's --help advertises it, so the first
-#   unattended launch does not stall on Pi's "Trust project folder?" dialog for that home
-#   path; --approve is session-scoped to the launch cwd and does not rewrite the
-#   operator's trust.json. Ordinary Pi worker launches never receive --approve.
+#   Every Pi-family launch also adds --approve when that executable's --help
+#   advertises it, so an unattended launch never stalls on Pi's "Trust project
+#   folder?" dialog for a not-yet-trusted directory holding project-local Pi
+#   resources; --approve is session-scoped to the launch cwd and does not rewrite
+#   the operator's trust.json.
 #   A missing selected executable refuses before endpoint creation, and pi-signed
 #   never falls back to pi.
 #   Devin is worker-only: --permission-mode dangerous and
@@ -361,7 +360,7 @@
 #                  Firstmate channel directories (claude_add_dirs_flag below;
 #                  supplies its own trailing space, empty never used)
 #     __PIBIN__    quoted concrete Pi-family executable path resolved from PATH
-#     __PIAPPROVE__ optional --approve on a seeded Pi/pi-signed secondmate when
+#     __PIAPPROVE__ optional --approve on a Pi/pi-signed launch when that
 #                  that executable advertises the flag (empty otherwise; session
 #                  trust for the launch cwd only, never a trust.json rewrite)
 #     __PIRESUME__ optional relaunch-only `--session <reference>` that keeps a
@@ -1970,10 +1969,10 @@ resolve_pi_executable() {
 
 # Pi's CLI surface is version-dependent, so probe the resolved executable's help
 # before composing the session-scoped project trust flag; an absent or
-# inconclusive probe omits it so older Pi versions can still spawn. A seeded
-# secondmate home carries tracked .pi/extensions that gate Pi behind "Trust
-# project folder?" on first launch; --approve trusts that launch cwd for the
-# run without rewriting ~/.pi/agent/trust.json.
+# inconclusive probe omits it so older Pi versions can still spawn. Any
+# not-yet-trusted launch directory holding project-local Pi resources gates Pi
+# behind "Trust project folder?" on first launch; --approve trusts that launch
+# cwd for the run without rewriting ~/.pi/agent/trust.json.
 pi_supports_approve() {
   local executable=$1 help
   help=$("$executable" --help 2>&1) || return 1
@@ -2394,12 +2393,9 @@ pi | pi-signed)
     echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
     exit 1
   }
-  # Seeded-home signal is .fm-secondmate-home (required by
-  # validate_firstmate_home_for_spawn before any secondmate launch reaches
-  # the pane). Session-only --approve; never expand to a parent path or
-  # rewrite the operator trust store.
+  # Session-only --approve for the launch cwd; never a parent path or a trust-store rewrite.
   PI_APPROVE=
-  if [ "$KIND" = secondmate ] && pi_supports_approve "$PI_BIN"; then
+  if pi_supports_approve "$PI_BIN"; then
     PI_APPROVE=' --approve'
   fi
   LAUNCH=${LAUNCH//__PIAPPROVE__/$PI_APPROVE}
