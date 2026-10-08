@@ -117,6 +117,7 @@ Two rules the commands cannot enforce for you:
   `answers` remains the keyed-choice extractor and never treats freeform prose as a decision key.
   A `feedback` result can still be the last one a review ever produces, so never assume another wake is coming just because the state is not `ended`.
 The crew-hosted recovery ordering and arm-and-acknowledge rule are owned by the [crew-hosted Lavish board contract](../../../docs/configuration.md#crew-hosted-lavish-review-boards); `bin/fm-brief.sh` emits its instruction at the point of use.
+: A worker-owned board's result wakes you only when its owner's agent had already exited at capture; `bin/fm-procevent.sh list` names that owner, and its unread steering-inbox note gets no later stale escalation, so reconcile the owning task now under `stuck-crewmate-recovery`.
 : A routine no-op an adapter positively identifies never becomes a firstmate wake - it is recorded as handled and stays silent, so you never see it.
   For an ordinary firstmate-owned Lavish source that is an ended session carrying nothing, or `browser_disconnected` (classified `disconnected`): a closed review window that still has an open session.
   A task-owned empty terminal round instead reaches its owner's steering inbox for conclusion, as the crew-hosted contract requires.
