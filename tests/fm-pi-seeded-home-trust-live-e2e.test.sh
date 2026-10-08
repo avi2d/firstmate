@@ -135,5 +135,28 @@ fi
 CHECKED=$((CHECKED + 1))
 pass "unseeded path without --approve still prompts on Trust project folder?"
 
-[ "$CHECKED" -ge 3 ] || fail "guard checked nothing useful (checked=$CHECKED)"
+# --- 4. Unseeded worktree WITH --approve starts past the dialog -------------
+UNSEEDED_OK="$LAB/unseeded-approve"
+mkdir -p "$UNSEEDED_OK/.pi/extensions"
+printf 'export default function () {}\n' > "$UNSEEDED_OK/.pi/extensions/dummy.ts"
+printf '{}\n' > "$PI_DIR/trust.json"
+"$REAL_TMUX" -L "$SOCKET" new-session -d -s unseeded-ok -n w -c "$UNSEEDED_OK" -- \
+  env HOME="$LAB/home-unseeded-ok" PI_CODING_AGENT_DIR="$PI_DIR" PI_OFFLINE=1 \
+  "$PI_BIN" --approve --no-session --no-skills --no-prompt-templates \
+  || fail "could not launch pi with --approve on an unseeded path"
+if ! capture_until unseeded-ok 'No models available|escape interrupt' 15 \
+  "$LAB/pane-unseeded-ok.txt"; then
+  fail "unseeded path with --approve never reached a post-trust TUI within 15s:
+$(cat "$LAB/pane-unseeded-ok.txt")"
+fi
+if printf '%s' "$(cat "$LAB/pane-unseeded-ok.txt")" | grep -qiE 'Trust project folder'; then
+  fail "unseeded path with --approve still showed Trust project folder?:
+$(cat "$LAB/pane-unseeded-ok.txt")"
+fi
+"$REAL_TMUX" -L "$SOCKET" send-keys -t unseeded-ok:w Escape >/dev/null 2>&1 || true
+"$REAL_TMUX" -L "$SOCKET" kill-session -t unseeded-ok >/dev/null 2>&1 || true
+CHECKED=$((CHECKED + 1))
+pass "unseeded path with --approve starts past the trust dialog"
+
+[ "$CHECKED" -ge 4 ] || fail "guard checked nothing useful (checked=$CHECKED)"
 echo "# all fm-pi-seeded-home-trust-live-e2e checks passed ($CHECKED)"
