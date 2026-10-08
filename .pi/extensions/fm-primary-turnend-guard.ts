@@ -600,11 +600,12 @@ export default function (pi: ExtensionAPI) {
     return { block: true, reason: result.stderr.trim() || "denied by the watcher-arm PreToolUse seatbelt" };
   });
 
-  pi.on("agent_settled", async () => {
+  pi.on("agent_settled", async (event) => {
     if (guardFollowupActive) {
       guardFollowupActive = false;
       return;
     }
+    if (event.aborted) return;
 
     const result = await runGuard();
     if (result.code !== 2) return;

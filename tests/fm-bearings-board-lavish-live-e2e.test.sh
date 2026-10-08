@@ -34,11 +34,20 @@ pass() { printf 'ok - %s\n' "$1"; }
 note() { printf '# %s\n' "$1"; }
 
 LAB=''
+SHARED_LAVISH_STATE=''
+LAVISH_PORT=''
+LAVISH_GUARD_ARMED=0
 cleanup() {
   fm_test_reap_procevent_homes
   [ -z "$LAB" ] || {
     [ ! -f "$LAB/.lavish/bearings-board.html" ] \
       || lavish-axi end "$LAB/.lavish/bearings-board.html" >/dev/null 2>&1 || true
+    # Only the private server is ever stopped: before the export below, the
+    # default address would be the shared one.
+    if [ "$LAVISH_GUARD_ARMED" = 1 ]; then
+      LAVISH_AXI_STATE_DIR="$LAB/lavish-axi" LAVISH_AXI_PORT="$LAVISH_PORT" LAVISH_AXI_NO_OPEN=1 \
+        lavish-axi stop >/dev/null 2>&1 || true
+    fi
     rm -rf "$LAB"
   }
 }
@@ -50,7 +59,19 @@ note "lavish-axi ${VERSION:-version-unknown}"
 
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-bearings-lavish-live.XXXXXX") || fail "cannot create the guard lab"
 LAB=$(cd -P -- "$LAB" && pwd -P)
-mkdir -p "$LAB/state" "$LAB/data"
+# Test seam for the cleanup guard: fail here, before any Lavish call exists.
+[ "${FM_BEARINGS_GUARD_FAIL_EARLY:-0}" != 1 ] || fail "injected failure before the private Lavish export"
+mkdir -p "$LAB/state" "$LAB/data" "$LAB/lavish-axi"
+# Without its own state directory and port, the guard opens its scratch board
+# on the shared 127.0.0.1:4387 server and pops a review window.
+SHARED_LAVISH_STATE="${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json"
+LAVISH_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])') \
+  || fail "cannot pick a private Lavish port"
+LAVISH_AXI_STATE_DIR="$LAB/lavish-axi"
+LAVISH_AXI_PORT="$LAVISH_PORT"
+LAVISH_AXI_NO_OPEN=1
+export LAVISH_AXI_STATE_DIR LAVISH_AXI_PORT LAVISH_AXI_NO_OPEN
+LAVISH_GUARD_ARMED=1
 fm_test_track_procevent_home "$LAB" "$LAB/procevent-claims"
 
 cat > "$LAB/payload.json" <<'JSON'
@@ -120,3 +141,13 @@ esac
 lavish-axi 2>/dev/null | grep -F "$BOARD," | grep -q ',open,' \
   || fail "the board build reported success while the session was still not live"
 pass "the board build reopens a captain-ended session against real lavish-axi instead of arming a dead one"
+
+# The guard board must never reach the shared server or its session store.
+shared_listing=$(env -u LAVISH_AXI_STATE_DIR -u LAVISH_AXI_PORT -u LAVISH_AXI_NO_OPEN lavish-axi 2>/dev/null) || shared_listing=''
+printf '%s\n' "$shared_listing" | grep -F "$BOARD" | grep -q ',open,' \
+  && fail "the guard board leaked onto the shared Lavish server"
+if [ -f "$SHARED_LAVISH_STATE" ]; then
+  grep -F "$BOARD" "$SHARED_LAVISH_STATE" | grep -q . \
+    && fail "the guard board leaked into the shared Lavish session store: $SHARED_LAVISH_STATE"
+fi
+pass "the guard board left no session on the shared Lavish server or its session store"
