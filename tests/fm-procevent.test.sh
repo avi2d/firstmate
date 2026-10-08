@@ -92,6 +92,26 @@ new_task_endpoint() {  # <home> <task-id>
   printf 'window=fmtest:fm-%s\nworktree=%s/worktree-%s\nproject=fmtest\n' "$2" "$1" "$2" \
     > "$1/state/$2.meta"
 }
+# A board answer for an owner whose agent is not running also wakes firstmate,
+# so every fixture worker runs a live agent unless its test stubs tmux itself.
+LIVE_TMUX_BIN=$(fm_fakebin "$TMP_ROOT/live-tmux-stub")
+cat > "$LIVE_TMUX_BIN/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  list-windows)
+    for meta in "${FM_HOME:-/nonexistent}"/state/*.meta; do
+      [ -f "$meta" ] && sed -n 's/^window=[^:]*://p' "$meta"
+    done
+    exit 0 ;;
+  display-message)
+    case "$*" in *pane_current_command*) printf 'claude\n' ;; esac
+    exit 0 ;;
+esac
+exit 0
+SH
+chmod +x "$LIVE_TMUX_BIN/tmux"
+export PATH="$LIVE_TMUX_BIN:$PATH"
 wake_payloads() { awk -F '\t' '{print $5}' "$1/state/.wake-queue" 2>/dev/null; }
 
 # The wake queue is a durable tab-separated record firstmate consumes:
@@ -1149,6 +1169,56 @@ done
 [ ! -f "$HREDELIVER/state/procevent-inbox/$redeliver_id.1.handled" ] \
   || fail "reconcile closed the round on its own, without the owner's explicit handled call"
 pass "an acknowledged note is never resurrected and stops ringing across repeated reconciles"
+
+# --- end-user-aligned regression: a board answered after its owner exited ---
+# A scout stopped once its report is done keeps its tab, now a bare shell, and
+# still owns its board until the captain answers. Nobody reads that exited
+# agent's inbox, so the answer must wake firstmate as the capture lands rather
+# than once the watcher's re-ring ladder later notices the unread note.
+HEXITED="$TMP_ROOT/hexited"; new_home "$HEXITED"
+EXITED_BIN=$(fm_fakebin "$TMP_ROOT/exited-tmux-stub")
+cat > "$EXITED_BIN/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  send-keys) printf '%s\n' "$*" >> "${FM_SEND_LOG:-/dev/null}"; exit 0 ;;
+  list-windows) printf 'fm-worker-exited\n'; exit 0 ;;
+  display-message)
+    case "$*" in *pane_current_command*) printf 'zsh\n' ;; esac
+    exit 0 ;;
+esac
+exit 0
+SH
+chmod +x "$EXITED_BIN/tmux"
+EXITED_ART="$TMP_ROOT/exited-board.html"
+printf '<h1>exited owner</h1>\n' > "$EXITED_ART"
+lavish_session "$EXITED_ART"
+exited_id=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$EXITED_ART")
+fm_test_track_procevent_home "$HEXITED"
+new_task_endpoint "$HEXITED" worker-exited
+EXITED_LOG="$TMP_ROOT/exited-ring.log"; : > "$EXITED_LOG"
+PATH="$EXITED_BIN:$ADOPT_BIN:$PATH" FM_SEND_LOG="$EXITED_LOG" FM_HOME="$HEXITED" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$EXITED_ART" --for worker-exited >/dev/null
+wait_capture "$HEXITED" "$exited_id" \
+  || fail "the exited owner's round was never captured"
+[ -f "$HEXITED/state/worker-exited.inbox/001.msg" ] \
+  || fail "the exited owner's round never reached its steering inbox"
+[ ! -s "$EXITED_LOG" ] \
+  || fail "the doorbell was typed into an endpoint with no agent: $(cat "$EXITED_LOG")"
+[ "$(wake_payloads "$HEXITED")" = "check: procevent lavish $exited_id 1" ] \
+  || fail "the exited owner's board answer did not wake firstmate at capture time: $(wake_payloads "$HEXITED")"
+i=0
+while [ "$i" -lt 3 ]; do
+  PATH="$EXITED_BIN:$ADOPT_BIN:$PATH" FM_SEND_LOG="$EXITED_LOG" pe "$HEXITED" reconcile >/dev/null 2>&1 || true
+  i=$((i + 1))
+done
+[ "$(wake_payloads "$HEXITED")" = "check: procevent lavish $exited_id 1" ] \
+  || fail "reconcile queued the exited owner's board answer again: $(wake_payloads "$HEXITED")"
+exited_due=$(FM_TASK_INBOX_GRACE_SECS=0 bash -c '. "$1/bin/fm-task-inbox-lib.sh"; fm_task_inbox_due_action "$2" worker-exited' \
+  _ "$ROOT" "$HEXITED/state")
+[ "$exited_due" = quiet ] \
+  || fail "the watcher would escalate the already-surfaced note a second time: $exited_due"
+pass "a board answered after its owner exited wakes firstmate when it is captured"
 
 # --- end-user-aligned regression: a conclude only closes its own round --------
 # Acknowledging a terminal round retires the board it belongs to. The same
