@@ -116,7 +116,7 @@ case "${1:-}" in
     done
     if [ -n "$literal" ]; then
       case "$literal" in
-        ". '"*"'") staged=${literal#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || literal=$(cat "$staged") ;;
+        " . '"*"'") staged=${literal#" . '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || literal=$(cat "$staged") ;;
       esac
       case "$literal" in
         *' --auto')
@@ -337,7 +337,7 @@ test_kimi_launch_then_send_is_verified() {
     || fail "kimi spawn left its launch directory readable by others: $(path_mode "$launch_dir")"
   [ "$(path_mode "$launch_file")" = 600 ] \
     || fail "kimi spawn staged its launch command without mode 0600: $(path_mode "$launch_file")"
-  grep -qF -- "-l . '$launch_file'" "$CASE_DIR/tmux-calls.log" \
+  grep -qF -- "-l  . '$launch_file'" "$CASE_DIR/tmux-calls.log" \
     || fail "kimi spawn did not type a short line sourcing its staged launch command"
   assert_grep "export GOTMPDIR=$task_tmp/gotmp" "$CASE_DIR/tmux-calls.log" \
     "kimi spawn did not export its Go temp directory into the pane"
@@ -432,7 +432,7 @@ test_kimi_spawn_refuses_shared_task_temp_root() {
     || fail "kimi spawn overwrote a pre-existing launch.sh"
   [ "$(path_mode "$task_tmp/launch.sh")" = 644 ] \
     || fail "kimi spawn reused the shared per-id launch file"
-  grep -qF -- "-l . '$launch_file'" "$CASE_DIR/tmux-calls.log" \
+  grep -qF -- "-l  . '$launch_file'" "$CASE_DIR/tmux-calls.log" \
     || fail "kimi spawn did not type a short line sourcing its namespaced launch command"
   rm -rf "$task_tmp" "$launch_dir"
   pass "fm-spawn: unsafe task roots are refused, owned roots are tightened, and launch files stay unique and 0600"

@@ -651,7 +651,7 @@ test_send_text_line_clears_partial_input_when_enter_fails() {
   status=$?
   [ "$status" -ne 0 ] || fail "send_text_line should report a failed Enter"
   log=$(cat "$dir/log")
-  assert_contains "$log" $'\x1f''send'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''--'$'\x1f''export TRACEPARENT=carrier' \
+  assert_contains "$log" $'\x1f''send'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''--'$'\x1f'' export TRACEPARENT=carrier' \
     "send_text_line did not send the trace export before the simulated Enter failure"
   assert_contains "$log" $'\x1f''send-key'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000'$'\x1f''--surface'$'\x1f''bbbbbbbb-1111-1111-1111-111111111111'$'\x1f''ctrl-c' \
     "send_text_line did not clear the partial input after Enter failed"

@@ -121,14 +121,14 @@ remote_pane_payload() {  # <verb>
 }
 remote_launch_command() {
   local source_line staged
-  source_line=$(remote_pane_payload send-text | grep "^\. '.*'\$" | tail -1)
-  staged=${source_line#". '"}
+  source_line=$(remote_pane_payload send-text | grep "^ \. '.*'\$" | tail -1)
+  staged=${source_line#" . '"}
   staged=${staged%"'"}
   [ -n "$staged" ] && [ -f "$staged" ] || return 1
   cat "$staged"
 }
 remote_pane_exports() {
-  remote_pane_payload run | grep '^export '
+  remote_pane_payload run | grep '^ export '
 }
 
 # Provision and register the remote route from the captain-facing primary.
@@ -160,7 +160,7 @@ $launch"
 
 # --- the remote route delivers the switch, allowlist absent -----------------
 run_remote_launch 'allowlist absent'
-remote_pane_exports | grep -qx 'export COMPACT_ADVISER_DISABLE=1' \
+remote_pane_exports | grep -qx ' export COMPACT_ADVISER_DISABLE=1' \
   || fail "the remote pane shell never received the compact-adviser export"
 SEEN=$(replay_remote_launch preamble) \
   || fail "the command the remote pane received failed to run"

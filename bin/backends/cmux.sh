@@ -119,6 +119,8 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # every backend so the decision cannot drift.
 # shellcheck source=bin/fm-composer-lib.sh
 . "$FM_BACKEND_CMUX_ROOT/bin/fm-composer-lib.sh"
+# shellcheck source=bin/fm-shell-line-lib.sh
+. "$FM_BACKEND_CMUX_ROOT/bin/fm-shell-line-lib.sh"
 
 # Verified minimum: the version the live pass ran against (docs/cmux-backend.md).
 FM_BACKEND_CMUX_MIN_MAJOR=0
@@ -506,7 +508,7 @@ fm_backend_cmux_send_key() {  # <target> <key> [expected-label]
 
 # fm_backend_cmux_send_text_line: send one line of TEXT then submit.
 fm_backend_cmux_send_text_line() {  # <target> <text> [expected-label]
-  fm_backend_cmux_send_literal "$1" "$2" "${3:-}" || return 1
+  fm_backend_cmux_send_literal "$1" "$(fm_shell_history_prefix "$2")" "${3:-}" || return 1
   fm_backend_cmux_send_key "$1" Enter "${3:-}" && return 0
   fm_backend_cmux_send_key "$1" C-c "${3:-}" >/dev/null 2>&1 && return 1
   return 2

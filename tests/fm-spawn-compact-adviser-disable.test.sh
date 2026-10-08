@@ -77,14 +77,14 @@ emitted_launch_env() {
   # The pane exports run before the launch command in the real pane shell, so
   # replay them here in the same order: the filtered launch environment retains
   # what the pane holds, and dropping them would test a pane that never existed.
-  preamble=$(grep '^export ' "$panelog")
+  preamble=$(grep '^ export ' "$panelog")
   env -i HOME="$TMP_ROOT/pane-home" PATH="$fakebin:$PATH" TERM=xterm \
     TMUX=synthetic-pane COMPACT_ADVISER_DISABLE="$CONTRARY" \
     /bin/sh -c "$preamble
 $launch"
 }
 
-pane_export_lines() { grep -c '^export COMPACT_ADVISER_DISABLE=1$' "$1" || true; }
+pane_export_lines() { grep -c '^ export COMPACT_ADVISER_DISABLE=1$' "$1" || true; }
 
 assert_pane_export_precedes_launch() {  # <pane-log> <label>
   local panelog=$1 label=$2
@@ -93,8 +93,8 @@ assert_pane_export_precedes_launch() {  # <pane-log> <label>
   # Ordering: the export must ride the same pre-launch site as GOTMPDIR, which
   # is what makes it set before the agent process starts.
   local gotmp switch
-  gotmp=$(grep -n '^export GOTMPDIR=' "$panelog" | tail -1 | cut -d: -f1)
-  switch=$(grep -n '^export COMPACT_ADVISER_DISABLE=1$' "$panelog" | tail -1 | cut -d: -f1)
+  gotmp=$(grep -n '^ export GOTMPDIR=' "$panelog" | tail -1 | cut -d: -f1)
+  switch=$(grep -n '^ export COMPACT_ADVISER_DISABLE=1$' "$panelog" | tail -1 | cut -d: -f1)
   [ -n "$gotmp" ] && [ -n "$switch" ] \
     || fail "$label: the pane log is missing the pre-launch exports"
   [ "$switch" -gt "$gotmp" ] \
@@ -253,8 +253,8 @@ case "${1:-}" in
     payload=${1:-}
     if [ "$literal" = 1 ]; then
       case "$payload" in
-        ". '"*"'")
-          staged=${payload#". '"}
+        " . '"*"'")
+          staged=${payload#" . '"}
           staged=${staged%"'"}
           [ ! -f "$staged" ] || payload=$(cat "$staged")
           ;;
@@ -331,12 +331,12 @@ test_relaunch_rebuilds_the_switch() {
     status=$?
     expect_code 0 "$status" "relaunch with allowlist=$setting should succeed: $out"
 
-    grep -qx 'export COMPACT_ADVISER_DISABLE=1' "$dir/fake/keys" \
+    grep -qx ' export COMPACT_ADVISER_DISABLE=1' "$dir/fake/keys" \
       || fail "relaunch with allowlist=$setting did not re-export the compact-adviser switch into the pane"
     launch=$(grep 'encode launch-brief' "$dir/fake/literal" | tail -1)
     [ -n "$launch" ] || fail "relaunch with allowlist=$setting sent no replacement launch command"
     install_env_probe "$dir/fakebin" codex
-    preamble=$(grep '^export ' "$dir/fake/keys")
+    preamble=$(grep '^ export ' "$dir/fake/keys")
     seen=$(env -i HOME="$dir/user-home" PATH="$dir/fakebin:$PATH" TERM=xterm \
       TMUX=synthetic-pane COMPACT_ADVISER_DISABLE="$CONTRARY" \
       /bin/sh -c "$preamble

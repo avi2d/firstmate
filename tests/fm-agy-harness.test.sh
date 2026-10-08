@@ -495,7 +495,7 @@ case "${1:-}" in
     done
     if [ -n "$literal" ]; then
       case "$literal" in
-        ". '"*"'") staged=${literal#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || literal=$(cat "$staged") ;;
+        " . '"*"'") staged=${literal#" . '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || literal=$(cat "$staged") ;;
       esac
       case "$literal" in
         *--prompt-interactive*)

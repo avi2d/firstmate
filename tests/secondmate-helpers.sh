@@ -36,8 +36,8 @@ case "${1:-}" in
     for arg in "$@"; do
       if [ "$prev" = -l ]; then
         case "$arg" in
-          ". '"*"'")
-            staged=${arg#". '"}
+          " . '"*"'")
+            staged=${arg#" . '"}
             staged=${staged%"'"}
             [ ! -f "$staged" ] || printf 'staged-launch %s\n' "$(cat "$staged")" >> "$FM_FAKE_TMUX_LOG"
             ;;

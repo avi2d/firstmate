@@ -24,6 +24,8 @@
 . "$FM_BACKEND_LIB_DIR/fm-session-lock-lib.sh"
 # shellcheck source=bin/fm-agent-process-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-agent-process-lib.sh"
+# shellcheck source=bin/fm-shell-line-lib.sh
+. "$FM_BACKEND_LIB_DIR/fm-shell-line-lib.sh"
 
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
@@ -118,7 +120,7 @@ fm_backend_tmux_current_path() {  # <target>
 # (`treehouse get`, the GOTMPDIR export) that already ran this exact sequence
 # inline in fm-spawn.sh. Mirrors `tmux send-keys -t "$T" "<text>" Enter`.
 fm_backend_tmux_send_text_line() {  # <target> <text>
-  tmux send-keys -t "$1" "$2" Enter
+  tmux send-keys -t "$1" "$(fm_shell_history_prefix "$2")" Enter
 }
 
 # fm_backend_tmux_send_literal: send TEXT as literal bytes with no

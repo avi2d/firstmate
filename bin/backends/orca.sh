@@ -11,6 +11,8 @@
 # every backend so the decision cannot drift.
 # shellcheck source=bin/fm-composer-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/../fm-composer-lib.sh"
+# shellcheck source=bin/fm-shell-line-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/../fm-shell-line-lib.sh"
 
 fm_backend_orca_tool_check() {
   command -v orca >/dev/null 2>&1 || { echo "error: backend=orca selected but the 'orca' CLI is not installed" >&2; return 1; }
@@ -166,7 +168,8 @@ fm_backend_orca_terminal_create() {  # <worktree-id> <title>
 }
 
 fm_backend_orca_send_text_line() {  # <terminal-id> <text>
-  local terminal=$1 text=$2
+  local terminal=$1 text
+  text=$(fm_shell_history_prefix "$2")
   fm_backend_orca_tool_check || return 1
   fm_backend_orca_run_json orca terminal send --terminal "$terminal" --text "$text" --enter --json
 }

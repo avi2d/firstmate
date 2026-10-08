@@ -46,21 +46,21 @@ case "${1:-}" in
     if [ "${FM_FAKE_TRACEPARENT_SEND_FAIL:-0}" = 1 ]; then
       for a in "$@"; do
         case "$a" in
-          "export TRACEPARENT="*) exit 1 ;;
+          " export TRACEPARENT="*) exit 1 ;;
         esac
       done
     fi
     if [ "${FM_FAKE_TRACEPARENT_SEND_UNSAFE:-0}" = 1 ]; then
       for a in "$@"; do
         case "$a" in
-          "export TRACEPARENT="*) exit 2 ;;
+          " export TRACEPARENT="*) exit 2 ;;
         esac
       done
     fi
     if [ "${FM_FAKE_TRACE_METADATA_APPEND_FAIL:-0}" = 1 ]; then
       for a in "$@"; do
         case "$a" in
-          "export TRACEPARENT="*)
+          " export TRACEPARENT="*)
             chmod a-w "$FM_FAKE_META_PATH"
             ;;
         esac
@@ -81,7 +81,7 @@ case "${1:-}" in
           Enter|C-m) continue ;;
           *)
             case "$a" in
-              ". '"*"'") staged=${a#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || a=$(cat "$staged") ;;
+              " . '"*"'") staged=${a#" . '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || a=$(cat "$staged") ;;
             esac
             printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG" ;;
         esac
@@ -181,7 +181,7 @@ EOF
 }
 
 meta_traceparent() { sed -n 's/^traceparent=//p' "$1"; }
-injected_traceparent() { sed -n 's/^export TRACEPARENT=//p' "$1"; }
+injected_traceparent() { sed -n 's/^ export TRACEPARENT=//p' "$1"; }
 
 # Two-level primary -> secondmate -> worker regression for the FM_TRACE_CONTEXT
 # effective override. Drives bin/fm-spawn.sh TWICE against real homes and a real
@@ -289,8 +289,8 @@ test_enabled_records_and_injects_identical_carrier_before_launch() {
   fm_trace_context_valid "$itp" || fail "enabled spawn must inject a valid TRACEPARENT export (got '$itp')"
   [ "$mtp" = "$itp" ] || fail "the recorded and injected carriers must be identical (meta='$mtp' injected='$itp')"
 
-  gl=$(grep -n '^export GOTMPDIR=' "$LAUNCH_LOG" | tail -1 | cut -d: -f1)
-  tl=$(grep -n '^export TRACEPARENT=' "$LAUNCH_LOG" | tail -1 | cut -d: -f1)
+  gl=$(grep -n '^ export GOTMPDIR=' "$LAUNCH_LOG" | tail -1 | cut -d: -f1)
+  tl=$(grep -n '^ export TRACEPARENT=' "$LAUNCH_LOG" | tail -1 | cut -d: -f1)
   ll=$(grep -n 'claude' "$LAUNCH_LOG" | tail -1 | cut -d: -f1)
   [ -n "$gl" ] && [ -n "$tl" ] && [ -n "$ll" ] || fail "launch log missing GOTMPDIR/TRACEPARENT/launch lines"
   [ "$tl" -gt "$gl" ] || fail "TRACEPARENT export must ride the GOTMPDIR pre-launch site (gotmp=$gl tp=$tl)"
@@ -312,8 +312,8 @@ test_disabled_writes_and_injects_neither() {
 
   # Anchored regex checks (the assert_grep helpers are fixed-string).
   ! grep -q '^traceparent=' "$meta" || fail "default-off spawn must not write a traceparent= line to meta"
-  ! grep -q '^export TRACEPARENT=' "$LAUNCH_LOG" || fail "default-off spawn must not inject a TRACEPARENT export"
-  grep -q '^export GOTMPDIR=' "$LAUNCH_LOG" || fail "the spawn should still run (GOTMPDIR is always injected)"
+  ! grep -q '^ export TRACEPARENT=' "$LAUNCH_LOG" || fail "default-off spawn must not inject a TRACEPARENT export"
+  grep -q '^ export GOTMPDIR=' "$LAUNCH_LOG" || fail "the spawn should still run (GOTMPDIR is always injected)"
   pass "disabled: neither traceparent= in meta nor a TRACEPARENT export is produced"
 }
 
@@ -333,7 +333,7 @@ test_failed_delivery_omits_metadata_and_still_launches() {
 
   ! grep -q '^traceparent=' "$meta" \
     || fail "failed traceparent delivery must not leave a traceparent= claim in meta"
-  ! grep -q '^export TRACEPARENT=' "$LAUNCH_LOG" \
+  ! grep -q '^ export TRACEPARENT=' "$LAUNCH_LOG" \
     || fail "the failed TRACEPARENT export must not be recorded as delivered"
   grep -q 'claude' "$LAUNCH_LOG" || fail "the source task must still launch"
   pass "failed TRACEPARENT delivery omits metadata while the source task still launches"
@@ -459,7 +459,7 @@ test_session_start_freezes_env_override_and_ignores_later_edits() {
   assert_contains "$out" "spawned $CASE_ID" "env-off spawn should report success"
   meta="$HOME_DIR/state/$CASE_ID.meta"
   ! grep -q '^traceparent=' "$meta" || fail "session-frozen off must ignore a later FM_TRACE_CONTEXT=on"
-  ! grep -q '^export TRACEPARENT=' "$LAUNCH_LOG" || fail "session-frozen off must remain disabled after launch-time edits"
+  ! grep -q '^ export TRACEPARENT=' "$LAUNCH_LOG" || fail "session-frozen off must remain disabled after launch-time edits"
 
   rec=$(make_spawn_case tc-envon)
   read_case_record "$rec"
