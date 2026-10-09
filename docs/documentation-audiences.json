@@ -157,6 +157,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/fork-drift-sync/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/grilling-supervision/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -350,6 +354,10 @@
     },
     {
       "path": "docs/examples/process-event-extension/firstmate-extension.json",
+      "audience": "operator-example"
+    },
+    {
+      "path": "docs/examples/fork-upstream.json",
       "audience": "operator-example"
     },
     {

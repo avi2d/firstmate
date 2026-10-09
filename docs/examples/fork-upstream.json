@@ -1,0 +1,17 @@
+{
+  "forks": [
+    {
+      "project": "firstmate",
+      "fork": "avi2d/firstmate",
+      "upstream": "kunchenguid/firstmate",
+      "trigger": "upstream-head"
+    },
+    {
+      "project": "bridges",
+      "fork": "https://forge.example/bridges.git",
+      "upstream": "https://forge.example/upstream.git",
+      "trigger": "release",
+      "branch": "main"
+    }
+  ]
+}
