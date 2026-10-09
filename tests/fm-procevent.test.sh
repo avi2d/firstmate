@@ -3484,7 +3484,8 @@ assert_contains "$out" "complete: yes" "a complete list-form capture was not mar
 assert_contains "$out" "CAPTAIN MESSAGE" "a list-form message lost its labeled field"
 assert_contains "$out" "| i like accent, but i want number role to have a separate color" "a list-form message dropped the typed comment"
 assert_contains "$out" "| /tmp/review-image/ac1240407ab47e25c4ca4cbc631491e96e9526718d86d18ff719857d276b2d40.png" "a list-form message dropped its image path"
-assert_contains "$out" "session_ending_message_count: 1" "a list-form message was not counted"
+assert_contains "$out" "captain_message_count: 1" "a list-form message was not counted"
+assert_not_contains "$out" "session_ending_message_count" "a non-ending list-form message used the session-ending count label"
 assert_contains "$out" "annotation_count: 0" "a list-form message was counted as an annotation"
 pass "read presents a list-form message and its image path"
 
