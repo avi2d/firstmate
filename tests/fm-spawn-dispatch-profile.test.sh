@@ -1344,7 +1344,7 @@ const busy = () => {
   return record;
 };
 const seeded = busy();
-assert.deepEqual(seeded, { gen, seq: "1", state: "busy", source: "fm-spawn", event: "launch-brief" });
+assert.deepEqual(seeded, { gen, seq: "1", state: "busy", source: "fm-spawn", event: "launch-brief", reset: "0" });
 const handlers = {};
 let tools = [];
 const extension = await import(pathToFileURL(process.env.EXT_PATH).href);
@@ -1360,7 +1360,7 @@ if (process.env.SCENARIO !== "unverified") {
 }
 rmSync(process.env.TURNEND, { force: true });
 await handlers.agent_start();
-const started = { gen, seq: "2", state: "busy", source: "pi-ext", event: "agent-start" };
+const started = { gen, seq: "2", state: "busy", source: "pi-ext", event: "agent-start", reset: "0" };
 assert.deepEqual(busy(), started, "agent_start must publish a generation-bound Pi busy event");
 const after = status();
 if (process.env.SCENARIO === "matched") {
@@ -1386,19 +1386,19 @@ for (let attempt = 0; attempt < 100 && !existsSync(process.env.TURNEND); attempt
 assert.ok(existsSync(process.env.TURNEND), "reporting must preserve turn-end notification");
 assert.deepEqual(busy(), started, "an inner turn boundary must not mark the worker idle");
 await handlers.agent_settled({}, { isIdle: () => true });
-assert.deepEqual(busy(), { gen, seq: "3", state: "idle", source: "pi-ext", event: "agent-settled" });
+assert.deepEqual(busy(), { gen, seq: "3", state: "idle", source: "pi-ext", event: "agent-settled", reset: "0" });
 await handlers.agent_start();
-assert.deepEqual(busy(), { gen, seq: "4", state: "busy", source: "pi-ext", event: "agent-start" });
+assert.deepEqual(busy(), { gen, seq: "4", state: "busy", source: "pi-ext", event: "agent-start", reset: "0" });
 assert.equal(status(), after, "report once per worker incarnation, not on every turn");
 appendFileSync(process.env.STATUS_FILE, "done: completed task\n");
 const completed = status();
 await handlers.agent_settled({}, { isIdle: () => true });
-assert.deepEqual(busy(), { gen, seq: "5", state: "idle", source: "pi-ext", event: "agent-settled" });
+assert.deepEqual(busy(), { gen, seq: "5", state: "idle", source: "pi-ext", event: "agent-settled", reset: "0" });
 assert.equal(status(), completed, "a reporting extension must not supersede a terminal worker status");
 const replacementGen = execFileSync(process.env.BUSY_EVENT, ["arm", stateDir, process.env.TASK_ID], { encoding: "utf8" }).trim();
 assert.notEqual(replacementGen, gen, "relaunch must mint a new generation");
 const replacement = busy();
-assert.deepEqual(replacement, { gen: replacementGen, seq: "1", state: "busy", source: "fm-spawn", event: "launch-brief" });
+assert.deepEqual(replacement, { gen: replacementGen, seq: "1", state: "busy", source: "fm-spawn", event: "launch-brief", reset: "0" });
 await handlers.agent_settled({}, { isIdle: () => true });
 assert.deepEqual(busy(), replacement, "a stale extension must not clear its replacement's busy state");
 await handlers.agent_start();
