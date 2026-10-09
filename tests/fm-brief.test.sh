@@ -420,6 +420,35 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
 }
 
+test_captain_examples_are_verbatim_oracle() {
+  local home id brief mode
+  home="$TMP_ROOT/oracle-home"
+  mkdir -p "$home/data"
+  id="brief-oracle-nm"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+  assert_grep "they are the test oracle" "$brief" \
+    "no-mistakes DOD must name the captain's examples the test oracle"
+  assert_grep "copy them into \`--intent\` verbatim" "$brief" \
+    "no-mistakes DOD must pass the examples into --intent verbatim"
+  assert_grep "never rewriting or correcting them" "$brief" \
+    "no-mistakes DOD must forbid rewriting the examples"
+  assert_grep "report the disagreement rather than resolving it by editing the example" "$brief" \
+    "no-mistakes DOD must report an example that disagrees with the code"
+  id="brief-oracle-gerrit"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes --forge gerrit >/dev/null 2>&1
+  assert_grep "they are the test oracle" "$home/data/$id/brief.md" \
+    "Gerrit no-mistakes DOD must keep the examples oracle"
+  for mode in direct-PR local-only; do
+    id="brief-oracle-$mode"
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1
+    assert_no_grep "test oracle" "$home/data/$id/brief.md" \
+      "$mode brief must not carry the no-mistakes examples oracle"
+  done
+  pass "fm-brief.sh: the captain's examples are the verbatim test oracle in no-mistakes DOD only"
+}
+
 # The green-PR report must not depend on a status poll: `axi status` never
 # reports `checks-passed` while the ci step monitors the PR for merge, so a
 # worker told to wait on it for the next gate or outcome never learned its PR
@@ -1512,6 +1541,7 @@ test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_captain_examples_are_verbatim_oracle
 test_no_mistakes_dod_green_detection
 test_pr_based_dod_requires_non_draft
 test_ask_user_escalation_format
