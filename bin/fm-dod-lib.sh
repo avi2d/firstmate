@@ -362,6 +362,8 @@ If it has no provenance-marked captain words, stop and ask firstmate instead of 
 Do not include \`## Firstmate spec\`, later Firstmate build constraints, or your own decisions and tradeoffs.
 The \`--intent\` string you pass must be self-sufficient: that string plus the codebase must let a reader reconstruct roughly the same specification, without depending on a separate report, a PR, or context that lives only in this conversation.
 When the captain's intent refers to a report, decision, or PR ("do items 1, 2, 3, and 7 of the report"), write the substance of the referenced items into \`--intent\` in the captain's terms, not only the pointer; that substance is the captain's ask by reference, while Firstmate's build instructions and your own decisions still stay out.
+When \`## Captain's intent\` states input and expected-output examples, they are the test oracle: copy them into \`--intent\` verbatim and build the tests from them as the scenarios, never rewriting or correcting them.
+When an example disagrees with the code, report the disagreement rather than resolving it by editing the example.
 This replaces the no-mistakes skill's advice to enrich \`--intent\` with decisions and tradeoffs; that advice does not apply to Firstmate-dispatched work.
 Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
 
