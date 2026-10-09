@@ -313,6 +313,10 @@ test_due_unsafe_inputs_are_reported_but_absent_optional_memory_is_not() {
 
 test_over_long_finding_set_is_capped_with_the_shared_marker() {
   local rec root home deep seg out reported
+  if [ "$(uname)" = Darwin ]; then
+    printf 'note - the capping fixture needs a path longer than PATH_MAX; skipping on Darwin\n'
+    return 0
+  fi
   rec=$(make_world capped)
   root=${rec%%|*}
   home=${rec#*|}
