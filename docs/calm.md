@@ -47,6 +47,7 @@ A secondmate gets them from its home's own Calm extension, which Pi loads with t
 
 While Calm is active and an agent run is under way, Calm hides Pi's built-in `Working...` row and shows a small two-row animated boat in its place.
 No separate Calm status row is added.
+The boat claims the same Pi working-row widget slot as the standalone Pi Calm extension, so a session that loads both Calms shows one boat rather than two, and turning Firstmate Calm off does not clear the standalone boat.
 While Calm is off, Pi's stock working row is left exactly as Pi renders it.
 
 The boat looks like this:
