@@ -1565,6 +1565,57 @@ Arm the check once per home with `bin/fm-tool-update-check.sh arm`.
 - So a budget larger than that timeout allows is cut down to what fits instead of being refused, and the cut is reported in the report line.
 - A budget that is not a whole number from 1 to 120 is still refused outright.
 
+## Watched fork drift
+
+The watched fork list lives in `config/fork-upstream.json`, an optional local gitignored file.
+When it is absent, the drift check does nothing.
+When it is present and the check is armed, [`bin/fm-fork-drift-check.sh`](../bin/fm-fork-drift-check.sh) reports two conditions, and keeps them deliberately distinct:
+
+- `<project> is <behind> behind / <ahead> ahead of <upstream> at <head>` means the upstream branch moved past the fork branch.
+- `<project> upstream published <tag>` means the upstream published a newer release.
+
+Each entry names the registered project, the fork, the upstream, and the trigger.
+A fork or upstream is an `owner/repo` slug or a git URL the local git can read.
+The branch defaults to each side's default branch and can be pinned per entry.
+See [`docs/examples/fork-upstream.json`](examples/fork-upstream.json) for a starting point to copy into local `config/fork-upstream.json`.
+
+**Arm, edit, and disarm**
+
+Arm the check once per home with `bin/fm-fork-drift-check.sh arm`.
+
+- That writes `state/fork-drift.check.sh` and binds its bytes with `bin/fm-check-register.sh`, so the existing watcher polls it on its normal cadence and turns its one line into a `check:` wake.
+  No separate schedule is involved.
+- `bin/fm-fork-drift-check.sh disarm` removes the shim, its trust binding, and the report record.
+
+**Repeat reporting and inheritance**
+
+- The check prints nothing when every upstream is current.
+  `state/.fork-drift` records the last reported head, tag, or failure per fork, so each new upstream state is reported exactly once, even a change that lands on a day the sweep missed.
+- A changed or returning condition is reported again.
+- A probe that cannot answer is reported as that fork's own check failure rather than read as current.
+  A repeating failure stays silent until the outcome changes.
+- Adding, removing, or changing a watched fork is an edit to this file and needs no code change or re-arming.
+- Secondmate homes do not inherit this file, so each home watches the forks it actually tracks.
+
+**Probe timing and limits**
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `FM_FORK_DRIFT_INTERVAL` | 86400 seconds | Time between sweeps. `0` sweeps on every run. |
+| `FM_FORK_DRIFT_PROBE_SECS` | 10 | Bounds one probe. |
+| `FM_FORK_DRIFT_BUDGET_SECS` | 25 | Bounds a whole sweep. |
+
+- A sweep that runs out of budget defers the forks it did not reach to the next sweep rather than reporting them as current.
+- The sweep must finish inside `FM_CHECK_TIMEOUT`, which defaults to 30.
+  A run the watcher kills prints nothing and records nothing, and would then repeat that silence on every poll.
+- So a budget larger than that timeout allows is cut down to what fits instead of being refused.
+  The cut is reported in the report line.
+- A budget that is not a whole number from 1 to 120 is still refused outright.
+- Counting behind and ahead fetches both histories into a temporary directory, so a home watching several large forks may need a larger budget and timeout.
+  The fetches are read-only and no project clone is touched.
+- A `fork drift:` wake names the project, the counts, and the upstream head or tag.
+  Load the `fork-drift-sync` skill to dispatch the merge-commit sync ship, merge the green pull request, and run that project's existing rollout.
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.

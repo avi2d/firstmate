@@ -39,6 +39,9 @@ After changing a skill description, run `bin/fm-skill-trigger-index.sh --write`.
   Also use on milestone and terminal wakes for a Relay-linked task before posting completion follow-ups, using typed promised-final reconciliation when registered and --final otherwise.
   Also use on a "public-followup ..." check wake, and whenever a promised final public reply must be created, reconciled, or delivered.
   Loaded only when Relay is enabled.
+- `fork-drift-sync` - Agent-only response to a fork drift check wake.
+  Load on a `fork drift:` check wake naming a project behind its upstream.
+  Dispatches the merge-commit sync ship in the project's registered delivery mode, merges the green PR, and runs that project's existing rollout.
 - `grilling-supervision` - Agent-only route for running a grilling interview with the captain for any registered project, with the installed `grilling` skill as the method.
   Load before dispatching an interview when the captain asks to grill or interview a project's goal or design, and whenever that interview's worker reports a round or recap ready.
 - `harness-adapters` - Agent-only reference for firstmate harness operations.
