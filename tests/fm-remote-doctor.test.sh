@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# tests/fm-remote-doctor.test.sh - the remote second-mate readiness gate.
-#
-# Drives the real bin/fm-remote-doctor.sh against a controlled account fixture:
-# a private HOME, a fake launchctl backed by state files, a fake herdr CLI, a
-# fake lsof that names a real holder process as the fm-remote socket owner, and
-# a fake uname that selects the platform under test. The holders are real
-# non-platform processes (jq blocked on a fifo) whose environment carries the
-# birth markers bin/fm-remote-herdr-owner-lib.sh reads, so the Aqua-versus-SSH
-# verdict is exercised for real. Nothing here touches the runner's own launch
-# agents, login session, or herdr server.
+# The remote second-mate readiness gate, driven against a controlled account fixture.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -38,7 +29,7 @@ ln -sf "$(command -v jq)" "$TOOLS/jq"
 BASE_PATH="$TOOLS:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Real socket-owner holders for the Darwin birth check: jq blocked on a fifo
-# this test keeps open, with exactly the marker environment each birth needs.
+# this test keeps open, each carrying what its birth needs on macOS 26.
 JQ=$(command -v jq)
 HOLDER_FD=5
 hold() { # <marker-env...> -> HOLDER_PID
@@ -58,8 +49,21 @@ hold XPC_SERVICE_NAME=0
 XPC_ZERO_HOLDER_PID=$HOLDER_PID
 hold FM_REMOTE_JOB_ACTIVE=1
 WORKER_HOLDER_PID=$HOLDER_PID
-hold SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' SSH_CLIENT='100.102.217.78 51234 22'
-SSH_HOLDER_PID=$HOLDER_PID
+# The SSH holder's parent carries an sshd argv[0]: its ancestry is what proves
+# the SSH birth where ps -E hides the markers.
+SSH_FIFO="$TMP_ROOT/holder-$HOLDER_FD.fifo"
+SSH_PIDFILE="$TMP_ROOT/holder-$HOLDER_FD.pid"
+mkfifo "$SSH_FIFO"
+eval "exec ${HOLDER_FD}<>\"$SSH_FIFO\""
+( export FM_SSH_HOLDER_JQ="$JQ" FM_SSH_HOLDER_FIFO="$SSH_FIFO" FM_SSH_HOLDER_PIDFILE="$SSH_PIDFILE"
+  exec -a sshd bash -c "env -i SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' SSH_CLIENT='100.102.217.78 51234 22' \"\$FM_SSH_HOLDER_JQ\" . \"\$FM_SSH_HOLDER_FIFO\" & printf '%s\n' \"\$!\" > \"\$FM_SSH_HOLDER_PIDFILE\"; wait" ) &
+HOLDER_PIDS+=("$!")
+HOLDER_FD=$((HOLDER_FD + 1))
+SSH_WAIT=0
+while [ ! -s "$SSH_PIDFILE" ] && [ "$SSH_WAIT" -lt 100 ]; do sleep 0.05; SSH_WAIT=$((SSH_WAIT + 1)); done
+[ -s "$SSH_PIDFILE" ] || { printf 'the SSH holder did not report its pid\n' >&2; exit 1; }
+SSH_HOLDER_PID=$(cat "$SSH_PIDFILE")
+HOLDER_PIDS+=("$SSH_HOLDER_PID")
 
 # new_case <Darwin|Linux> [with-herdr] [gui] [login-shell]
 # Builds one isolated account fixture and points the module-level CASE_*
@@ -117,6 +121,12 @@ case "${1:-}" in
       */dev.firstmate.herdr.fm-remote)
         [ -f "$loaded" ] || exit 113
         cat "$loaded"
+        printf 'pid = %s\n' "$FM_FAKE_AQUA_PID"
+        ;;
+      */dev.firstmate.remote-job)
+        [ -f "$loaded" ] || exit 113
+        cat "$loaded"
+        printf 'pid = %s\n' "$FM_FAKE_WORKER_PID"
         ;;
       */dev.firstmate.herdr)
         [ -f "$FM_FAKE_STATE/interactive-loaded" ] || exit 113
@@ -311,6 +321,7 @@ doctor() {
     FM_FAKE_HERDR_SOCKET="$CASE_STATE/herdr.sock" \
     FM_FAKE_GUARD="$GUARD" \
     FM_FAKE_AQUA_PID="$AQUA_HOLDER_PID" \
+    FM_FAKE_WORKER_PID="$WORKER_HOLDER_PID" \
     FM_FAKE_PLIST="$CASE_PLIST" \
     FM_FAKE_JOB_PLIST="$CASE_JOB_PLIST" \
     FM_FAKE_JOB_WORKER="$ROOT/bin/fm-remote-job-worker.sh" \
