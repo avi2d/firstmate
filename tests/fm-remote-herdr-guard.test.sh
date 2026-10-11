@@ -113,6 +113,25 @@ hold() {
   HOLDER_FD=$((HOLDER_FD + 1))
 }
 
+# hold_ssh: a holder carrying the SSH markers, parented under an sshd
+# argv[0]. The markers prove the SSH birth where ps -E exposes them; the
+# sshd parent proves it where macOS 26 hides them.
+hold_ssh() {
+  local fifo="$TMP_ROOT/holder-$HOLDER_FD.fifo" pidfile="$TMP_ROOT/holder-$HOLDER_FD.pid"
+  rm -f "$fifo" "$pidfile"
+  mkfifo "$fifo"
+  eval "exec ${HOLDER_FD}<>\"$fifo\""
+  export FM_SSH_JQ="$JQ" FM_SSH_FIFO="$fifo" FM_SSH_PIDFILE="$pidfile"
+  ( exec -a sshd bash -c 'env -i SSH_CONNECTION="100.102.217.78 51234 100.100.1.2 22" SSH_CLIENT="100.102.217.78 51234 22" "$FM_SSH_JQ" . "$FM_SSH_FIFO" & printf "%s\n" "$!" > "$FM_SSH_PIDFILE"; wait' sshd: kunchen@notty ) &
+  HOLDER_PIDS+=("$!")
+  HOLDER_FD=$((HOLDER_FD + 1))
+  local i=0
+  while [ ! -s "$pidfile" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -s "$pidfile" ] || fail "ssh holder did not report its pid"
+  HOLDER_PID=$(cat "$pidfile")
+  HOLDER_PIDS+=("$HOLDER_PID")
+}
+
 # hold_under <argv0> <arg...> -- : a marker-free holder whose PARENT process
 # carries the given argv[0] and arguments (the ancestry the guard inspects).
 hold_under() {
@@ -184,8 +203,8 @@ assert_stop_before_start() {
   [ "$stop_line" -lt "$start_line" ] || fail "the guard started its server before stopping the foreign one"
 }
 
-# Prove the holder construction on this host: the environment of a jq holder
-# must be readable, or every marker case would be vacuous.
+# Prove the holder construction on this host: the birth signals the guard
+# reads must be observable, or every birth case would be vacuous.
 hold FM_PROBE_MARKER=1
 PROBE_PID=$HOLDER_PID
 sleep 0.2
@@ -193,10 +212,18 @@ sleep 0.2
 . "$ROOT/bin/fm-remote-herdr-owner-lib.sh"
 probe_env=$(fm_remote_herdr_process_env "$PROBE_PID")
 case "$probe_env" in
-  *FM_PROBE_MARKER=1*) ;;
-  *) fail "this host does not expose a holder's environment (macOS hides platform-binary environments; jq at $JQ must be a non-platform binary): $probe_env" ;;
+  *FM_PROBE_MARKER=1*)
+    pass "holder processes expose their environment to the owner library"
+    ;;
+  *)
+    hold_under sshd sshd-probe
+    PROBE_SSH_PID=$HOLDER_PID
+    sleep 0.2
+    fm_remote_herdr_process_ancestry "$PROBE_SSH_PID" | fm_remote_herdr_ancestry_has_ssh_origin \
+      || fail "this host hides holder environments and no sshd parent is visible in holder ancestry"
+    pass "holder ancestry proves an sshd birth where the environment is hidden"
+    ;;
 esac
-pass "holder processes expose their environment to the owner library"
 
 # --- no server: the guard becomes the server ---------------------------------
 
@@ -218,7 +245,7 @@ hold XPC_SERVICE_NAME=0
 XPC_ZERO_PID=$HOLDER_PID
 hold FM_REMOTE_JOB_ACTIVE=1
 WORKER_PID=$HOLDER_PID
-hold SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' SSH_CLIENT='100.102.217.78 51234 22'
+hold_ssh
 SSH_PID=$HOLDER_PID
 hold FM_NOTHING_TO_SEE=1
 UNMARKED_PID=$HOLDER_PID
@@ -239,8 +266,9 @@ assert_contains "$GUARD_OUT" "pid $LAUNCHD_PID born in the Aqua login session (l
   "the guard did not name the launchd owner"
 
 new_case running
+# The attested worker pid proves the worker birth where ps -E hides FM_REMOTE_JOB_ACTIVE.
 printf '%s\n' "$WORKER_PID" > "$CASE_OWNER"
-load_job gui dev.firstmate.remote-job
+load_job gui dev.firstmate.remote-job "$WORKER_PID"
 guard
 expect_code 0 "$GUARD_RC" "the guard did not exit 0 for the gui-domain worker owner"
 assert_not_started "the guard started a second server over a gui-domain worker owner"
