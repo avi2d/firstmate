@@ -17,11 +17,17 @@ RESTART_BIN="${FM_DAILY_RESET_RESTART_BIN:-$SCRIPT_DIR/fm-secondmate-restart.sh}
 DEFAULT_TIME=04:00
 RECORD_SCHEMA=fm-daily-reset-v1
 MAX_LINE=240
+# shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
+# shellcheck source=bin/fm-line-cap-lib.sh
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
+# shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 usage() {
   cat <<'EOF'
