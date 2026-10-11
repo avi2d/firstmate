@@ -6,6 +6,7 @@
 # case, so they live apart from the single-park cases in tests/fm-supervision-host.test.sh
 # and neither suite outgrows its shard. The shared fixture lives in
 # tests/supervision-host-fixture.sh.
+# shellcheck disable=SC2016 # single-quoted scripts expand inside their own shells
 set -u
 
 # shellcheck source=tests/supervision-host-fixture.sh

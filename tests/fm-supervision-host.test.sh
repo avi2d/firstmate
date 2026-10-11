@@ -6,6 +6,7 @@
 # tests/fm-supervision-host-session.test.sh, so neither suite outgrows its shard. The
 # shared fixture (stub engine, home builders, park drivers) lives in
 # tests/supervision-host-fixture.sh.
+# shellcheck disable=SC2016 # single-quoted scripts expand inside their own shells
 set -u
 
 # shellcheck source=tests/supervision-host-fixture.sh
