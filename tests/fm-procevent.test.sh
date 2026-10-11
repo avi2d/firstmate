@@ -515,8 +515,19 @@ case "${1-}" in
   *) exit 2 ;;
 esac
 SH
+cat > "$ADAPTER_ROOT/bin/fm-procevent-staying.sh" <<'SH'
+#!/usr/bin/env bash
+# Fixture adapter that stays across results but applies and ends nothing: it
+# answers relisten so the runner keeps its claim, and every other command
+# reports no verdict so captures stay unhandled and non-terminal.
+case "${1-}" in
+  relisten) exit 0 ;;
+esac
+exit 2
+SH
 chmod +x "$ADAPTER_ROOT/bin/fm-procevent-endnow.sh" "$ADAPTER_ROOT/bin/fm-procevent-openended.sh" \
-  "$ADAPTER_ROOT/bin/fm-procevent-applying.sh" "$ADAPTER_ROOT/bin/fm-procevent-selfann.sh"
+  "$ADAPTER_ROOT/bin/fm-procevent-applying.sh" "$ADAPTER_ROOT/bin/fm-procevent-selfann.sh" \
+  "$ADAPTER_ROOT/bin/fm-procevent-staying.sh"
 
 pe_adapter() {  # <home> <command>...: run the runner against the fixture adapters
   local home=$1
@@ -3646,6 +3657,30 @@ PACE_RACE_STAMPS=$(find "$HPACE_RACE/state/procevent" -maxdepth 1 -type f \
 [ "$PACE_RACE_STAMPS" = 1 ] \
   || fail "a superseded sleeping runner recreated stale pacing state"
 pass "a superseded sleeping runner cannot recreate stale pacing state"
+
+# A concurrent arm that lands while a runner sleeps out its launch floor is a
+# race, not supersession. The runner must adopt the current generation and
+# launch it exactly once, then exit after its single one-shot result; exiting
+# silently instead strands a waiter that already proved ownership and launched
+# no restart.
+HHEAL="$TMP_ROOT/floor-race-heal"; new_home "$HHEAL"
+fm_test_track_procevent_home "$HHEAL"
+HEAL_LOG="$TMP_ROOT/floor-race-heal.log"
+pe_adapter "$HHEAL" register staying heal-src -- "$FAST_SOURCE" "$HEAL_LOG" >/dev/null
+FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=1 pe_adapter "$HHEAL" start heal-src >/dev/null
+[ "$(wc -l < "$HEAL_LOG" | tr -d ' ')" = 1 ] \
+  || fail "the floor-race fixture did not launch its first generation"
+FM_PROCEVENT_LAUNCH_FLOOR_SECONDS=15 pe_adapter "$HHEAL" start heal-src > "$TMP_ROOT/floor-race-heal.out" 2>&1 &
+HEAL_PID=$!
+wait_for "$FM_PROCEVENT_CLAIM_ROOT/heal-src.claim" \
+  || fail "the floor-race fixture did not claim its registration"
+pe_adapter "$HHEAL" register staying heal-src -- "$FAST_SOURCE" "$HEAL_LOG" >/dev/null
+wait "$HEAL_PID" || fail "the runner that met a concurrent arm at its launch floor failed"
+[ "$(wc -l < "$HEAL_LOG" | tr -d ' ')" = 2 ] \
+  || fail "a runner that met a concurrent arm at its launch floor left without launching the current generation"
+assert_absent "$FM_PROCEVENT_CLAIM_ROOT/heal-src.claim" \
+  "the healed runner left its claim behind instead of exiting after its single result"
+pass "a runner that meets a concurrent arm at its launch floor adopts and launches the current generation"
 
 HCOMMIT="$TMP_ROOT/registration-commit"; new_home "$HCOMMIT"
 fm_test_track_procevent_home "$HCOMMIT"

@@ -1224,7 +1224,14 @@ cmd_start() {
     # written before this wait, and a home sweep counts a marker with no owned
     # claim as a preflight failure, so exiting without removing it would make
     # that home refuse to sweep.
-    2) [ "$extension_owner" -eq 1 ] || rm -f -- "$runner"; exit 0 ;;
+    2) # A concurrent arm between adopt and this floor is a race, not supersession.
+      # Exiting strands a waiter that proved ownership before the arm, so adopt the
+      # current generation and continue; adoption failure still exits.
+      if [ "$extension_owner" -eq 0 ] && adopt_relisten; then
+        continue
+      fi
+      [ "$extension_owner" -eq 1 ] || rm -f -- "$runner"
+      exit 0 ;;
     *) die "cannot enforce the source launch floor: $id" ;;
   esac
   exec 7<&-
