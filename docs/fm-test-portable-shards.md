@@ -22,10 +22,9 @@ A failed script's duration is excluded even when its lane uploaded an artifact.
 In particular, run 36664663190's serial 5 finished in 22m15s with an assertion failure, not a timeout; treating that as a healthy whole-lane sample would hide the failure.
 Collect successful per-script measurements for every member before calculating a split.
 
-`tests/fm-supervision-host.test.sh` carries 622000 ms and `tests/fm-supervision-host-session.test.sh` carries 556000 ms.
+`tests/fm-supervision-host.test.sh` carries 393700 ms and `tests/fm-supervision-host-session.test.sh` carries 326518 ms.
 The first holds the directly parked cases and the second holds the cases parked through one of main's sessions.
-The two weights conserve that suite's slowest successful single-file measurement of 1176845 ms from run 38157123478, proportioned by the halves' locally timed costs, so the packed lane total is unchanged.
-The next green runs replace the split with per-file CI measurements.
+Each weight is the slower of runs 38171532973 and 38181491961.
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
 The session-start hint retains its pre-optimization maximum until CI measures the shorter fixture-only home-summary bound; do not discount a local speedup from CI packing weights.
 
