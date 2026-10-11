@@ -765,6 +765,150 @@ EOF
   pass "Pi dispatcher branch offer owns accepted wakes and falls back to main"
 }
 
+test_pi_hung_branch_settlement_keeps_successors_and_falls_back_to_main() {
+  local repo home plugin log stop close2 out status
+  repo="$TMP_ROOT/pi-branch-settlement-root"
+  home="$TMP_ROOT/pi-branch-settlement-home"
+  log="$TMP_ROOT/pi-branch-settlement.log"
+  stop="$TMP_ROOT/pi-branch-settlement.stop"
+  close2="$TMP_ROOT/pi-branch-settlement.close2"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --handling-delivered ]; then
+  printf 'confirmed generation=%s watcher=%s\n' "$2" "$4" >> "${FM_ARM_LOG:?}"
+  exit 0
+fi
+printf 'arm=%s\n' "$$" >> "$FM_ARM_LOG"
+count=$(grep -c '^arm=' "$FM_ARM_LOG")
+if [ "$count" -eq 1 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  printf 'signal: hung-branch first synthetic wake\n'
+  exit 0
+fi
+if [ "$count" -eq 2 ]; then
+  printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+  while [ ! -e "$FM_CLOSE2" ]; do sleep 0.02; done
+  printf 'signal: hung-branch second synthetic wake\n'
+  exit 0
+fi
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" FM_CLOSE2="$close2" FM_PI_BRANCH_SETTLEMENT_TIMEOUT_MS=500 node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+// A branch that accepts a wake but never settles must not hold the
+// single-flight pipeline: the wake falls back to main after the bound and the
+// next actionable close still starts exactly one live successor. Arm rows,
+// liveness, offers, and prompts are asserted together so the case cannot go
+// vacuous against a merely slow branch.
+const armRows = () => {
+  if (!existsSync(process.env.FM_ARM_LOG)) return [];
+  return readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").filter((row) => row.startsWith("arm="));
+};
+const offers = [];
+const prompts = [];
+let tool = null;
+const handlers = new Map();
+const bus = {
+  on(channel, handler) {
+    handlers.set(channel, [...(handlers.get(channel) ?? []), handler]);
+    return () => {};
+  },
+  emit(channel, data) {
+    for (const handler of handlers.get(channel) ?? []) handler(data);
+  },
+};
+bus.on("fm-branch-supervision:dispatch", (offer) => {
+  offers.push(offer.message);
+  offer.accept(new Promise(() => {}));
+});
+const pi = {
+  on(name, handler) {
+    handlers.set(name, handler);
+  },
+  events: bus,
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendUserMessage: async (message) => {
+    prompts.push(message);
+  },
+};
+writeFileSync(process.env.FM_HOME + "/state/.lock", process.pid + "\n");
+writeFileSync(process.env.FM_HOME + "/state/branch-settlement.meta", "project=/projects/approved\nwindow=fm-branch-settlement\n");
+writeFileSync(process.env.FM_HOME + "/state/.wake-queue", "1\t1\tsignal\tbranch-settlement.status\tsignal: hung-branch first synthetic wake\n2\t2\tsignal\tbranch-settlement.status\tsignal: hung-branch second synthetic wake\n");
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-branch-settlement", {}, undefined, undefined, {});
+for (let i = 0; i < 500; i += 1) {
+  if (armRows().length >= 2 && offers.length >= 1) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (armRows().length !== 2 || offers.length !== 1) {
+  throw new Error("setup did not reach one successor and one hung branch offer: arms=" + armRows().length + " offers=" + offers.length);
+}
+await new Promise((resolve) => setTimeout(resolve, 400));
+if (armRows().length !== 2) {
+  throw new Error("successor pipeline moved without a second close: arms=" + armRows().length);
+}
+writeFileSync(process.env.FM_CLOSE2, "close\n");
+for (let i = 0; i < 1500; i += 1) {
+  if (armRows().length >= 3 && offers.length >= 2 && prompts.length >= 1) break;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+const rows = armRows();
+if (rows.length !== 3) {
+  throw new Error("hung branch settlement left the second close without a successor: " + rows.join(" | "));
+}
+const pids = rows.map((row) => Number(row.slice(4)));
+const alive = pids.filter((pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+});
+if (alive.length !== 1 || alive[0] !== pids[2]) {
+  throw new Error("expected exactly the third arm alive: alive=" + alive.join(","));
+}
+if (offers.length !== 2) {
+  throw new Error("expected both closes offered to the branch: offers=" + offers.length);
+}
+if (prompts.length !== 1) {
+  throw new Error("expected the hung first wake to fall back to one main follow-up: prompts=" + prompts.length);
+}
+if (!prompts[0].includes("signal: hung-branch first synthetic wake")) {
+  throw new Error("fallback wake lost the reason line: " + prompts[0]);
+}
+if (!prompts[0].includes("did not settle")) {
+  throw new Error("fallback wake carries no branch-settlement notice: " + prompts[0]);
+}
+const beforeAgentStart = handlers.get("before_agent_start");
+if (beforeAgentStart) beforeAgentStart({ prompt: prompts[0] }, {});
+await new Promise((resolve) => setTimeout(resolve, 200));
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+await new Promise((resolve) => setTimeout(resolve, 200));
+if (armRows().length !== 3) {
+  throw new Error("consuming the fallback follow-up started extra arm work: " + armRows().join(" | "));
+}
+process.exit(0);
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "Pi hung branch settlement must fall back to main and keep successors starting"
+  [ -z "$out" ] || fail "Pi branch-settlement test printed output: $out"
+  pass "Pi hung branch settlement falls back to main and keeps successors starting"
+}
+
 test_pi_branch_offer_flags_heartbeat() {
   local repo home plugin log stop out status
   repo="$TMP_ROOT/pi-branch-heartbeat-root"
@@ -5561,6 +5705,7 @@ test_pi_actionable_close_starts_single_successor_before_delivery
 test_pi_actionable_closes_coalesce_until_consumed
 test_pi_actionable_output_waits_for_predecessor_close
 test_pi_branch_offer_owns_actionable_wake
+test_pi_hung_branch_settlement_keeps_successors_and_falls_back_to_main
 test_pi_branch_offer_flags_heartbeat
 test_pi_heartbeat_is_not_ridden_into_main_by_a_co_present_check
 test_pi_main_only_check_classes_stay_on_main
