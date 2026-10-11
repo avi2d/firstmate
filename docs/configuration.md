@@ -1616,6 +1616,27 @@ Arm the check once per home with `bin/fm-fork-drift-check.sh arm`.
 - A `fork drift:` wake names the project, the counts, and the upstream head or tag.
   Load the `fork-drift-sync` skill to dispatch the merge-commit sync ship, merge the green pull request, and run that project's existing rollout.
 
+## Daily session reset
+
+Supervisor sessions accumulate context, so the fleet resets them once a day.
+`config/daily-session-reset` is an optional local gitignored file holding `HH:MM` in home-local 24-hour time.
+When it is absent the reset is due daily after 04:00.
+The word `off` disables it.
+A malformed file is reported once until edited.
+
+Arm the check once per home with `bin/fm-daily-reset.sh arm`.
+That writes `state/daily-reset.check.sh` and binds its bytes with `bin/fm-check-register.sh`, so the existing watcher polls it on its normal cadence and turns its one line into a `check:` wake.
+`bin/fm-daily-reset.sh disarm` removes the shim, its trust binding, and the report record.
+
+Handle the wake by running `bin/fm-daily-reset.sh run`.
+It restarts each registered secondmate through `bin/fm-secondmate-restart.sh`, which asks the mate to persist its open records first and only restarts after that answer lands.
+A mate proven mid-turn is skipped and retried the next day.
+Skip a mate supervising an active validation run by naming only the other ids on the command line.
+The pass stamps `state/.daily-reset` with the date, so each day fires once and a skipped or failed mate is retried tomorrow.
+
+The main session resets itself: persist its open work following the /stow skill's open-record persistence half, then start a fresh session.
+The check stays silent while `state/.afk` exists and retries after the record clears.
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.

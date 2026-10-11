@@ -333,6 +333,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/adr/0001-daily-session-reset.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
