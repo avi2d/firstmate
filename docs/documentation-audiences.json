@@ -337,6 +337,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0002-herdr-aqua-birth-proof.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
