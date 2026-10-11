@@ -804,7 +804,21 @@ wait_for_herdr_server() {
   return 1
 }
 
+# No login shell runs before this server, so its panes never gain what it does not export.
+# Tests point FM_REMOTE_RUNTIME_BASE at a fixture; production always uses /run/user.
+fm_remote_doctor_export_runtime_dir() {
+  local dir
+  [ -z "${XDG_RUNTIME_DIR:-}" ] || return 0
+  [ "${PLATFORM:-}" = linux ] || return 0
+  [ -n "${UID_NUM:-}" ] || return 0
+  dir="${FM_REMOTE_RUNTIME_BASE:-/run/user}/$UID_NUM"
+  [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || return 0
+  XDG_RUNTIME_DIR=$dir
+  export XDG_RUNTIME_DIR
+}
+
 start_herdr_server() {
+  fm_remote_doctor_export_runtime_dir
   if ! herdr_adapter_load; then
     fix_report herdr-server failed "herdr and jq must both resolve before the server can be started"
     return 1

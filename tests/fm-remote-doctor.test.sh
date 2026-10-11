@@ -263,6 +263,7 @@ case "${1:-} ${2:-}" in
     printf '{"client":{"version":"0.7.5","protocol":16},"server":{"running":%s,"socket":"%s"}}\n' "$running" "$FM_FAKE_HERDR_SOCKET"
     ;;
   "server "*|"server ")
+    env > "$FM_FAKE_STATE/herdr-server.env"
     printf 'true\n' > "$FM_FAKE_HERDR_RUNNING"
     ;;
 esac
@@ -778,6 +779,41 @@ assert_contains "$DOCTOR_OUT" 'fix herdr-server=applied:' "--fix did not report 
 assert_contains "$DOCTOR_OUT" 'check herdr-server=ok:' "the started server was not confirmed by the re-check"
 [ ! -s "$CASE_LAUNCHCTL_LOG" ] || fail "the linux path invoked launchctl"
 pass "a non-darwin host skips launch agents and starts its herdr server directly"
+
+# --- on linux --fix hands XDG_RUNTIME_DIR to the herdr server ----------------
+
+new_case Linux with-herdr no-gui
+RUNTIME_BASE="$CASE_STATE/run"
+mkdir -p "$RUNTIME_BASE/$(id -u)"
+SAVED_XDG=${XDG_RUNTIME_DIR-__FM_TEST_UNSET__}
+unset XDG_RUNTIME_DIR
+FM_REMOTE_RUNTIME_BASE=$RUNTIME_BASE doctor --fix
+if [ "$SAVED_XDG" = __FM_TEST_UNSET__ ]; then unset XDG_RUNTIME_DIR; else XDG_RUNTIME_DIR=$SAVED_XDG; export XDG_RUNTIME_DIR; fi
+expect_code 0 "$DOCTOR_RC" "--fix did not start the herdr server for the runtime-dir probe"
+assert_contains "$DOCTOR_OUT" 'fix herdr-server=applied:' "--fix did not report starting the server"
+assert_present "$CASE_STATE/herdr-server.env" "the started server recorded no environment"
+assert_grep "XDG_RUNTIME_DIR=$RUNTIME_BASE/$(id -u)" "$CASE_STATE/herdr-server.env" \
+  "the started server did not carry the runtime directory"
+pass "an unset XDG_RUNTIME_DIR is exported for the linux server start"
+
+new_case Linux with-herdr no-gui
+CALLER_RUNTIME=$CASE_STATE/caller-runtime
+XDG_RUNTIME_DIR=$CALLER_RUNTIME FM_REMOTE_RUNTIME_BASE=$CASE_STATE/run doctor --fix
+expect_code 0 "$DOCTOR_RC" "--fix did not start the herdr server with a caller runtime dir"
+assert_grep "XDG_RUNTIME_DIR=$CALLER_RUNTIME" "$CASE_STATE/herdr-server.env" \
+  "the started server did not keep the caller's XDG_RUNTIME_DIR"
+pass "a set XDG_RUNTIME_DIR is never overridden for the linux server start"
+
+new_case Linux with-herdr no-gui
+SAVED_XDG=${XDG_RUNTIME_DIR-__FM_TEST_UNSET__}
+unset XDG_RUNTIME_DIR
+FM_REMOTE_RUNTIME_BASE=$CASE_STATE/run doctor --fix
+if [ "$SAVED_XDG" = __FM_TEST_UNSET__ ]; then unset XDG_RUNTIME_DIR; else XDG_RUNTIME_DIR=$SAVED_XDG; export XDG_RUNTIME_DIR; fi
+expect_code 0 "$DOCTOR_RC" "--fix did not start the herdr server without a runtime directory"
+assert_present "$CASE_STATE/herdr-server.env" "the started server recorded no environment"
+assert_no_grep 'XDG_RUNTIME_DIR=' "$CASE_STATE/herdr-server.env" \
+  "the started server carried XDG_RUNTIME_DIR with no runtime directory present"
+pass "a missing runtime directory leaves XDG_RUNTIME_DIR unset for the linux server start"
 
 # --- --fix may add only owned wrappers for version-manager tools -------------
 
