@@ -28,13 +28,44 @@ DRAIN="$ROOT/bin/fm-wake-drain.sh"
 TMP_ROOT=$(fm_test_tmproot fm-watch-triage-tests)
 
 ack_stopped_cycle() {  # <state>
-  local state=$1 err sequence generation
+  local state=$1 err sequence generation token lock_pid
   err="$state/.test-cycle-drain.err"
   FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2> "$err" || return 1
   sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
   generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
   rm -f "$err"
-  [ -n "$sequence" ] && [ -n "$generation" ] || return 1
+  if [ -z "$sequence" ] || [ -z "$generation" ]; then
+    # A silent drain over an empty queue with no open episode has nothing to
+    # acknowledge: the stopped watcher's bounded close-publish may leave no
+    # fresh generation. Just returning would strand its retained singleton,
+    # which the next start would resurface as recovery, so recover the case
+    # the way a take-over would and ack the fresh episode instead. A queued
+    # wake or an open episode without a line still fails.
+    [ ! -s "$state/.wake-queue" ] || return 1
+    token=$(cat "$state/.watcher-down" 2>/dev/null || true)
+    case "$token" in
+      ''|acked:*) ;;
+      *) return 1 ;;
+    esac
+    # No retained singleton means no recovery debt: the next start claims
+    # fresh, so there is nothing to heal.
+    if [ ! -L "$state/.watch.lock" ] && [ ! -e "$state/.watch.lock" ]; then
+      return 0
+    fi
+    lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
+    if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+      return 0
+    fi
+    FM_STATE_OVERRIDE="$state" bash -c '
+        . "$1"; fm_recovery_transition "$2" clear-stale-lock "$3" downtime 2
+      ' _ "$ROOT/bin/fm-wake-lib.sh" "$state/.watcher-down" "$state/.watch.lock" \
+        || return 1
+      FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null 2> "$err" || return 1
+      sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
+      generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+      rm -f "$err"
+      [ -n "$sequence" ] && [ -n "$generation" ] || return 1
+  fi
   FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" \
     --recovery-generation "$generation"
 }
