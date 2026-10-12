@@ -622,7 +622,11 @@ propagate_inheritable_config() {
         record_inheritable_config_result "$item" skipped "$reason"
         continue
       fi
-      if [ -L "$dest" ] || [ ! -f "$dest" ] || ! cmp -s "$src" "$dest"; then
+      if [ -L "$dest" ] && cmp -s "$src" "$dest" 2>/dev/null; then
+        record_inheritable_config_result "$item" unchanged "destination link already resolves to the primary bytes"
+        continue
+      fi
+      if [ ! -f "$dest" ] || ! cmp -s "$src" "$dest"; then
         if copy_inheritable_file "$src" "$dest"; then
           record_inheritable_config_result "$item" pushed ""
         else
