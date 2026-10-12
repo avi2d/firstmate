@@ -70,9 +70,19 @@ while IFS= read -r rel; do
   esac
   source_present=$(fm_config_source_present "$source") || exit 1
   if [ "$source_present" = 1 ]; then
-    # A config item may be the captain's own symlink into one source of truth
-    # (crew-dispatch.json into the skills repo); follow it to the target bytes.
-    # `-f` still refuses a link that does not resolve to a regular file.
+    # A config item the primary holds as its own symlink is machine-local
+    # indirection (crew-dispatch.json into the per-machine skills variant),
+    # never canonical bytes: a remote home on another machine converges away
+    # from those foreign bytes instead of receiving them, while a home that
+    # owns its own link keeps it. A link resolving to no regular file stays
+    # a refusal.
+    if [ "$rel" != data/captain-shared.md ] && [ -L "$source" ]; then
+      if [ -f "$source" ]; then
+        printf 'absent %s 0 %s\n' "$rel" "$EMPTY_HASH" >> "$BATCH" || exit 1
+        BATCH_ITEMS=$((BATCH_ITEMS + 1))
+        continue
+      fi
+    fi
     if [ "$rel" = data/captain-shared.md ]; then
       if ! { [ -f "$source" ] && [ ! -L "$source" ]; }; then
         batch_item_error "inherited source is unsafe: $source"

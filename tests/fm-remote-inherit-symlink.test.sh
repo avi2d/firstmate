@@ -74,6 +74,8 @@ test_receiver_leaves_own_symlink_destination_untouched() {
     "receiver did not report unchanged for the mate's symlink"
   [ -L "$home/config/crew-dispatch.json" ] \
     || fail "receiver replaced the mate's own symlink with a regular file"
+  assert_absent "$home/config/.fm-inherit-crew-dispatch.json.generation" \
+    "receiver must not record a generation for bytes it did not publish"
   assert_equals "$skills/crew-dispatch.json" "$(readlink "$home/config/crew-dispatch.json")" \
     "the symlink target should be the mate's own skills file"
   assert_grep 'remote skills bytes' "$skills/crew-dispatch.json" \
@@ -81,28 +83,32 @@ test_receiver_leaves_own_symlink_destination_untouched() {
   pass "receiver leaves the mate's own symlink destination untouched"
 }
 
-test_sender_follows_source_symlink_into_regular_destination() {
+test_sender_converges_symlinked_source_to_absent() {
   local primary remote skills fakebin out
-  primary="$TMP_ROOT/sender-follow/primary"
-  remote="$TMP_ROOT/sender-follow/remote"
-  skills="$TMP_ROOT/sender-follow/skills/harness/firstmate"
+  primary="$TMP_ROOT/sender-absent/primary"
+  remote="$TMP_ROOT/sender-absent/remote"
+  skills="$TMP_ROOT/sender-absent/skills/harness/firstmate"
   mkdir -p "$primary/config" "$primary/data" "$remote/config" "$remote/data" "$remote/state" "$skills"
-  printf '%s\n' '{"profiles": "shared dispatch bytes"}' > "$skills/crew-dispatch.json"
-  ln -s "$skills/crew-dispatch.json" "$primary/config/crew-dispatch.json"
+  printf '%s\n' '{"profiles": "mac-only dispatch bytes"}' > "$skills/crew-dispatch.mac.json"
+  ln -s "$skills/crew-dispatch.mac.json" "$primary/config/crew-dispatch.json"
+  printf '%s\n' '{"profiles": "stale foreign bytes"}' > "$remote/config/crew-dispatch.json"
   write_registry "$primary" "$remote"
-  fakebin="$TMP_ROOT/sender-follow/fakebin"
+  fakebin="$TMP_ROOT/sender-absent/fakebin"
   mkdir -p "$fakebin"
   install_fake_transport "$fakebin"
 
   out=$(run_remote_push "$primary" "$remote" "$fakebin" 1) \
     || fail "push with a symlinked source should succeed: $out"
-  assert_contains "$out" "pushed: config/crew-dispatch.json" \
-    "a regular destination should receive the inherited bytes"
-  [ -f "$remote/config/crew-dispatch.json" ] && [ ! -L "$remote/config/crew-dispatch.json" ] \
-    || fail "regular destination should become a regular file, not a link"
-  cmp -s "$skills/crew-dispatch.json" "$remote/config/crew-dispatch.json" \
-    || fail "regular destination did not receive the symlink target bytes"
-  pass "sender follows a source symlink and publishes its target bytes"
+  assert_contains "$out" "removed: config/crew-dispatch.json" \
+    "a regular destination should converge away from another machine's bytes"
+  assert_absent "$remote/config/crew-dispatch.json" \
+    "the stale foreign copy should be gone"
+
+  out=$(run_remote_push "$primary" "$remote" "$fakebin" 2) \
+    || fail "repeat push with a symlinked source should succeed: $out"
+  assert_contains "$out" "unchanged: config/crew-dispatch.json" \
+    "converged absence should stay quiet"
+  pass "sender converges a symlinked source to absence instead of pushing its target bytes"
 }
 
 test_sender_push_preserves_remote_own_symlink() {
@@ -127,6 +133,8 @@ test_sender_push_preserves_remote_own_symlink() {
     "push should leave the remote's own symlink destination unchanged"
   [ -L "$remote/config/crew-dispatch.json" ] \
     || fail "push replaced the remote's own symlink destination"
+  assert_absent "$remote/config/.fm-inherit-crew-dispatch.json.generation" \
+    "push must not record a generation for bytes it did not publish"
   assert_equals "$remote_skills/crew-dispatch.json" "$(readlink "$remote/config/crew-dispatch.json")" \
     "the remote symlink should still point at its own skills clone"
   assert_grep 'remote local bytes' "$remote_skills/crew-dispatch.json" \
@@ -154,7 +162,7 @@ test_dangling_source_symlink_still_refused() {
 }
 
 test_receiver_leaves_own_symlink_destination_untouched
-test_sender_follows_source_symlink_into_regular_destination
+test_sender_converges_symlinked_source_to_absent
 test_sender_push_preserves_remote_own_symlink
 test_dangling_source_symlink_still_refused
 

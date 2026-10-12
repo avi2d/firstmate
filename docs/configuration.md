@@ -1269,6 +1269,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 **Inheritance**
 
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+A primary file held as a symlink is machine-local indirection and is not inherited: remote homes converge to absence for it and keep their own machine-local link, so a home on another machine never receives this machine's variant bytes.
 
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 
