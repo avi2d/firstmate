@@ -322,6 +322,7 @@ Such an acknowledgement is reported as having acknowledged nothing, together wit
 The presented set is read before any re-claim, so a row that arrived after presentation is never named for unseen acknowledgement.
 
 If a branch offer loses the claim race to main, it rejects its settlement so the watcher retains the actionable close until Pi accepts its main follow-up.
+A branch settlement that does not settle within FM_PI_BRANCH_SETTLEMENT_TIMEOUT_MS falls back to main the same way, so one stuck branch run cannot hold every later successor behind it.
 
 ### Branch eligibility and check rows
 

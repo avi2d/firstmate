@@ -164,6 +164,11 @@ const armReadyTimeoutMs = positiveInteger(
   process.platform === "win32" ? 35000 : 12000,
 );
 const armRetireTimeoutMs = positiveInteger("FM_WATCH_ARM_RETIRE_TIMEOUT_MS", 1000);
+const branchSettlementTimeoutMs = positiveInteger(
+  "FM_PI_BRANCH_SETTLEMENT_TIMEOUT_MS",
+  60000,
+);
+const branchSettlementTimeoutNotice = `watcher: notice - the supervision branch did not settle within ${branchSettlementTimeoutMs / 1000}s; the wake is delivered to main so supervision never goes blind`;
 const repairOnlyHint = "call fm_watch_arm_pi again only after a later notification says the cycle is missing, failed, or unhealthy";
 const shuttingDownMessage = "watcher: not armed - Pi session is shutting down";
 
@@ -214,6 +219,23 @@ function positiveInteger(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.floor(value);
+}
+
+// An unbounded branch wait would hold every later successor behind one stuck branch run.
+async function branchSettlementConfirmed(settlement: Promise<void>): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      settlement.then(() => true),
+      new Promise<boolean>((resolveSettlement) => {
+        const timeout = setTimeout(() => resolveSettlement(false), branchSettlementTimeoutMs);
+        timeout.unref();
+        timer = timeout;
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 // Opt-in bound for the extension diagnostic log: only a positive
@@ -776,9 +798,11 @@ export default function (pi: ExtensionAPI) {
       const branchDelivery = offerWakeToBranch(message);
       if (branchDelivery) {
         try {
-          await branchDelivery;
-          return true;
-        } catch {}
+          if (await branchSettlementConfirmed(branchDelivery)) return true;
+        } catch {
+          return await sendWake(owner, message, pending);
+        }
+        return await sendWake(owner, `${message}\n\n${branchSettlementTimeoutNotice}`, pending);
       }
     }
     return await sendWake(owner, message, pending);
