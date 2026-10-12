@@ -112,7 +112,9 @@ test_arm_writes_and_binds_the_check_and_disarm_removes_it() {
   assert_contains "$(cat "$home/state/flake-watch.check.sh")" "fm-flake-watch.sh check" "shim dispatches the check action"
   out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" "$CHECK" arm 2>&1) || fail "re-arm must succeed: $out"
   assert_contains "$out" "armed" "re-arm stays armed"
+  printf 'checks\nchecks 1\n' > "$home/state/.flake-watch-progress"
   out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" "$CHECK" disarm 2>&1) || fail "disarm must succeed: $out"
+  assert_absent "$home/state/.flake-watch-progress" "disarm removes the rotation record"
   assert_absent "$home/state/flake-watch.check.sh" "disarm removes the check shim"
   assert_absent "$home/state/flake-watch.check-trust" "disarm removes the trust binding"
   assert_absent "$home/state/.flake-watch-seen" "disarm removes the seen record"
@@ -196,3 +198,99 @@ test_green_week_files_nothing
 test_expired_artifact_still_files_its_one_task
 test_unstarted_job_files_nothing_but_is_recorded_seen
 test_existing_task_is_adopted_not_duplicated
+
+write_slow_gh_fake() {
+  local home=$1
+  cat > "$home/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = api ]; then
+  printf '%s\n' "$2" >> "${FLAKE_CALL_LOG:-/dev/null}"
+  sleep 2
+  printf 'api_response:\n  body: ""\n  truncated: false\n'
+  exit 0
+fi
+printf 'unexpected gh-axi call: %s\n' "$*" >&2
+exit 1
+SH
+  chmod +x "$home/fakebin/gh-axi"
+}
+
+run_budget_check() {
+  local home=$1 out=$2
+  local status=0
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_FLAKE_WATCH_NOW="$NOW_2026_09_28_1200Z" \
+    FM_CHECK_TIMEOUT=4 FM_FLAKE_WATCH_BUDGET=1 \
+    "$CHECK" check >"$out" 2>&1 || status=$?
+  expect_code 0 "$status" "budget check exit"
+}
+
+test_budget_overrun_stays_silent_and_rotates() {
+  local home first1 first2
+  home=$(make_home budget-quiet)
+  write_slow_gh_fake "$home"
+  export FLAKE_CALL_LOG="$home/calls.log"
+  run_budget_check "$home" "$home/out1.txt"
+  [ ! -s "$home/out1.txt" ] || fail "an over-budget poll must stay silent: $(cat "$home/out1.txt")"
+  first1=$(head -n 1 "$home/calls.log")
+  assert_contains "$first1" "/repos/avi2d/skills/" "the first poll starts at skills"
+  : > "$home/calls.log"
+  run_budget_check "$home" "$home/out2.txt"
+  [ ! -s "$home/out2.txt" ] || fail "the next over-budget poll must stay silent: $(cat "$home/out2.txt")"
+  first2=$(head -n 1 "$home/calls.log")
+  assert_contains "$first2" "/repos/avi2d/checks/" "the next poll resumes where the last one stopped"
+  pass "fm-flake-watch: an over-budget poll stays silent and resumes at the first unread repository"
+}
+
+test_same_repo_unread_across_three_polls_wakes() {
+  local home
+  home=$(make_home budget-stuck)
+  write_slow_gh_fake "$home"
+  export FLAKE_CALL_LOG="$home/calls.log"
+  run_budget_check "$home" "$home/out1.txt"
+  [ ! -s "$home/out1.txt" ] || fail "first over-budget poll must stay silent: $(cat "$home/out1.txt")"
+  run_budget_check "$home" "$home/out2.txt"
+  [ ! -s "$home/out2.txt" ] || fail "second over-budget poll must stay silent: $(cat "$home/out2.txt")"
+  run_budget_check "$home" "$home/out3.txt"
+  assert_contains "$(cat "$home/out3.txt")" "flake-watch: repository career left unread across 3 consecutive over-budget polls" \
+    "the third poll leaving career unread wakes naming career"
+  run_check "$home" "$home/out4.txt"
+  [ ! -s "$home/out4.txt" ] || fail "a completing poll must stay silent: $(cat "$home/out4.txt")"
+  [ ! -e "$home/state/.flake-watch-progress" ] || fail "a completing poll clears the rotation record"
+  pass "fm-flake-watch: a repository unread across 3 consecutive over-budget polls wakes, a full poll resets"
+}
+
+test_genuine_failure_wakes_immediately() {
+  local home
+  home=$(make_home budget-error)
+  cat > "$home/fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = api ]; then
+  printf 'error: "gh: Internal Server Error (HTTP 500)"\ncode: SERVER_ERROR\n' >&2
+  exit 1
+fi
+printf 'unexpected gh-axi call: %s\n' "$*" >&2
+exit 1
+SH
+  chmod +x "$home/fakebin/gh-axi"
+  run_budget_check "$home" "$home/out.txt"
+  assert_contains "$(cat "$home/out.txt")" "flake-watch: skills:" \
+    "a genuine api failure wakes on the first poll"
+  pass "fm-flake-watch: a genuine failure stays an immediate wake"
+}
+
+test_missing_tool_wakes_immediately() {
+  local home status=0
+  home=$(make_home budget-notool)
+  mkdir -p "$home/noghbin"
+  PATH="$home/noghbin:/usr/bin:/bin" FM_HOME="$home" FM_FLAKE_WATCH_NOW="$NOW_2026_09_28_1200Z" \
+    "$CHECK" check >"$home/out.txt" 2>&1 || status=$?
+  expect_code 0 "$status" "check exit without gh-axi"
+  assert_contains "$(cat "$home/out.txt")" "flake-watch: gh-axi is not installed" \
+    "a missing tool wakes on the first poll"
+  pass "fm-flake-watch: a missing tool stays an immediate wake"
+}
+
+test_budget_overrun_stays_silent_and_rotates
+test_same_repo_unread_across_three_polls_wakes
+test_genuine_failure_wakes_immediately
+test_missing_tool_wakes_immediately

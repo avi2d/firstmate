@@ -15,6 +15,8 @@ CHECK_SHIM="$STATE/$CHECK_ID.check.sh"
 CHECK_TRUST="$STATE/$CHECK_ID.check-trust"
 SEEN="$STATE/.flake-watch-seen"
 ERROR_RECORD="$STATE/.flake-watch-error"
+PROGRESS="$STATE/.flake-watch-progress"
+UNREAD_WAKE_AFTER=3
 RECORD_SCHEMA=fm-flake-watch-v1
 MAX_LINE=300
 
@@ -45,6 +47,8 @@ URL and a note that the detail is gone. A repository without a flake
 workflow is skipped silently.
 FM_FLAKE_WATCH_DAYS bounds how far back a red run is news (default 7).
 FM_FLAKE_WATCH_NOW pins the clock as epoch seconds for tests.
+A poll that runs out of budget stays silent and resumes at the first unread repository next poll.
+Only a repository left unread across 3 consecutive over-budget polls wakes.
 EOF
 }
 
@@ -171,6 +175,78 @@ outside_detail() {
   jq -r '.outsideTests | join(",")' "$dir/flake-report.json" 2>/dev/null
 }
 
+progress_read() {
+  local line name count
+  START_REPO=
+  STREAK_skills=0 STREAK_checks=0 STREAK_dotfiles=0 STREAK_career=0
+  STREAK_learning=0 STREAK_smithers=0 STREAK_website=0
+  [ -f "$PROGRESS" ] && [ ! -L "$PROGRESS" ] || return 0
+  line=$(sed -n '1p' "$PROGRESS" 2>/dev/null)
+  case " $REPOS " in *" $line "*) START_REPO=$line ;; esac
+  while read -r name count; do
+    case "$name $count" in
+      skills\ [0-9]*|checks\ [0-9]*|dotfiles\ [0-9]*|career\ [0-9]*|learning\ [0-9]*|smithers\ [0-9]*|website\ [0-9]*) ;;
+      *) continue ;;
+    esac
+    case "$name" in
+      skills) STREAK_skills=$count ;;
+      checks) STREAK_checks=$count ;;
+      dotfiles) STREAK_dotfiles=$count ;;
+      career) STREAK_career=$count ;;
+      learning) STREAK_learning=$count ;;
+      smithers) STREAK_smithers=$count ;;
+      website) STREAK_website=$count ;;
+    esac
+  done <<EOF
+$(tail -n +2 "$PROGRESS" 2>/dev/null)
+EOF
+}
+
+order_repos() {
+  local repo found='' before='' after=''
+  for repo in $REPOS; do
+    if [ -n "$found" ] || [ "$repo" = "$START_REPO" ]; then
+      found=1
+      after="$after $repo"
+    else
+      before="$before $repo"
+    fi
+  done
+  ORDER="$after $before"
+}
+
+streak_get() {
+  case "$1" in
+    skills) printf '%s\n' "$STREAK_skills" ;;
+    checks) printf '%s\n' "$STREAK_checks" ;;
+    dotfiles) printf '%s\n' "$STREAK_dotfiles" ;;
+    career) printf '%s\n' "$STREAK_career" ;;
+    learning) printf '%s\n' "$STREAK_learning" ;;
+    smithers) printf '%s\n' "$STREAK_smithers" ;;
+    website) printf '%s\n' "$STREAK_website" ;;
+    *) printf '0\n' ;;
+  esac
+}
+
+progress_write() {
+  local stop=$1 repo n past=0 tmp
+  WAKE_REPO=
+  [ -d "$STATE" ] && [ ! -L "$STATE" ] || return 1
+  tmp=$(umask 077; mktemp "$STATE/.fm-flake-watch.XXXXXX" 2>/dev/null) || return 1
+  printf '%s\n' "$stop" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  for repo in $ORDER; do
+    [ "$repo" = "$stop" ] && past=1
+    [ "$past" = 1 ] || continue
+    n=$(streak_get "$repo")
+    n=$((n + 1))
+    printf '%s %s\n' "$repo" "$n" >> "$tmp" || { rm -f -- "$tmp"; return 1; }
+    if [ "$n" -ge "$UNREAD_WAKE_AFTER" ] && [ -z "$WAKE_REPO" ]; then
+      WAKE_REPO=$repo
+    fi
+  done
+  mv -f -- "$tmp" "$PROGRESS" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+}
+
 file_task() {
   local task=$1 title=$2 repo=$3 body=$4
   BD_DUE_REQUIRED=false "$TASKS_BIN" add "$task" "$title" --kind ship --repo "$repo" --body "$body" >/dev/null 2>&1
@@ -178,16 +254,18 @@ file_task() {
 
 action_check() {
   local repo runs rc=0 task title body detail outside first_file first_line first_seeds count failures jobs
-  local errors=0 filed=0 truncated=
+  local errors=0 filed=0 truncated='' stop_repo=''
   local error_line=
   local tmp report
   command -v gh-axi >/dev/null 2>&1 || error_line="gh-axi is not installed"
   command -v jq >/dev/null 2>&1 || error_line="jq is not installed"
   mkdir -p "$STATE" "$DATA" 2>/dev/null || error_line="cannot write $STATE"
   error_record_read
+  progress_read
+  order_repos
   if [ -z "${error_line:-}" ]; then
-    for repo in $REPOS; do
-      past_budget && { truncated=1; break; }
+    for repo in $ORDER; do
+      past_budget && { truncated=1; stop_repo=$repo; break; }
       runs=$(report_runs "$repo") || rc=$?
       if [ "$rc" -eq 2 ]; then rc=0; continue; fi
       if [ "$rc" -ne 0 ]; then
@@ -199,7 +277,7 @@ action_check() {
       [ -n "$runs" ] || continue
       while IFS="$(printf '\t')" read -r id url created; do
         [ -n "${id:-}" ] || continue
-        past_budget && { truncated=1; break 2; }
+        past_budget && { truncated=1; stop_repo=$repo; break 2; }
         seen_has "$repo/$id" && continue
         task="flake-$repo-$id"
         if "$TASKS_BIN" show "$task" >/dev/null 2>&1; then
@@ -265,7 +343,16 @@ action_check() {
 $(printf '%s\n' "$runs" | red_runs_since)
 EOF
     done
-    [ -z "${truncated:-}" ] || { errors=1; error_line="stopped early at the ${BUDGET}s budget with repositories left unread"; }
+    if [ -n "${truncated:-}" ] && [ -n "${stop_repo:-}" ]; then
+      WAKE_REPO=
+      progress_write "$stop_repo" || { errors=1; [ -n "${error_line:-}" ] || error_line="cannot write $PROGRESS"; }
+      if [ -z "${error_line:-}" ] && [ -n "${WAKE_REPO:-}" ]; then
+        errors=1
+        error_line="repository $WAKE_REPO left unread across $UNREAD_WAKE_AFTER consecutive over-budget polls"
+      fi
+    elif [ -z "${truncated:-}" ]; then
+      rm -f -- "$PROGRESS" || true
+    fi
   else
     errors=1
   fi
@@ -392,7 +479,7 @@ action_arm() {
 }
 
 action_disarm() {
-  rm -f -- "$CHECK_SHIM" "$CHECK_TRUST" "$SEEN" "$ERROR_RECORD"
+  rm -f -- "$CHECK_SHIM" "$CHECK_TRUST" "$SEEN" "$ERROR_RECORD" "$PROGRESS"
   printf 'disarmed: state/%s.check.sh\n' "$CHECK_ID"
   return 0
 }
