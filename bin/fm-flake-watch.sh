@@ -59,7 +59,7 @@ die_usage() {
 }
 
 OWNER=avi2d
-REPOS="skills checks dotfiles career learning smithers website"
+REPOS=${FM_FLAKE_WATCH_REPOS:-"skills checks dotfiles career learning smithers website"}
 WORKFLOW=flake.yml
 PER_PAGE=10
 
@@ -176,30 +176,12 @@ outside_detail() {
 }
 
 progress_read() {
-  local line name count
+  local line
   START_REPO=
-  STREAK_skills=0 STREAK_checks=0 STREAK_dotfiles=0 STREAK_career=0
-  STREAK_learning=0 STREAK_smithers=0 STREAK_website=0
   [ -f "$PROGRESS" ] && [ ! -L "$PROGRESS" ] || return 0
   line=$(sed -n '1p' "$PROGRESS" 2>/dev/null)
+  case "$line" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
   case " $REPOS " in *" $line "*) START_REPO=$line ;; esac
-  while read -r name count; do
-    case "$name $count" in
-      skills\ [0-9]*|checks\ [0-9]*|dotfiles\ [0-9]*|career\ [0-9]*|learning\ [0-9]*|smithers\ [0-9]*|website\ [0-9]*) ;;
-      *) continue ;;
-    esac
-    case "$name" in
-      skills) STREAK_skills=$count ;;
-      checks) STREAK_checks=$count ;;
-      dotfiles) STREAK_dotfiles=$count ;;
-      career) STREAK_career=$count ;;
-      learning) STREAK_learning=$count ;;
-      smithers) STREAK_smithers=$count ;;
-      website) STREAK_website=$count ;;
-    esac
-  done <<EOF
-$(tail -n +2 "$PROGRESS" 2>/dev/null)
-EOF
 }
 
 order_repos() {
@@ -216,16 +198,8 @@ order_repos() {
 }
 
 streak_get() {
-  case "$1" in
-    skills) printf '%s\n' "$STREAK_skills" ;;
-    checks) printf '%s\n' "$STREAK_checks" ;;
-    dotfiles) printf '%s\n' "$STREAK_dotfiles" ;;
-    career) printf '%s\n' "$STREAK_career" ;;
-    learning) printf '%s\n' "$STREAK_learning" ;;
-    smithers) printf '%s\n' "$STREAK_smithers" ;;
-    website) printf '%s\n' "$STREAK_website" ;;
-    *) printf '0\n' ;;
-  esac
+  [ -f "$PROGRESS" ] && [ ! -L "$PROGRESS" ] || { printf '0\n'; return 0; }
+  awk -v repo="$1" '$1 == repo && $2 ~ /^[0-9]+$/ { n = $2 } END { print n + 0 }' "$PROGRESS" 2>/dev/null || printf '0\n'
 }
 
 progress_write() {

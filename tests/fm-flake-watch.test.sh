@@ -265,8 +265,14 @@ test_genuine_failure_wakes_immediately() {
   cat > "$home/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = api ]; then
-  printf 'error: "gh: Internal Server Error (HTTP 500)"\ncode: SERVER_ERROR\n' >&2
-  exit 1
+  case "$2" in
+    */repos/avi2d/skills/*)
+      printf 'error: "gh: Internal Server Error (HTTP 500)"\ncode: SERVER_ERROR\n' >&2
+      exit 1
+      ;;
+  esac
+  printf 'api_response:\n  body: ""\n  truncated: false\n'
+  exit 0
 fi
 printf 'unexpected gh-axi call: %s\n' "$*" >&2
 exit 1
@@ -290,7 +296,25 @@ test_missing_tool_wakes_immediately() {
   pass "fm-flake-watch: a missing tool stays an immediate wake"
 }
 
+test_repo_outside_the_default_seven_still_wakes() {
+  local home
+  home=$(make_home budget-newrepo)
+  write_slow_gh_fake "$home"
+  export FLAKE_CALL_LOG="$home/calls.log"
+  export FM_FLAKE_WATCH_REPOS="skills checks dotfiles atlas"
+  run_budget_check "$home" "$home/out1.txt"
+  [ ! -s "$home/out1.txt" ] || fail "first over-budget poll must stay silent: $(cat "$home/out1.txt")"
+  run_budget_check "$home" "$home/out2.txt"
+  [ ! -s "$home/out2.txt" ] || fail "second over-budget poll must stay silent: $(cat "$home/out2.txt")"
+  run_budget_check "$home" "$home/out3.txt"
+  unset FM_FLAKE_WATCH_REPOS
+  assert_contains "$(cat "$home/out3.txt")" "flake-watch: repository atlas left unread across 3 consecutive over-budget polls" \
+    "a repository outside the default seven still wakes after 3 unread polls"
+  pass "fm-flake-watch: rotation tracks repositories from REPOS, not a hard-coded list"
+}
+
 test_budget_overrun_stays_silent_and_rotates
+test_repo_outside_the_default_seven_still_wakes
 test_same_repo_unread_across_three_polls_wakes
 test_genuine_failure_wakes_immediately
 test_missing_tool_wakes_immediately
