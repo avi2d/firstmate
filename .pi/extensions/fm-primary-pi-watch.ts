@@ -1242,7 +1242,11 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on?.("before_agent_start", (event) => {
-    consumeWake(generation, event.prompt);
+    // Custom runs carry message, not prompt; only a user prompt can consume a wake.
+    if ((event as { messageType?: unknown }).messageType === "custom") return;
+    const prompt = (event as { prompt?: unknown }).prompt;
+    if (typeof prompt !== "string") return;
+    consumeWake(generation, prompt);
   });
   pi.on?.("message_start", (event) => {
     if (event.message.role !== "user") return;

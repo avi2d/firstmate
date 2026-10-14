@@ -1540,6 +1540,183 @@ WRAPPER
   pass "the away spend cap is rechecked under the task-set lock so concurrent spawns cannot both publish"
 }
 
+# --- before_agent_start event kinds ------------------------------------------------
+# Pi 1.2.0 also fires before_agent_start for idle custom-message runs, where
+# the event carries message and no prompt. The driver below loads the real
+# extension with stubbed Pi packages and owns the fleet lock, so the handler
+# runs to the prompt read exactly as on a live main session.
+
+install_branch_supervision_extension_fixture() {
+  local repo=$1
+  mkdir -p \
+    "$repo/.pi/extensions/lib" \
+    "$repo/bin" \
+    "$repo/node_modules/@earendil-works/pi-coding-agent" \
+    "$repo/node_modules/@earendil-works/pi-ai" \
+    "$repo/node_modules/@earendil-works/pi-tui" \
+    "$repo/node_modules/typebox"
+  cp "$ROOT/.pi/extensions/fm-branch-supervision.ts" "$repo/.pi/extensions/"
+  cp "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" \
+    "$ROOT/.pi/extensions/lib/fm-native-contract.ts" \
+    "$ROOT/.pi/extensions/lib/fm-async-exec.ts" \
+    "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" \
+    "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" \
+    "$ROOT/.pi/extensions/lib/fm-operational-input.ts" \
+    "$repo/.pi/extensions/lib/"
+  cp "$ROOT/bin/"*.sh "$repo/bin/"
+  chmod +x "$repo/bin/"*.sh
+  cat > "$repo/node_modules/@earendil-works/pi-coding-agent/package.json" <<'JSON'
+{"name":"@earendil-works/pi-coding-agent","type":"module","exports":"./index.js"}
+JSON
+  cat > "$repo/node_modules/@earendil-works/pi-coding-agent/index.js" <<'JS'
+export function getAgentDir() { return "/tmp/nonexistent-agent-dir"; }
+export function getMarkdownTheme() { return {}; }
+export function createAgentSession() { throw new Error("stub: no branch sessions in this fixture"); }
+export function createBashToolDefinition() { return {}; }
+export class DefaultResourceLoader { constructor() {} }
+export class DynamicBorder {}
+export function keyHint() { return ""; }
+export class ModelRuntime {}
+export class SessionManager {}
+export class ToolExecutionComponent {}
+export class UserMessageComponent { render() { return []; } invalidate() {} }
+export const VERSION = "1.1.0";
+JS
+  cat > "$repo/node_modules/@earendil-works/pi-ai/package.json" <<'JSON'
+{"name":"@earendil-works/pi-ai","type":"module","exports":"./index.js"}
+JSON
+  cat > "$repo/node_modules/@earendil-works/pi-ai/index.js" <<'JS'
+export function clampThinkingLevel() { return undefined; }
+export function getSupportedThinkingLevels() { return []; }
+JS
+  cat > "$repo/node_modules/@earendil-works/pi-tui/package.json" <<'JSON'
+{"name":"@earendil-works/pi-tui","type":"module","exports":"./index.js"}
+JSON
+  cat > "$repo/node_modules/@earendil-works/pi-tui/index.js" <<'JS'
+export class Box { addChild() {} clear() {} setBgFn() {} }
+export class Container {}
+export function fuzzyFilter() { return []; }
+export class Input {}
+export class SelectList {}
+export class Text {}
+JS
+  cat > "$repo/node_modules/typebox/package.json" <<'JSON'
+{"name":"typebox","type":"module","exports":"./index.js"}
+JSON
+  cat > "$repo/node_modules/typebox/index.js" <<'JS'
+const s = (t, o) => ({ type: t, ...(o ?? {}) });
+export const Type = {
+  Object: (p, o) => s("object", { properties: p, ...(o ?? {}) }),
+  Array: (i, o) => s("array", { items: i, ...(o ?? {}) }),
+  Integer: (o) => s("integer", o),
+  Number: (o) => s("number", o),
+  String: (o) => s("string", o),
+  Boolean: (o) => s("boolean", o),
+  Null: (o) => s("null", o),
+  Literal: (v, o) => s("literal", { const: v, ...(o ?? {}) }),
+  Union: (v, o) => s("union", { anyOf: v, ...(o ?? {}) }),
+  Optional: (i) => i,
+};
+JS
+}
+
+# Each driver fires the realistic 1.2.0 order for its kind: an idle custom run
+# first (every supervision presentation opens one), then the kind under test.
+# A pre-fix handler rejects the custom run, so every case below fails there.
+drive_before_agent_start_case() {
+  PLUGIN="$1" FINAL_EVENT="$2" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const failNow = (message) => {
+  console.error(message);
+  process.exit(1);
+};
+const handlers = new Map();
+const sent = [];
+const pi = {
+  on(name, handler) { handlers.set(name, handler); },
+  events: { on() {} },
+  sendMessage(message, options) { sent.push({ message, options }); },
+  registerCommand() {},
+  registerMarkdownTransformer() {},
+  registerMessageRenderer() {},
+  registerEntryRenderer() {},
+  registerTool() {},
+  getThinkingLevel() { return undefined; },
+  appendEntry() {},
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+const beforeAgentStart = handlers.get("before_agent_start");
+if (!beforeAgentStart) failNow("before_agent_start was not registered");
+const sessionManager = { getSessionFile: () => undefined, getEntries: () => [] };
+const ctx = { sessionManager };
+const run = (event) => beforeAgentStart(event, ctx).catch((error) => failNow(`${event.messageType ?? "legacy"} run threw: ${error.message}`));
+await run({
+  type: "before_agent_start",
+  messageType: "custom",
+  message: { customType: "fm-processing", content: "processing", display: false },
+  systemPrompt: "",
+  systemPromptOptions: {},
+});
+if (sent.length !== 0) failNow(`custom run sent ${sent.length} messages`);
+const marker = `${process.env.FM_HOME}/state/.pi-branch-extension-loaded`;
+if (process.env.FINAL_EVENT === "custom" && existsSync(marker)) {
+  failNow("custom run ran activation side effects");
+}
+await run(JSON.parse(process.env.FINAL_EVENT_JSON));
+if (sent.length !== 0) failNow(`final run sent ${sent.length} messages`);
+if (process.env.FINAL_EVENT !== "custom" && !existsSync(marker)) {
+  failNow("prompt run skipped the owned prompt path");
+}
+process.exit(0);
+EOF
+}
+
+test_before_agent_start_custom_run_never_reaches_the_prompt() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-supervision-custom-root"
+  home="$TMP_ROOT/pi-supervision-custom-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_branch_supervision_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-branch-supervision.ts"
+  out=$(FINAL_EVENT=custom FINAL_EVENT_JSON='{"type":"before_agent_start","messageType":"custom","message":{"customType":"fm-processing","content":"processing","display":false},"systemPrompt":"","systemPromptOptions":{}}' PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" drive_before_agent_start_case "$plugin" custom 2>&1)
+  status=$?
+  expect_code 0 "$status" "a custom before_agent_start run must resolve without reading a prompt"
+  [ -z "$out" ] || fail "custom-run test printed output: $out"
+  pass "a custom before_agent_start run resolves with no prompt read and no activation"
+}
+
+test_before_agent_start_user_run_keeps_the_prompt_path() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-supervision-user-root"
+  home="$TMP_ROOT/pi-supervision-user-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_branch_supervision_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-branch-supervision.ts"
+  out=$(FINAL_EVENT=user FINAL_EVENT_JSON='{"type":"before_agent_start","messageType":"user","prompt":"hello captain","systemPrompt":"","systemPromptOptions":{}}' PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" drive_before_agent_start_case "$plugin" user 2>&1)
+  status=$?
+  expect_code 0 "$status" "a user before_agent_start run must keep the prompt path after an idle custom run"
+  [ -z "$out" ] || fail "user-run test printed output: $out"
+  pass "a user before_agent_start run keeps the prompt path after an idle custom run"
+}
+
+test_before_agent_start_legacy_shape_keeps_the_prompt_path() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-supervision-legacy-root"
+  home="$TMP_ROOT/pi-supervision-legacy-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_branch_supervision_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-branch-supervision.ts"
+  out=$(FINAL_EVENT=legacy FINAL_EVENT_JSON='{"type":"before_agent_start","prompt":"hello captain","systemPrompt":"","systemPromptOptions":{}}' PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" drive_before_agent_start_case "$plugin" legacy 2>&1)
+  status=$?
+  expect_code 0 "$status" "a 1.1.0 before_agent_start shape without messageType must keep the prompt path"
+  [ -z "$out" ] || fail "legacy-shape test printed output: $out"
+  pass "a 1.1.0 before_agent_start shape without messageType keeps the prompt path"
+}
+
 test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_outcome_store_is_append_only_with_cursor_reads
 test_outcome_append_keeps_a_bounded_display_tail
@@ -1574,3 +1751,6 @@ test_away_record_relocates_main_owned_actions_to_the_branch
 test_away_branch_spawn_requires_queued_dispatchable_work
 test_away_spend_cap_is_rechecked_under_the_task_set_lock
 test_quiet_record_never_caps_a_present_captains_spawn
+test_before_agent_start_custom_run_never_reaches_the_prompt
+test_before_agent_start_user_run_keeps_the_prompt_path
+test_before_agent_start_legacy_shape_keeps_the_prompt_path

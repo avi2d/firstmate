@@ -80,6 +80,81 @@ export const Type = {
 JS
 }
 
+# before_agent_start event kinds: Pi 1.2.0 also fires the event for idle
+# custom-message runs, where it carries message and no prompt. An undefined
+# prompt matches no wake, so the pre-fix handler never threw here; these cases
+# pin all three shapes against a narrowing that drops or crashes on one.
+drive_watch_before_agent_start_case() {
+  PLUGIN="$plugin" EVENT_JSON="$1" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+const pi = {
+  on(name, handler) { handlers.set(name, handler); },
+  events: { on() {} },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage: async () => {},
+};
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+const beforeAgentStart = handlers.get("before_agent_start");
+if (!beforeAgentStart) {
+  console.error("before_agent_start was not registered");
+  process.exit(1);
+}
+try {
+  await beforeAgentStart(JSON.parse(process.env.EVENT_JSON), {});
+} catch (error) {
+  console.error(`before_agent_start threw: ${error.message}`);
+  process.exit(1);
+}
+process.exit(0);
+EOF
+}
+
+test_pi_before_agent_start_custom_run_consumes_no_wake() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-watch-custom-root"
+  home="$TMP_ROOT/pi-watch-custom-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" drive_watch_before_agent_start_case '{"type":"before_agent_start","messageType":"custom","message":{"customType":"fm-processing","content":"processing","display":false}}' 2>&1)
+  status=$?
+  expect_code 0 "$status" "a custom before_agent_start run must not throw and must consume no wake"
+  [ -z "$out" ] || fail "custom-run test printed output: $out"
+  pass "a custom before_agent_start run throws nothing and consumes no wake"
+}
+
+test_pi_before_agent_start_user_run_reaches_consume_wake() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-watch-user-root"
+  home="$TMP_ROOT/pi-watch-user-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" drive_watch_before_agent_start_case '{"type":"before_agent_start","messageType":"user","prompt":"hello captain"}' 2>&1)
+  status=$?
+  expect_code 0 "$status" "a user before_agent_start run must reach wake consumption without throwing"
+  [ -z "$out" ] || fail "user-run test printed output: $out"
+  pass "a user before_agent_start run reaches wake consumption without throwing"
+}
+
+test_pi_before_agent_start_legacy_shape_reaches_consume_wake() {
+  local repo home plugin out status
+  repo="$TMP_ROOT/pi-watch-legacy-root"
+  home="$TMP_ROOT/pi-watch-legacy-home"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" drive_watch_before_agent_start_case '{"type":"before_agent_start","prompt":"hello captain"}' 2>&1)
+  status=$?
+  expect_code 0 "$status" "a 1.1.0 before_agent_start shape without messageType must reach wake consumption"
+  [ -z "$out" ] || fail "legacy-shape test printed output: $out"
+  pass "a 1.1.0 before_agent_start shape without messageType reaches wake consumption"
+}
+
 test_pi_extension_reports_external_healthy_watcher() {
   local repo home plugin out status
   repo="$TMP_ROOT/pi-external-healthy-root"
@@ -5697,6 +5772,9 @@ EOF
 }
 
 test_pi_extension_reports_external_healthy_watcher
+test_pi_before_agent_start_custom_run_consumes_no_wake
+test_pi_before_agent_start_user_run_reaches_consume_wake
+test_pi_before_agent_start_legacy_shape_reaches_consume_wake
 test_pi_tool_returns_agent_tool_result
 test_pi_tool_structured_content_matches_its_output_schema
 test_pi_redundant_tool_call_is_owned_noop
