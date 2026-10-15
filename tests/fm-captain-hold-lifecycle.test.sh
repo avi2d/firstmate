@@ -3661,6 +3661,62 @@ test_complete_accepts_pruned_answered_rounds() {
   pass "completion attests answered rounds pruned into the configured archive and refuses the rest"
 }
 
+test_complete_accepts_released_round_in_done_archive() {
+  local home id archive rc
+  home=$(make_home complete-released-archive)
+  id=sample-released-interview
+  archive="$home/data/done-archive.md"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the released interview" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the released-interview origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Released interview\n\nOne round remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id-r1" --title "Round one" --reason "round one pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not hold round one"
+  printf 'Captain chose one.\n' > "$home/answer-one.txt"
+  run_captain "$home" answer "$id-r1" --decision-file "$home/answer-one.txt" --release >/dev/null \
+    || fail "could not release round one"
+  tasks_in "$home" "done" "$id-r1" >/dev/null \
+    || fail "could not close the released round"
+  run_captain "$home" hold "$id-open" --title "Open round" --reason "round still pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not hold the open round"
+  tasks_in "$home" "done" "$id-open" >/dev/null \
+    || fail "could not close the unanswered round"
+  for i in $(seq 1 12); do
+    tasks_in "$home" add "filler-$i" "Filler $i" --kind ship --repo sample >/dev/null \
+      || fail "could not create filler $i"
+    tasks_in "$home" "done" "filler-$i" >/dev/null \
+      || fail "could not close filler $i"
+  done
+  tasks_in "$home" prune >/dev/null \
+    || fail "could not prune closed rounds into the done archive"
+  if tasks_in "$home" show "$id-r1" --full >/dev/null 2>&1; then
+    fail "the released round survived pruning instead of moving to the archive"
+  fi
+  assert_grep "$id-r1" "$archive" "pruning did not move the released round into the done archive"
+  run_captain "$home" complete "$id" "$id-r1" >/dev/null \
+    || fail "completion refused a released round pruned into the done archive"
+  run_captain "$home" verify "$id" >/dev/null \
+    || fail "verify refused the released round after completion"
+  if run_captain "$home" complete "$id" "$id-r1" filler-1 \
+    > "$home/plain.out" 2> "$home/plain.err"; then
+    fail "completion accepted an archived task that was never a captain call"
+  fi
+  if run_captain "$home" complete "$id" "$id-r1" sample-unknown-round \
+    > "$home/unknown.out" 2> "$home/unknown.err"; then
+    fail "completion accepted an inventory entry that never existed"
+  fi
+  if run_captain "$home" complete "$id" "$id-r1" "$id-open" \
+    > "$home/unanswered.out" 2> "$home/unanswered.err"; then
+    fail "completion accepted an archived round the captain never answered"
+  fi
+  rc=0
+  run_captain "$home" verify "$id" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || fail "a refused completion broke the attested released inventory"
+  pass "completion attests a released round pruned into the done archive and refuses the rest"
+}
+
 test_pr_merge_entrypoint_refuses_a_captain_held_task() {
   local home pr_id pr repo wt rc
   home=$(make_home held-merge-entrypoints)
@@ -4977,6 +5033,7 @@ test_teardown_retains_captain_calls_in_a_relocated_backlog
 test_teardown_retains_a_gerrit_captain_call_with_its_change_url
 test_merge_approval_releases_before_zero_done_retention
 test_complete_accepts_pruned_answered_rounds
+test_complete_accepts_released_round_in_done_archive
 test_pr_merge_entrypoint_refuses_a_captain_held_task
 test_local_merge_entrypoint_refuses_a_captain_held_task
 test_pr_merge_entrypoint_separates_an_unreadable_record_from_an_absent_one
