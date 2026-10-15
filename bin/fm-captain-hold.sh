@@ -842,16 +842,22 @@ captain_archive_file() {  # prints this home's done-archive path
   fi
 }
 
-# Whether the archive carries <task-id> as an answered captain call: its block
-# holds the captain-hold mark and a recorded resolution.
+# Whether the archive carries <task-id> as a settled captain call: its block
+# carries the same resolution record verify_hold_durable accepts on a live
+# row. A call closed with --release loses the hold mark before retention
+# archives it, so the mark cannot carry this verdict.
 archive_block_is_answered_call() {  # <archive-file> <task-id>
   case "$2" in
     ''|*[!A-Za-z0-9._-]*) return 1 ;;
   esac
   awk -v want="$2" '
     function flush() {
-      if (current == want && held && recorded) found = 1
-      current = ""; held = 0; recorded = 0
+      if (current == want) {
+        if ((captain_leader && (decision_label || evidence_label)) \
+            || (verdict_leader && decision_label)) found = 1
+      }
+      current = ""; captain_leader = 0; verdict_leader = 0
+      decision_label = 0; evidence_label = 0
     }
     /^## / { flush(); next }
     /^- \[[ xX]\] / {
@@ -862,9 +868,10 @@ archive_block_is_answered_call() {  # <archive-file> <task-id>
       sub(/ .*/, "", current)
     }
     { if (current != "") {
-        if (index($0, "(hold-kind: captain)") > 0) held = 1
-        if (index($0, "Resolution recorded by fm-captain-hold.") > 0) recorded = 1
-        if (index($0, "Resolution recorded by fm-decision-hold.") > 0) recorded = 1
+        if (index($0, "Resolution recorded by fm-captain-hold.") > 0) captain_leader = 1
+        if (index($0, "Resolution recorded by fm-decision-hold.") > 0) verdict_leader = 1
+        if (index($0, "Captain decision:") > 0) decision_label = 1
+        if (index($0, "Reconciliation evidence:") > 0) evidence_label = 1
     } }
     END { flush(); exit(!found) }
   ' "$1"
