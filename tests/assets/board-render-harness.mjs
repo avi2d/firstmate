@@ -26,6 +26,20 @@ class Node {
     this.checked = false;
     this.classList = {
       add: (c) => { this.className = (this.className + " " + c).trim(); },
+      remove: (c) => {
+        this.className = this.className
+          .split(/\s+/)
+          .filter((x) => x !== c)
+          .join(" ")
+          .trim();
+      },
+      toggle: (c, force) => {
+        const has = this.className.split(/\s+/).includes(c);
+        const want = force === undefined ? !has : !!force;
+        if (want && !has) this.className = (this.className + " " + c).trim();
+        if (!want && has) this.classList.remove(c);
+        return want;
+      },
       contains: (c) => this.className.split(/\s+/).includes(c),
     };
   }
@@ -62,6 +76,11 @@ byId.set("bearings-data", dataNode);
 
 globalThis.document = {
   createElement: (tag) => new Node(tag),
+  createTextNode: (text) => {
+    const n = new Node("#text");
+    n.textContent = text;
+    return n;
+  },
   // Lazily mint any element the page asks for: the shim tracks whatever ids
   // the shipped template actually uses instead of pinning a fixed list.
   getElementById: (id) => {
@@ -108,6 +127,33 @@ const rowsOf = (container) =>
       };
     });
 
+const deck = byId.get("bb-call") || new Node("div");
+const linksOf = (node) => {
+  const out = [];
+  const walk = (n) => {
+    for (const c of n.children) {
+      if (c.tagName === "a") out.push({ href: c.href || "", text: c.textContent });
+      walk(c);
+    }
+  };
+  walk(node);
+  return out;
+};
+const calls = deck.children
+  .filter((c) => c.className.split(/\s+/).includes("bb-decision"))
+  .map((card) => ({
+    title: card.querySelectorAll(".bb-decision__title")[0]?.textContent ?? "",
+    ctx: card.querySelectorAll(".bb-ctx__row").map((r) => ({
+      k: r.children.find((c) => c.className.split(/\s+/).includes("bb-ctx__k"))?.textContent ?? "",
+      v: r.children.find((c) => c.className.split(/\s+/).includes("bb-ctx__v"))?.textContent ?? "",
+      links: linksOf(r),
+    })),
+    options: card.querySelectorAll(".bb-opt").map((o) => ({
+      value: o.children.find((c) => c.tagName === "input")?.value ?? "",
+      label: o.querySelectorAll(".bb-opt__label")[0]?.textContent ?? "",
+    })),
+  }));
+
 const uw = byId.get("bb-underway") || new Node("div");
 const underway = rowsOf(uw);
 
@@ -123,4 +169,4 @@ const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c
 const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map((c) => c.textContent);
 
 process.stdout.write(
-  JSON.stringify({ stats, underway, charted, empty, more, error: errorText }) + "\n");
+  JSON.stringify({ stats, underway, charted, calls, empty, more, error: errorText }) + "\n");

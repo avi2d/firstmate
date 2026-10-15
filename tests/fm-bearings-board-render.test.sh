@@ -322,6 +322,70 @@ test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() 
   pass "charted rows with no filed date follow the dated rows in payload order"
 }
 
+render_calls() {  # <home> <captains-call-json>
+  local home=$1 call=$2 data="$1/payload.json"
+  jq -n --argjson call "$call" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z",
+    prs_live:false, captains_call:$call, underway:[], landed:[],
+    charted:[], charted_more:0}' > "$data"
+  build_board "$home" "$data"
+  node "$HARNESS" "$home/.lavish/bearings-board.html" \
+    || fail "the built board could not be rendered"
+}
+
+test_a_card_about_row_links_its_urls() {
+  local home out
+  home=$(make_home about-link)
+  out=$(render_calls "$home" '[
+    {"key":"about-link-card","type":"decision","repo":"sample",
+     "title":"Docs choices",
+     "about":"The writeup is at https://example.com/writeup, read it first.",
+     "decide":"Adopt?","options":[{"value":"yes","label":"Adopt"}]},
+    {"key":"about-plain-card","type":"decision","repo":"sample",
+     "title":"Plain card","about":"No links here, only <b>markup</b>.",
+     "decide":"Adopt?","options":[{"value":"yes","label":"Adopt"}]}
+  ]')
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the cards: $out"
+  printf '%s' "$out" | jq -e '
+    (.calls | length) == 2
+      and ([.calls[0].ctx[] | select(.k == "about")] | length) == 1
+      and ([.calls[0].ctx[] | select(.k == "about")] | .[0]
+        | .v == "The writeup is at https://example.com/writeup, read it first."
+          and (.links | length) == 1
+          and .links[0].href == "https://example.com/writeup"
+          and .links[0].text == "https://example.com/writeup")
+      and ([.calls[1].ctx[] | select(.k == "about")] | .[0]
+        | .v == "No links here, only <b>markup</b>."
+          and (.links | length) == 0)
+  ' >/dev/null || fail "a card about row did not link its URL: $out"
+  pass "a card about row links its URLs and keeps the surrounding text"
+}
+
+test_the_reconcile_choice_renders_in_the_card_language() {
+  local home out
+  home=$(make_home reconcile-language-render)
+  out=$(render_calls "$home" '[
+    {"key":"ru-card","type":"decision","repo":"sample",
+     "title":"Выбрать подход","decide":"Принять?",
+     "options":[{"value":"yes","label":"Принять"}]},
+    {"key":"en-card","type":"decision","repo":"sample",
+     "title":"Pick the approach","decide":"Adopt?",
+     "options":[{"value":"yes","label":"Adopt"}]}
+  ]')
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the cards: $out"
+  printf '%s' "$out" | jq -e '
+    (.calls | length) == 2
+      and ([.calls[0].options[] | select(.value == "reconcile")] | length) == 1
+      and ([.calls[0].options[]
+        | select(.value == "reconcile" and .label == "Перепроверить")] | length) == 1
+      and ([.calls[1].options[]
+        | select(.value == "reconcile" and .label == "Reconcile")] | length) == 1
+  ' >/dev/null || fail "the rendered reconcile choice did not follow the card language: $out"
+  pass "the rendered reconcile choice follows the card language"
+}
+
 test_card_detail_keeps_its_line_breaks_as_plain_text() {
   local home out
   home=$(make_home detail-lines)
@@ -348,6 +412,8 @@ test_card_detail_keeps_its_line_breaks_as_plain_text() {
 }
 
 test_card_detail_keeps_its_line_breaks_as_plain_text
+test_a_card_about_row_links_its_urls
+test_the_reconcile_choice_renders_in_the_card_language
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first

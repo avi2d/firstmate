@@ -323,16 +323,21 @@ effective_payload() {  # <data.json> <dest.json>
   done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$data")
   tmp=$(printf '%s' "$drop" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
   jq --argjson dropped "$tmp" '
+    def has_cyrillic: explode | any(. >= 1024 and . <= 1279);
     .captains_call = [
       .captains_call[]
       | . as $card
       | select($card.type != "decision" or (($dropped | index($card.key)) == null))
       | if .type == "decision"
-        then .options += [{
-          value: "reconcile",
-          label: "Reconcile",
-          hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
-        }]
+        then (if ([.title, (.about // ""), (.decide // ""), (.detail // ""),
+              ([.options[] | .label // ""] | join("\n"))] | join("\n")
+              | has_cyrillic)
+            then {value: "reconcile", label: "Перепроверить",
+              hint: "Проверьте актуальное состояние, затем закройте с подтверждением или оставьте открытым с заметкой"}
+            else {value: "reconcile", label: "Reconcile",
+              hint: "Re-check the latest state, then close this with evidence or keep it open with a note"}
+            end) as $reconcile
+          | .options += [$reconcile]
         else . end
     ]' "$data" > "$dest" || return 1
 }

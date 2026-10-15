@@ -737,6 +737,71 @@ test_every_decision_card_carries_the_reconcile_choice() {
   pass "every decision card carries exactly one reconcile choice"
 }
 
+test_reconcile_choice_follows_the_card_language() {
+  local home data board
+  home=$(make_home reconcile-language)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  cat > "$data" <<'EOF'
+{
+  "schema": "fm-bearings-board.v1",
+  "home": "test-home",
+  "generated": "2026-08-19T00:00Z",
+  "prs_live": false,
+  "captains_call": [
+    {
+      "key": "russian-choice",
+      "type": "decision",
+      "repo": "sample",
+      "title": "Выбрать подход к отчёту",
+      "about": "Исследование завершено, подробности по ссылке.",
+      "decide": "Принять рекомендации?",
+      "options": [{ "value": "yes", "label": "Принять" }],
+      "allow_freeform": true
+    },
+    {
+      "key": "english-choice",
+      "type": "decision",
+      "repo": "sample",
+      "title": "Pick the report approach",
+      "about": "The investigation is finished.",
+      "decide": "Adopt the recommendations?",
+      "options": [{ "value": "yes", "label": "Adopt" }],
+      "allow_freeform": true
+    }
+  ],
+  "underway": [],
+  "landed": [],
+  "charted": []
+}
+EOF
+  run_board "$home" build "$data" >/dev/null || fail "the reconcile-language build failed"
+  extract_payload "$board" | jq -e '
+    ([.captains_call[] | select(.key == "russian-choice")
+      | .options[] | select(.value == "reconcile"
+        and .label == "Перепроверить"
+        and (.hint | startswith("Проверьте")))] | length) == 1
+    and ([.captains_call[] | select(.key == "english-choice")
+      | .options[] | select(.value == "reconcile"
+        and .label == "Reconcile")] | length) == 1
+  ' >/dev/null || fail "the reconcile choice did not follow the card language"
+  pass "the reconcile choice follows the card language and keeps its answer value"
+}
+
+test_built_board_forces_a_light_color_scheme() {
+  local home data board
+  home=$(make_home light-scheme)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the light-scheme build failed"
+  grep -qF '<meta name="color-scheme" content="light"' "$board" \
+    || fail "the built board does not declare a light color scheme"
+  grep -qF 'color-scheme: light' "$board" \
+    || fail "the built board does not pin its stylesheet to a light color scheme"
+  pass "a rebuilt board still forces a light color scheme"
+}
+
 test_build_refuses_a_payload_that_occupies_the_reconcile_value() {
   local home data rc out
   home=$(make_home reconcile-reserved)
@@ -785,5 +850,7 @@ test_build_drops_decision_cards_whose_subject_already_landed
 test_build_keeps_a_decision_absent_from_the_main_backlog
 test_build_fails_when_reconcile_cannot_establish_a_listener
 test_every_decision_card_carries_the_reconcile_choice
+test_reconcile_choice_follows_the_card_language
+test_built_board_forces_a_light_color_scheme
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
