@@ -486,7 +486,7 @@ window_label() {
 # The ONE derivation of a window's per-window marker key: `:`, `/` and `.` become
 # `_` so a window name is usable as a filename suffix. Every per-window file the
 # watcher keeps is named by it (.hash-, .count-, .stale-, .stale-since-,
-# .wedge-escalations-, .paused-*, .writing-*, .waiting-*), and live homes hold those markers on
+# .stale-terminal-, .wedge-escalations-, .paused-*, .writing-*, .waiting-*), and live homes hold those markers on
 # disk under the current format, so the format lives here alone: a second copy is
 # how a future change to it silently orphans a window's markers instead of clearing
 # them. The helpers below take the derived key rather than re-deriving it, so one
@@ -1730,7 +1730,7 @@ clear_stale_hash_tracking() {  # <window-key>
   local key=$1
   clear_write_tracking "$key"
   rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key" \
-    "$STATE/.waiting-resurfaced-$key"
+    "$STATE/.waiting-resurfaced-$key" "$STATE/.stale-terminal-$key"
 }
 
 clear_pause_tracking() {  # <window-key>
@@ -3159,19 +3159,32 @@ EOF
               clear_write_tracking "$key"
               triage_log "absorbed stale (open captain call already surfaced for this status): $w"
             else
-              fm_wake_append stale "$w" "stale: $w" || exit 1
-              stale_wait_record "$key"
-              printf '%s' "$h" > "$sf"
-              rm -f "$ssf"
-              clear_write_tracking "$key"
-              stale_status="$STATE/$(window_to_task "$w" "$STATE").status"
-              stale_record=$(status_span_first_actionable_record "$stale_status" 0)
-              case $? in
-                0|1) stale_end=${stale_record%%$'\t'*}; stale_rest=${stale_record#*$'\t'}; stale_ident=${stale_rest%%$'\t'*} ;;
-                *) stale_end=''; stale_ident='' ;;
-              esac
-              mark_surfaced "$stale_status" "$stale_end" "$stale_ident"
-              wake "stale: $w"
+              # The status log is the stable record of a finished state. A churny
+              # pane mints a new hash per tick, so a hash-keyed alarm alone
+              # re-alarms the same finished state once per tick.
+              termsig=$(fm_wake_signal_sig "$STATE/$task.status") || termsig=
+              termfile="$STATE/.stale-terminal-$key"
+              if [ -n "$termsig" ] && [ "$(cat "$termfile" 2>/dev/null || true)" = "$termsig" ]; then
+                printf '%s' "$h" > "$sf"
+                rm -f "$ssf"
+                clear_write_tracking "$key"
+                triage_log "absorbed stale (finished state already surfaced, pane still churning): $w"
+              else
+                fm_wake_append stale "$w" "stale: $w" || exit 1
+                stale_wait_record "$key"
+                printf '%s' "$h" > "$sf"
+                rm -f "$ssf"
+                clear_write_tracking "$key"
+                [ -n "$termsig" ] && printf '%s' "$termsig" > "$termfile"
+                stale_status="$STATE/$(window_to_task "$w" "$STATE").status"
+                stale_record=$(status_span_first_actionable_record "$stale_status" 0)
+                case $? in
+                  0|1) stale_end=${stale_record%%$'\t'*}; stale_rest=${stale_record#*$'\t'}; stale_ident=${stale_rest%%$'\t'*} ;;
+                  *) stale_end=''; stale_ident='' ;;
+                esac
+                mark_surfaced "$stale_status" "$stale_end" "$stale_ident"
+                wake "stale: $w"
+              fi
             fi
           elif [ -e "$ssf" ]; then
             # This exact hash was already overridden as provably-working (a
