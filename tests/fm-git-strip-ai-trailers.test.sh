@@ -454,8 +454,8 @@ test_guard_commit_refuses_committer_env_override() {
   pass "a GIT_COMMITTER_* override is refused at commit time"
 }
 
-test_guard_commit_allows_auto_derived_identity_but_refuses_override() {
-  local repo hooks err empty
+test_guard_commit_matches_plain_git_where_no_identity_is_configured() {
+  local repo hooks err empty probe
   repo="$TMP_ROOT/guard-auto-derived"
   make_repo "$repo"
   hooks="$TMP_ROOT/hooks-guard-auto-derived"
@@ -464,15 +464,24 @@ test_guard_commit_allows_auto_derived_identity_but_refuses_override() {
   mkdir -p "$empty"
   echo change >>"$repo/README.md"
   git -C "$repo" add README.md
-  env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" commit -q -m 'fix: auto-derived' || fail "a commit with the auto-derived machine identity was refused"
-  echo more >>"$repo/README.md"
-  git -C "$repo" add README.md
-  err=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" -c user.name=firstmate -c user.email=invented@example.com commit -m 'fix: foreign with no base' 2>&1) &&
-    fail "a foreign override succeeded with no configured identity"
-  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
-  assert_not_contains "$err" "invented@example.com" "the refusal printed the foreign email"
-  pass "an auto-derived machine identity is allowed and a foreign override is still refused"
+  if probe=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT 2>/dev/null); then
+    env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" commit -q -m "fix: auto-derived" || fail "a commit with the auto-derived machine identity was refused"
+    echo more >>"$repo/README.md"
+    git -C "$repo" add README.md
+    err=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" -c user.name=firstmate -c user.email="invented@example.com" commit -m "fix: foreign with no base" 2>&1) &&
+      fail "a foreign override succeeded with no configured identity"
+    assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+    assert_not_contains "$err" "invented@example.com" "the refusal printed the foreign email"
+    pass "an auto-derived machine identity is allowed and a foreign override is still refused"
+  else
+    err=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" -c user.name=firstmate -c user.email="invented@example.com" commit -m "fix: foreign with no identity anywhere" 2>&1) &&
+      fail "a foreign override succeeded with no resolvable identity"
+    assert_contains "$err" "no user.name or user.email" "the refusal did not name the missing machine identity"
+    assert_not_contains "$err" "invented@example.com" "the refusal printed the foreign email"
+    pass "with no resolvable machine identity a foreign override is still refused"
+  fi
 }
+
 
 test_guard_commit_refuses_when_identity_is_unreadable() {
   local repo hooks err broken head
@@ -632,7 +641,7 @@ test_guard_commit_refuses_c_identity_override
 test_guard_commit_refuses_author_flag
 test_guard_commit_refuses_author_env_override
 test_guard_commit_refuses_committer_env_override
-test_guard_commit_allows_auto_derived_identity_but_refuses_override
+test_guard_commit_matches_plain_git_where_no_identity_is_configured
 test_guard_commit_refuses_when_identity_is_unreadable
 test_guard_push_refuses_a_smuggled_foreign_commit
 test_guard_push_passes_a_merge_of_remote_main_by_other_identities
