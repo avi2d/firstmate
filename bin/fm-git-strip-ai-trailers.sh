@@ -174,18 +174,28 @@ guard_push() {
 guard_push_range() {
   local local_sha=$1 remote_sha=$2 ref_an=$3 ref_ae=$4 ref_cn=$5 ref_ce=$6
   local lines excludes line sha an ae cn ce extra short
+  excludes=$(git for-each-ref --format='%(objectname)' refs/remotes/ 2>/dev/null) || {
+    echo "fm-git-strip-ai-trailers: refusing push: cannot list the remote refs" >&2
+    return 1
+  }
+  # A merge of a tracked remote branch lands its commits inside the pushed range,
+  # so every range excludes what any remote already holds and only new commits are checked.
   case "$remote_sha" in
   *[!0]*)
-    lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$remote_sha..$local_sha" 2>/dev/null) || {
-      echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2
-      return 1
-    }
+    if [ -z "$excludes" ]; then
+      lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$remote_sha..$local_sha" 2>/dev/null) || {
+        echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2
+        return 1
+      }
+    else
+      # shellcheck disable=SC2086
+      lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$local_sha" --not "$remote_sha" $excludes 2>/dev/null) || {
+        echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2
+        return 1
+      }
+    fi
     ;;
   *)
-    excludes=$(git for-each-ref --format='%(objectname)' refs/remotes/ 2>/dev/null) || {
-      echo "fm-git-strip-ai-trailers: refusing push: cannot list the remote refs" >&2
-      return 1
-    }
     if [ -z "$excludes" ]; then
       lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$local_sha" 2>/dev/null) || {
         echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2

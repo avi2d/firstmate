@@ -15,6 +15,7 @@ Hook managers therefore cannot install from inside fleet panes until a registere
 Workers twice committed under an invented identity copied from their own instructions, and a push-time CI gate caught either case only after the push, so the pre-commit hook refuses any author or committer that differs from the machine git config.
 The reference identity is what plain git resolves from the machine config files, read with git -c values and GIT_AUTHOR_* and GIT_COMMITTER_* overrides removed and the pane GIT_CONFIG_* core.hooksPath entries kept.
 A same-value override is allowed, since the committed identity is the configured one.
-Amend and rebase replay commits without running the commit-time hooks, so the pre-push hook refuses any pushed range holding such a commit instead of rewriting history.
+Amend and rebase replay commits without running the commit-time hooks, so the pre-push hook refuses a pushed range holding such a commit instead of rewriting history.
+A merge of a tracked remote branch lands that branch's commits inside the pushed range, so every range excludes commits reachable from any remote-tracking ref and only commits new to all remotes are checked.
 Neither hook prints an email address, and neither hook rewrites identity.
 The guard installs on every ship and scout spawn with or without config/keep-ai-trailers, and only the trailer strip honors that flag.

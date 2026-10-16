@@ -516,6 +516,78 @@ test_guard_push_refuses_a_smuggled_foreign_commit() {
   pass "a push carrying a foreign commit is refused before it reaches the remote"
 }
 
+seed_merge_main_repo() {
+  local repo=$1 remote=$2 hooks=$3
+  git init -q -b main --bare "$remote"
+  make_repo "$repo"
+  git -C "$repo" remote add origin "$remote"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main || fail "the base push should pass the guard"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    GIT_AUTHOR_NAME="Main Author" GIT_AUTHOR_EMAIL="author@example.com" \
+    GIT_COMMITTER_NAME="Web Flow" GIT_COMMITTER_EMAIL="webflow@example.com" \
+    git -C "$repo" commit -q --allow-empty -m "main: squash by another author and committer"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    git -C "$repo" push -q origin main || fail "the foreign main commit should reach the remote"
+  git -C "$repo" fetch -q origin || fail "fetch should succeed"
+  git -C "$repo" checkout -q -b feature HEAD~1
+  echo feature >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -q -m "feature: own work" || fail "the feature commit should pass the guard"
+  with_hooks_env "$hooks" git -C "$repo" push -q origin feature || fail "the feature push should pass the guard"
+  git -C "$repo" merge -q origin/main -m "feature: merge main" || fail "the merge should succeed"
+}
+
+test_guard_push_passes_a_merge_of_remote_main_by_other_identities() {
+  local repo remote hooks
+  repo="$TMP_ROOT/guard-merge-main"
+  remote="$TMP_ROOT/guard-merge-main.git"
+  hooks="$TMP_ROOT/hooks-guard-merge-main"
+  seed_merge_main_repo "$repo" "$remote" "$hooks"
+  with_hooks_env "$hooks" git -C "$repo" push -q origin feature || fail "a push after merging remote main was refused"
+  pass "a push after merging remote main by other identities passes the guard"
+}
+
+test_guard_push_still_refuses_a_smuggled_commit_beside_a_remote_merge() {
+  local repo remote hooks err
+  repo="$TMP_ROOT/guard-merge-smuggled"
+  remote="$TMP_ROOT/guard-merge-smuggled.git"
+  hooks="$TMP_ROOT/hooks-guard-merge-smuggled"
+  seed_merge_main_repo "$repo" "$remote" "$hooks"
+  echo smuggled >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+    git -C "$repo" -c user.name="Smuggled" -c user.email="smuggled@example.com" commit -q --no-verify -m "feature: smuggled" || fail "the smuggled commit should bypass the skipped hooks"
+  err=$(with_hooks_env "$hooks" git -C "$repo" push origin feature 2>&1) &&
+    fail "a push carrying a smuggled commit succeeded"
+  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+  assert_not_contains "$err" "smuggled@example.com" "the refusal printed the foreign email"
+  pass "a push carrying a smuggled commit beside a remote merge is still refused"
+}
+
+test_guard_push_passes_a_new_branch_over_fetched_upstream_commits() {
+  local repo remote hooks
+  repo="$TMP_ROOT/guard-upstream"
+  remote="$TMP_ROOT/guard-upstream.git"
+  hooks="$TMP_ROOT/hooks-guard-upstream"
+  git init -q -b main --bare "$remote"
+  make_repo "$repo"
+  git -C "$repo" remote add origin "$remote"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    GIT_AUTHOR_NAME="Upstream Author" GIT_AUTHOR_EMAIL="upstream@example.com" \
+    GIT_COMMITTER_NAME="Upstream Committer" GIT_COMMITTER_EMAIL="upcommit@example.com" \
+    git -C "$repo" commit -q --allow-empty -m "upstream: work by other authors"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    git -C "$repo" push -q origin main || fail "the upstream history should reach the remote"
+  git -C "$repo" fetch -q origin || fail "fetch should succeed"
+  git -C "$repo" checkout -q -b downstream origin/main
+  echo downstream >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -q -m "downstream: own work" || fail "the downstream commit should pass the guard"
+  with_hooks_env "$hooks" git -C "$repo" push -q -u origin downstream || fail "a new branch over fetched upstream commits was refused"
+  pass "a new branch over fetched upstream commits by other authors passes the guard"
+}
 test_guard_keep_trailers_install_keeps_trailers_and_guards_identity() {
   local repo hooks msg body err
   repo="$TMP_ROOT/guard-keep"
@@ -563,6 +635,9 @@ test_guard_commit_refuses_committer_env_override
 test_guard_commit_allows_auto_derived_identity_but_refuses_override
 test_guard_commit_refuses_when_identity_is_unreadable
 test_guard_push_refuses_a_smuggled_foreign_commit
+test_guard_push_passes_a_merge_of_remote_main_by_other_identities
+test_guard_push_still_refuses_a_smuggled_commit_beside_a_remote_merge
+test_guard_push_passes_a_new_branch_over_fetched_upstream_commits
 test_guard_keep_trailers_install_keeps_trailers_and_guards_identity
 test_guard_project_pre_commit_still_runs
 test_cursor_trailer_does_not_reach_the_commit_object
