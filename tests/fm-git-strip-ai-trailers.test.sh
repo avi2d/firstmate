@@ -455,7 +455,7 @@ test_guard_commit_refuses_committer_env_override() {
 }
 
 test_guard_commit_matches_plain_git_where_no_identity_is_configured() {
-  local repo hooks err empty probe
+  local repo hooks err empty
   repo="$TMP_ROOT/guard-auto-derived"
   make_repo "$repo"
   hooks="$TMP_ROOT/hooks-guard-auto-derived"
@@ -464,7 +464,7 @@ test_guard_commit_matches_plain_git_where_no_identity_is_configured() {
   mkdir -p "$empty"
   echo change >>"$repo/README.md"
   git -C "$repo" add README.md
-  if probe=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT 2>/dev/null); then
+  if env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT >/dev/null 2>&1; then
     env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" commit -q -m "fix: auto-derived" || fail "a commit with the auto-derived machine identity was refused"
     echo more >>"$repo/README.md"
     git -C "$repo" add README.md
