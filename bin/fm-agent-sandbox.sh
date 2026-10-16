@@ -159,6 +159,11 @@ if not claude:
     with open(task_tmp + "/pi-agent/models.json", "w") as handle:
         json.dump({"providers": {"opencode-go": {"apiKey": "$OPENCODE_GO_KEY"}}}, handle, indent=2)
         handle.write("\n")
+else:
+    bridge_pin = os.environ.get("FM_SANDBOX_BRIDGE_PIN", "git:github.com/avi2d/pi-claude-bridge@v0.9.3+avi2d.1")
+    with open(task_tmp + "/pi-agent/settings.json", "w") as handle:
+        json.dump({"packages": [bridge_pin]}, handle, indent=2)
+        handle.write("\n")
 EOF
   render_status=$?
   [ "$render_status" -eq 0 ] || { echo "error: sandbox profile render failed for $id" >&2; return 1; }

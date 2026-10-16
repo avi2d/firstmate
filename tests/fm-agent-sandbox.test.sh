@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
 # fm-agent-sandbox opt-in gate, model routing, and per-task profile render.
+# Portable: every external tool is a fixture stub, so this runs on clean CI.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot sandbox)
 SB="$ROOT/bin/fm-agent-sandbox.sh"
+FAKEBIN=$(fm_fakebin "$TMP_ROOT")
+cat >"$FAKEBIN/nono" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then printf 'nono 0.80.0\n'; exit 0; fi
+if [ "${1:-}" = profile ] && [ "${2:-}" = validate ]; then
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "${3:-}" || exit 1
+  exit 0
+fi
+echo "stub nono cannot answer: $*" >&2
+exit 1
+SH
+chmod +x "$FAKEBIN/nono"
+fm_fake_exit0 "$FAKEBIN" pi
+PATH="$FAKEBIN:$PATH"
 
 cfg_off="$TMP_ROOT/off"
 mkdir -p "$cfg_off"
@@ -31,24 +46,20 @@ pass "present config enables the sandbox and pins the version"
 [ "$("$SB" model-route openai-codex/gpt-6-luna)" = "unsupported:openai-codex" ] || fail "other provider route"
 pass "model routing separates proxy, claude, and unsupported providers"
 
-fakebin="$TMP_ROOT/fakebin"
-mkdir -p "$fakebin"
-printf '#!/usr/bin/env bash\necho "nono 0.79.0"\n' >"$fakebin/nono"
-chmod +x "$fakebin/nono"
-if PATH="$fakebin:$PATH" "$SB" check "$cfg"; then fail "fake nono passes check"; fi
+oldver="$TMP_ROOT/oldver"
+mkdir -p "$oldver"
+printf '#!/usr/bin/env bash\nprintf "nono 0.79.0\\n"\n' >"$oldver/nono"
+chmod +x "$oldver/nono"
+if PATH="$oldver:$PATH" "$SB" check "$cfg"; then fail "old nono passes check"; fi
 pass "version check refuses a wrong nono"
-
-command -v nono >/dev/null 2>&1 || fail "this card needs the real nono on PATH"
-"$SB" check "$cfg" || fail "real nono passes the pinned check"
-pass "real nono passes the pinned check"
-
-[ -S "$HOME/.no-mistakes/socket" ] || fail "this card needs the running no-mistakes daemon socket"
+"$SB" check "$cfg" || fail "stub nono passes the pinned check"
+pass "stub nono passes the pinned check"
 
 tok="$("$SB" claude-token-path "$cfg")"
 [ "$tok" = "$cfg/agent-sandbox-claude-token" ] || fail "claude token path"
 if "$SB" claude-token-check "$cfg" 2>/dev/null; then fail "absent claude token passes"; fi
 pass "claude token check refuses an absent token"
-printf 'dummy-token-value\n' >"$tok"
+printf 'fixture-token-value\n' >"$tok"
 chmod 644 "$tok"
 if "$SB" claude-token-check "$cfg" 2>/dev/null; then fail "world-readable claude token passes"; fi
 pass "claude token check refuses a world-readable token"
@@ -56,6 +67,15 @@ chmod 600 "$tok"
 "$SB" claude-token-check "$cfg" || fail "owner-only claude token passes"
 pass "claude token check accepts an owner-only token"
 
+export HOME="$TMP_ROOT/home"
+mkdir -p "$HOME/.no-mistakes"
+FM_FIXTURE_HOME="$HOME" python3 - <<'EOF'
+import os, socket
+path = os.environ["FM_FIXTURE_HOME"] + "/.no-mistakes/socket"
+listener = socket.socket(socket.AF_UNIX)
+listener.bind(path)
+listener.close()
+EOF
 state="$TMP_ROOT/home/state"
 wt="$TMP_ROOT/home/wt"
 data_id="$TMP_ROOT/home/data/t1"
@@ -88,12 +108,6 @@ assert wt_common not in fs["allow"]
 EOF
 pass "scout profile carries the hardened shape and no daemon socket"
 
-[ -f "$HOME/.pi/agent/auth.json" ] || fail "this card needs the captain pi auth store present to prove it blocked"
-[ "$(nono why --profile "$profile" --path "$HOME/.pi/agent/auth.json" --op read 2>/dev/null | head -n 1)" = DENIED ] || fail "rendered profile blocks the pi auth store"
-pass "rendered profile denies the existing pi auth store"
-[ "$(nono why --profile "$profile" --path "$state/t1.status" --op write 2>/dev/null | head -n 1)" = ALLOWED ] || fail "rendered profile grants the task status file"
-pass "rendered profile grants the task status file"
-
 render_ship=$("$SB" render "$state" t1 "$wt" "$tmp" "$data_id" "$TMP_ROOT/home/hooks" "$ROOT" ship no-mistakes) || fail "render ship profile"
 profile_ship=$(printf '%s\n' "$render_ship" | sed -n 's/^profile=//p')
 python3 - "$profile_ship" <<'EOF' || fail "ship profile socket grant"
@@ -107,6 +121,15 @@ if not wt_common.startswith("/"):
 assert wt_common in fs["allow"], fs["allow"]
 EOF
 pass "no-mistakes ship profile grants the daemon socket"
+
+python3 - "$tmp/pi-agent/models.json" <<'EOF' || fail "per-task pi models content"
+import json, sys
+models = json.load(open(sys.argv[1]))
+entry = models["providers"]["opencode-go"]
+assert entry["apiKey"] == "$OPENCODE_GO_KEY", entry
+assert "baseUrl" not in entry, entry
+EOF
+pass "per-task pi models file carries only the key reference"
 
 tmp_claude="$TMP_ROOT/home/tmp-t2"
 mkdir -p "$tmp_claude"
@@ -126,14 +149,9 @@ EOF
 pass "claude profile carries the dedicated-token bridge route"
 [ ! -f "$tmp_claude/pi-agent/models.json" ] || fail "claude route writes no key file"
 pass "claude route writes no per-task key file"
-[ -f "$HOME/.claude/.credentials.json" ] || fail "this card needs the captain claude store present to prove it blocked"
-[ "$(nono why --profile "$profile_claude" --path "$HOME/.claude/.credentials.json" --op read 2>/dev/null | head -n 1)" = DENIED ] || fail "claude profile blocks the captain claude store"
-pass "claude profile denies the existing captain claude store"
-python3 - "$tmp/pi-agent/models.json" <<'EOF' || fail "per-task pi models content"
+python3 - "$tmp_claude/pi-agent/settings.json" <<'EOF' || fail "claude pi settings content"
 import json, sys
-models = json.load(open(sys.argv[1]))
-entry = models["providers"]["opencode-go"]
-assert entry["apiKey"] == "$OPENCODE_GO_KEY", entry
-assert "baseUrl" not in entry, entry
+packages = json.load(open(sys.argv[1]))["packages"]
+assert any("pi-claude-bridge" in entry for entry in packages), packages
 EOF
-pass "per-task pi models file carries only the key reference"
+pass "claude route pins the bridge package in the isolated pi directory"
