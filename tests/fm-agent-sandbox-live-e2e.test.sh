@@ -2,6 +2,7 @@
 # fm-agent-sandbox Mac-only integration proof against the real nono.
 # Opt-in: FM_LIVE_AGENT_SANDBOX=1 runs it, anything else honestly skips.
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 fm_live_gate opt-in FM_LIVE_AGENT_SANDBOX nono git pi claude
@@ -53,6 +54,7 @@ pass "real nono validates the rendered claude profile"
 [ "$(nono why --profile "$profile_claude" --path "$HOME/.claude/.credentials.json" --op read 2>/dev/null | head -n 1)" = DENIED ] || fail "claude profile blocks the captain claude store"
 pass "claude profile denies the existing captain claude store"
 claude_tmp="$live/tmp-t2"
+# shellcheck disable=SC2016 # The inner sandboxed shell expands these; the outer shell must not.
 env -u SSH_AUTH_SOCK -u HERDR_SOCKET_PATH -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY \
   FM_AGENT_SANDBOX_CLAUDE_TOKEN_FILE="$cfg/agent-sandbox-claude-token" \
   CLAUDE_CONFIG_DIR="$claude_tmp/claude" TMPDIR="$claude_tmp" DISABLE_AUTOUPDATER=1 \

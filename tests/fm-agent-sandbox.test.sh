@@ -2,6 +2,7 @@
 # fm-agent-sandbox opt-in gate, model routing, and per-task profile render.
 # Portable: every external tool is a fixture stub, so this runs on clean CI.
 set -u
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot sandbox)

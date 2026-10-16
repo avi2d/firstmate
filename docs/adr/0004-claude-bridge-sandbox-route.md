@@ -7,3 +7,4 @@ The child honors `ANTHROPIC_AUTH_TOKEN` from its environment, so the profile inj
 The profile grants `api.anthropic.com`, redirects `CLAUDE_CONFIG_DIR` to a task-owned directory, and unsets inherited `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, which would otherwise redirect the child.
 The setup token file stays owner-only outside the sandbox and a supervisor-side capture reads it.
 The dummy proof returned Anthropic 401 on an invented credential, and removing the credential file stopped all egress.
+A real turn on this Mac on 2026-10-16 through the shipped render path answered from claude-bridge/claude-opus-5-5 inside the sandbox with the captain store denied.
