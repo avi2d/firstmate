@@ -841,6 +841,22 @@ Pi-family launches can start unattended in not-yet-trusted directories without a
 
 For omp secondmate launches, `fm-spawn.sh` passes no `-e` at all: omp auto-discovers the home's tracked `.omp/extensions/` with no trust gate, and naming a discovered file with `-e` as well loads it twice; every omp launch instead carries the tracked `.omp/fm-worker-overlay.yml` posture overlay through `--config`, which [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns.
 
+## Worker sandbox
+
+The optional local, gitignored `config/agent-sandbox` file runs pi scouts and pi no-mistakes ships inside a nono program sandbox on the Mac.
+An absent file leaves every launch exactly as it was, so homes that never opt in are unaffected.
+The file holds one line with the pinned nono version, such as `0.80.0`.
+A home with the file set refuses the spawn when nono is missing or its version differs from the pin, instead of launching unsandboxed.
+`fm-spawn.sh` renders a per-task profile at `state/<id>.nono.json` and launches the worker through it with its own pi directory, its own temp directory, a domain allow list, and the model key held outside the sandbox.
+A no-mistakes ship additionally receives the daemon data directory and read-write git directories, so its pipeline client can reach the gate.
+That grant reaches state the daemon mediates for other tasks, so a ship is isolated from secrets and captain files but not from all other task state.
+A claude-bridge worker receives a dedicated token route instead of the proxy key: the setup token stays outside the sandbox, a supervisor-side capture hands it to the nono proxy, and the worker sees only a phantom placeholder in `ANTHROPIC_AUTH_TOKEN` with its config redirected to a task-owned directory.
+Only the opencode-go provider is routed through the sandbox today.
+A worker on a claude-bridge model launches unsandboxed with a warning until its setup token path is proven, and any other provider does the same.
+The setup token for sandboxed Claude workers lives at `config/agent-sandbox-claude-token` with owner-only permissions once the captain creates it with `claude setup-token`.
+Secondmates, direct-PR workers, and local-only workers stay unsandboxed.
+Mechanics live in `bin/fm-agent-sandbox.sh` and its `--help` output.
+
 ## Claude permission mode (config/claude-permission-mode)
 
 The optional local, gitignored `config/claude-permission-mode` selects the permission flag for every Claude worker launch: crewmates, scouts, Claude secondmates, and control-plane relaunches.

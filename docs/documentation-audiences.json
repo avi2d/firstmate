@@ -341,6 +341,14 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0003-agent-sandbox-profile-shape.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/adr/0004-claude-bridge-sandbox-route.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
