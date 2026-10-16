@@ -411,8 +411,12 @@ NEW_WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
 pass "worker identity binds the canonical configured code root"
 
 CRASHED_WORKER_PID=$NEW_WORKER_PID
+CRASHED_SUPERVISOR_PID=$(ps -o ppid= -p "$CRASHED_WORKER_PID" | tr -d '[:space:]')
+case "$CRASHED_SUPERVISOR_PID" in ''|*[!0-9]*|0|1) fail "the crashed worker has no live supervisor to stop" ;; esac
+# A lone killed child is restarted by its supervisor, which then rewrites the lock under this fixture.
+kill -KILL "$CRASHED_SUPERVISOR_PID"
 kill -KILL "$CRASHED_WORKER_PID"
-wait "$CRASHED_WORKER_PID" 2>/dev/null || true
+wait "$CRASHED_SUPERVISOR_PID" 2>/dev/null || true
 assert_present "$STATE_ROOT/worker.lock" "an unclean exit did not retain the worker ownership lock"
 sleep 20 &
 OTHER_PID=$!
