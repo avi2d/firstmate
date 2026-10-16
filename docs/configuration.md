@@ -848,6 +848,7 @@ An absent file leaves every launch exactly as it was, so homes that never opt in
 The file holds one line with the pinned nono version, such as `0.80.0`.
 A home with the file set refuses the spawn when nono is missing or its version differs from the pin, instead of launching unsandboxed.
 `fm-spawn.sh` renders a per-task profile at `state/<id>.nono.json` and launches the worker through it with its own pi directory, its own temp directory, a domain allow list, and the model key held outside the sandbox.
+A no-mistakes ship additionally receives the daemon data directory and read-write git directories, so its pipeline client can reach the gate.
 Only the opencode-go provider is routed through the sandbox today.
 A worker on a claude-bridge model launches unsandboxed with a warning until its setup token path is proven, and any other provider does the same.
 The setup token for sandboxed Claude workers lives at `config/agent-sandbox-claude-token` with owner-only permissions once the captain creates it with `claude setup-token`.
