@@ -35,6 +35,31 @@ fm_pane_hash_strip_pi_scrollbar() {
   '
 }
 
+# Pi re-renders its footer on background activity and each render recomputes the
+# trailing session-elapsed token, so an idle pane mints a new hash per minute.
+# Normalize only that token, only on a footer-shaped last row.
+fm_pane_hash_normalize_pi_footer_elapsed() {
+  perl -e '
+    use strict;
+    use warnings;
+    use Encode qw(decode encode FB_CROAK LEAVE_SRC);
+    binmode STDIN;
+    binmode STDOUT;
+    local $/;
+    my $raw = <STDIN> // "";
+    my $text = eval { decode("UTF-8", $raw, FB_CROAK | LEAVE_SRC) };
+    if (!defined $text) { print $raw; exit 0; }
+    my @rows = split /\n/, $text, -1;
+    if (@rows) {
+      my $i = $#rows;
+      $i-- while $i > 0 && $rows[$i] =~ /\A[ \t]*\z/;
+      $rows[$i] =~ s/\b\d+(?:h\d+)?m(?=[ \t]*\z)/0m/
+        if $rows[$i] =~ /[%\x{221E}\x{2191}\x{2192}\x{2193}]/;
+    }
+    print encode("UTF-8", join("\n", @rows));
+  '
+}
+
 fm_pane_stale_hash() {  # <backend> <harness> <target> <label> <tail40>
   local viewport
   case "$1:$2" in
@@ -42,7 +67,7 @@ fm_pane_stale_hash() {  # <backend> <harness> <target> <label> <tail40>
       # A herdr recent read of fullscreen Pi returns a varying number of rows
       # from above the viewport, so the tail differs on an unchanged pane.
       viewport=$(fm_backend_visible_capture "$1" "$3" "$4" 2>/dev/null) || return 1
-      printf '%s' "$viewport" | fm_pane_hash_strip_pi_scrollbar | fm_pane_hash_digest
+      printf '%s' "$viewport" | fm_pane_hash_strip_pi_scrollbar | fm_pane_hash_normalize_pi_footer_elapsed | fm_pane_hash_digest
       ;;
     *) printf '%s' "$5" | fm_pane_hash_digest ;;
   esac

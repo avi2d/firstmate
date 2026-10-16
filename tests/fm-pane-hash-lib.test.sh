@@ -153,7 +153,23 @@ test_undecodable_viewport_hashes_as_plain_digest() {
   pass "a viewport that is not valid UTF-8 hashes as the plain digest"
 }
 
+test_footer_elapsed_tick_hashes_like_the_quiet_pane() {
+  local before after changed harness
+  before='a finished transcript row'$'\n''fm/career-pdf-test-flake (main) 8%/200k (auto)   (opencode-go) spark-1.3-c h 8% 2h26m'
+  after='a finished transcript row'$'\n''fm/career-pdf-test-flake (main) 8%/200k (auto)   (opencode-go) spark-1.3-c h 8% 2h27m'
+  changed='a finished transcript row'$'\n''one new transcript row'$'\n''fm/career-pdf-test-flake (main) 8%/200k (auto)   (opencode-go) spark-1.3-c h 8% 2h27m'
+  assert_not_equals "$before" "$after" "the elapsed fixtures must differ byte-wise or this case proves nothing"
+  for harness in pi pi-signed; do
+    assert_equals "$(hash_with_viewport "$harness" "$before")" "$(hash_with_viewport "$harness" "$after")" \
+      "a session-elapsed tick on the $harness footer must not change the hash"
+    assert_not_equals "$(hash_with_viewport "$harness" "$after")" "$(hash_with_viewport "$harness" "$changed")" \
+      "a genuinely new transcript row must still change the $harness hash"
+  done
+  pass "a herdr Pi pane hashes the same across a footer session-elapsed tick and differs on a new transcript row"
+}
+
 test_digest_is_32_hex
+test_footer_elapsed_tick_hashes_like_the_quiet_pane
 test_other_panes_hash_the_tail_as_plain_digest
 test_scrollbar_flash_hashes_like_the_quiet_pane
 test_rows_above_the_viewport_do_not_reach_the_hash
