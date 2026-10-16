@@ -60,8 +60,10 @@ touch "$state/t1.pi-ext.ts" "$state/t1.status"
 render_out=$("$SB" render "$state" t1 "$wt" "$tmp" "$data_id" "$TMP_ROOT/home/hooks" "$ROOT" scout "") || fail "render scout profile"
 profile=$(printf '%s\n' "$render_out" | sed -n 's/^profile=//p')
 [ -f "$profile" ] || fail "render prints the profile path"
+export FM_TEST_WT="$wt"
 python3 - "$profile" <<'EOF' || fail "rendered profile content"
-import json, sys
+import json, os, sys
+wt_dir = os.environ["FM_TEST_WT"]
 profile = json.load(open(sys.argv[1]))
 assert profile["extends"] == "default"
 includes = [g if isinstance(g, str) else g["name"] for g in profile["groups"]["include"]]
@@ -73,6 +75,11 @@ joined = " ".join(fs["allow"] + fs["read"] + fs.get("allow_file", []) + fs.get("
 assert ".pi/agent" not in joined.replace("pi-agent", ""), joined
 assert "opencode.ai" in json.dumps(profile["network"])
 assert "unix_socket" not in fs
+wt_common = __import__("subprocess").check_output(["git", "-C", wt_dir, "rev-parse", "--git-common-dir"], text=True).strip()
+if not wt_common.startswith("/"):
+    wt_common = wt_dir + "/" + wt_common
+assert wt_common in fs["read"], fs["read"]
+assert wt_common not in fs["allow"]
 EOF
 pass "scout profile carries the hardened shape and no daemon socket"
 
@@ -80,9 +87,14 @@ render_ship=$("$SB" render "$state" t1 "$wt" "$tmp" "$data_id" "$TMP_ROOT/home/h
 profile_ship=$(printf '%s\n' "$render_ship" | sed -n 's/^profile=//p')
 if [ -S "$HOME/.no-mistakes/socket" ]; then
   python3 - "$profile_ship" <<'EOF' || fail "ship profile socket grant"
-import json, sys
+import json, os, subprocess, sys
 fs = json.load(open(sys.argv[1]))["filesystem"]
-assert fs.get("unix_socket") == [__import__("os").path.expanduser("~/.no-mistakes/socket")]
+assert fs.get("unix_socket") == [os.path.expanduser("~/.no-mistakes/socket")]
+assert os.path.expanduser("~/.no-mistakes") in fs["allow"]
+wt_common = subprocess.check_output(["git", "-C", os.environ["FM_TEST_WT"], "rev-parse", "--git-common-dir"], text=True).strip()
+if not wt_common.startswith("/"):
+    wt_common = os.environ["FM_TEST_WT"] + "/" + wt_common
+assert wt_common in fs["allow"], fs["allow"]
 EOF
   pass "no-mistakes ship profile grants the daemon socket"
 else

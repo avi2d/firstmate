@@ -64,7 +64,7 @@ fm_sandbox_render() {
   mkdir -p "$pi_dir" "$data_id_dir" "$state_real/$id.inbox/handled" "$task_tmp/gotmp" || return 1
   chmod 700 "$pi_dir" "$task_tmp" 2>/dev/null || true
   git_common=$(git -C "$worktree" rev-parse --git-common-dir 2>/dev/null) || git_common=
-  git_dir=$(git -C "$worktree" rev-parse --git-dir 2>/dev/null) || git_dir=
+  git_dir=$(git -C "$worktree" rev-parse --absolute-git-dir 2>/dev/null) || git_dir=
   case "$git_common" in
   /*) ;;
   "" ) ;;
@@ -104,7 +104,10 @@ for candidate in (os.path.expanduser("~/Projects/dotfiles/home/.config/git"), os
     if os.path.exists(candidate):
         read.append(candidate)
 if common and os.path.isdir(common):
-    read.append(common)
+    if kind == "ship":
+        allow.append(common)
+    else:
+        read.append(common)
     for leaf in ("objects", "refs", "logs"):
         leaf_path = common + "/" + leaf
         if os.path.isdir(leaf_path):
@@ -116,15 +119,20 @@ if hooks and os.path.isdir(hooks):
 filesystem = {
     "allow": sorted(set(allow)),
     "read": sorted(set(read)),
-    "allow_file": [state + "/" + task + ".status"],
+    "allow_file": [state + "/" + task + ".status"] + ([gitdir] if gitdir and os.path.isfile(gitdir) else []),
     "read_file": [state + "/" + task + ".pi-ext.ts"],
     "write_file": [state + "/" + task + ".turn-ended", state + "/" + task + ".busy-state", state + "/" + task + ".busy-gen"],
     "write": ["/dev"],
 }
 if common and os.path.isfile(common + "/packed-refs"):
     filesystem["allow_file"].append(common + "/packed-refs")
-if kind == "ship" and mode == "no-mistakes" and sock and os.path.exists(sock):
-    filesystem["unix_socket"] = [sock]
+if kind == "ship" and mode == "no-mistakes":
+    daemon_home = os.path.expanduser("~/.no-mistakes")
+    if os.path.isdir(daemon_home):
+        allow.append(daemon_home)
+        filesystem["allow"] = sorted(set(allow))
+    if sock and os.path.exists(sock):
+        filesystem["unix_socket"] = [sock]
 profile = {
     "extends": "default",
     "meta": {"name": "fm-pi-worker-" + task, "version": "1", "description": "Firstmate per-task pi worker profile"},
