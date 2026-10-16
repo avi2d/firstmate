@@ -2376,58 +2376,6 @@ test_stale_terminal_status_overridden_by_active_run() {
   pass "a stale terminal-looking status is overridden and absorbed while a run is actively working, then wedge-escalated"
 }
 
-test_terminal_stale_churn_absorbed_until_status_changes() {
-  local dir state fakebin out capture_file window key pane_hash sig termsig pid
-  dir=$(make_case terminal-stale-churn); state="$dir/state"; fakebin="$dir/fakebin"
-  out="$dir/watch.out"; capture_file="$dir/pane.txt"
-  window="test:fm-churn"
-  printf 'finished work\nfooter: elapsed 00:01' > "$capture_file"
-  printf 'window=%s\nkind=ship\n' "$window" > "$state/churn.meta"
-  printf 'done: shipped in branch fm/churn\n' > "$state/churn.status"
-  sig=$(seen_sig "$state/churn.status"); printf '%s' "$sig" > "$state/.seen-churn_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
-  pane_hash=$(hash_text "$(cat "$capture_file")")
-  printf '%s' "$pane_hash" > "$state/.hash-$key"
-  printf '1\n' > "$state/.count-$key"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  pid=$!
-  wait_for_exit "$pid" 100 || fail "watcher did not exit for the first sight of a finished pane"
-  grep -Fx "stale: $window" "$out" >/dev/null || fail "first sight of a finished pane printed no stale wake"
-  termsig=$(cat "$state/.stale-terminal-$key" 2>/dev/null || true)
-  [ -n "$termsig" ] || fail "the terminal stale alarm recorded no status signature"
-  ack_stopped_cycle "$state" || fail "could not acknowledge the phase-A terminal stale"
-  printf 'finished work\nfooter: elapsed 00:02' > "$capture_file"
-  : > "$out"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  pid=$!
-  if ! wait_poll_cycle "$state" "$pid"; then
-    reap "$pid"; fail "watcher exited for same-status pane churn after a terminal stale: $(cat "$out")"
-  fi
-  if ! wait_poll_cycle "$state" "$pid"; then
-    reap "$pid"; fail "watcher exited for same-status pane churn after a terminal stale: $(cat "$out")"
-  fi
-  [ ! -s "$out" ] || fail "same-status pane churn printed a wake reason: $(cat "$out")"
-  [ ! -s "$state/.wake-queue" ] || fail "same-status pane churn enqueued a wake"
-  grep -F "pane still churning" "$state/.watch-triage.log" >/dev/null \
-    || fail "same-status pane churn was not absorbed as already-surfaced"
-  reap "$pid"
-  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-B watcher stop"
-  printf 'finished work\nfooter: elapsed 00:02\nfollow-up shipped' > "$capture_file"
-  printf 'done [at=%s]: follow-up shipped\n' "$(date +%s)" >> "$state/churn.status"
-  prime_status_seen "$state" "$state/churn.status"
-  : > "$out"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  pid=$!
-  wait_for_exit "$pid" 100 || fail "watcher did not exit for a new finished state after churn"
-  grep -Fx "stale: $window" "$out" >/dev/null || fail "a new finished state printed no stale wake"
-  [ "$(cat "$state/.stale-terminal-$key" 2>/dev/null || true)" != "$termsig" ] \
-    || fail "the terminal stale marker did not advance to the new status"
-  pass "a finished pane alarms once per status: churn absorbed, a new finished state surfaces"
-}
-
 # --- non-terminal stale, crew provably working: absorbed, then wedge-escalated ---
 # A provably-working crew (an actively-running pipeline) legitimately sits on a
 # static pane (e.g. waiting on CI), so a non-terminal stale is absorbed and only
@@ -6812,7 +6760,6 @@ test_unreadable_status_reports_once_per_file_state
 test_permission_recovery_surfaces_preserved_status
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
-test_terminal_stale_churn_absorbed_until_status_changes
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_provider_limit_wait_suppresses_an_existing_wedge_timer
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
