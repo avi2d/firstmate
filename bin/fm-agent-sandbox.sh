@@ -54,7 +54,7 @@ fm_sandbox_model_route() {
 fm_sandbox_claude_token_path() { printf '%s/agent-sandbox-claude-token' "$1"; }
 
 fm_sandbox_render() {
-  local state_real=$1 id=$2 worktree=$3 task_tmp=$4 data_id_dir=$5 hooks_dir=$6 fm_root=$7 kind=$8 mode=$9
+  local state_real=$1 id=$2 worktree=$3 task_tmp=$4 data_id_dir=$5 hooks_dir=$6 fm_root=$7 kind=$8 mode=$9 route=${10:-proxy}
   local script_dir profile pi_dir capture_log pi_bin git_common git_dir sock
   script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   profile="$state_real/$id.nono.json"
@@ -80,7 +80,7 @@ fm_sandbox_render() {
     FM_SANDBOX_TASK_TMP=$task_tmp FM_SANDBOX_DATA_ID=$data_id_dir FM_SANDBOX_HOOKS=$hooks_dir \
     FM_SANDBOX_ROOT=$fm_root FM_SANDBOX_KIND=$kind FM_SANDBOX_MODE=$mode \
     FM_SANDBOX_COMMON=$git_common FM_SANDBOX_GITDIR=$git_dir FM_SANDBOX_SOCK=$sock \
-    FM_SANDBOX_CAPTURE="$script_dir/fm-agent-sandbox-capture.sh" \
+    FM_SANDBOX_CAPTURE="$script_dir/fm-agent-sandbox-capture.sh" FM_SANDBOX_ROUTE="$route" \
     python3 - <<'EOF'
 import json, os
 def env(name):
@@ -98,6 +98,8 @@ mode = os.environ["FM_SANDBOX_MODE"]
 common = env("FM_SANDBOX_COMMON")
 gitdir = env("FM_SANDBOX_GITDIR")
 sock = env("FM_SANDBOX_SOCK")
+route = os.environ.get("FM_SANDBOX_ROUTE", "proxy")
+claude = (route == "claude")
 allow = [worktree, task_tmp, task_tmp + "/pi-agent", data_id, state + "/" + task + ".inbox"]
 read = [os.path.expanduser("~/.local/share/mise"), os.path.expanduser("~/.config/git"), root + "/bin"]
 for candidate in (os.path.expanduser("~/Projects/dotfiles/home/.config/git"), os.path.expanduser("~/Projects/skills"), root + "/.agents/skills"):
@@ -141,21 +143,22 @@ profile = {
     "filesystem": filesystem,
     "network": {
         "block": False,
-        "allow_domain": ["github.com", "api.github.com", "registry.npmjs.org"],
-        "credentials": ["opencode_go"],
+        "allow_domain": ["github.com", "api.github.com", "registry.npmjs.org"] + (["api.anthropic.com"] if claude else []),
+        "credentials": ["claude_bridge"] if claude else ["opencode_go"],
         "open_port": [],
         "listen_port": [],
-        "custom_credentials": {"opencode_go": {"upstream": "https://opencode.ai/zen/go/v1", "credential_key": "cmd://opencode_go", "inject_header": "Authorization", "credential_format": "Bearer {}", "env_var": "OPENCODE_GO_KEY"}},
+        "custom_credentials": {"claude_bridge": {"upstream": "https://api.anthropic.com", "credential_key": "cmd://claude_bridge", "inject_header": "Authorization", "credential_format": "Bearer {}", "env_var": "ANTHROPIC_AUTH_TOKEN"}} if claude else {"opencode_go": {"upstream": "https://opencode.ai/zen/go/v1", "credential_key": "cmd://opencode_go", "inject_header": "Authorization", "credential_format": "Bearer {}", "env_var": "OPENCODE_GO_KEY"}},
     },
-    "credential_capture": {"opencode_go": {"command": ["/bin/sh", os.environ["FM_SANDBOX_CAPTURE"], "opencode-go"], "timeout_secs": 15, "cache_ttl_secs": 900}},
+    "credential_capture": {"claude_bridge": {"command": ["/bin/sh", os.environ["FM_SANDBOX_CAPTURE"], "claude-bridge"], "timeout_secs": 15, "cache_ttl_secs": 900}} if claude else {"opencode_go": {"command": ["/bin/sh", os.environ["FM_SANDBOX_CAPTURE"], "opencode-go"], "timeout_secs": 15, "cache_ttl_secs": 900}},
     "workdir": {"access": "readwrite"},
 }
 with open(state + "/" + task + ".nono.json", "w") as handle:
     json.dump(profile, handle, indent=2)
     handle.write("\n")
-with open(task_tmp + "/pi-agent/models.json", "w") as handle:
-    json.dump({"providers": {"opencode-go": {"apiKey": "$OPENCODE_GO_KEY"}}}, handle, indent=2)
-    handle.write("\n")
+if not claude:
+    with open(task_tmp + "/pi-agent/models.json", "w") as handle:
+        json.dump({"providers": {"opencode-go": {"apiKey": "$OPENCODE_GO_KEY"}}}, handle, indent=2)
+        handle.write("\n")
 EOF
   render_status=$?
   [ "$render_status" -eq 0 ] || { echo "error: sandbox profile render failed for $id" >&2; return 1; }

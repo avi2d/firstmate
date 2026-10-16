@@ -5464,7 +5464,15 @@ if { [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; } && [ "$KIND" != second
       ;;
     claude)
       if "$SCRIPT_DIR/fm-agent-sandbox.sh" claude-token-check "$CONFIG" 2>/dev/null; then
-        echo "warning: sandboxed Claude sign-in is not proven yet; launching $ID unsandboxed" >&2
+        FM_SANDBOX_TOKEN=$("$SCRIPT_DIR/fm-agent-sandbox.sh" claude-token-path "$CONFIG")
+        FM_SANDBOX_RENDER=$("$SCRIPT_DIR/fm-agent-sandbox.sh" render "$STATE_REAL" "$ID" "$WT" "$TASK_TMP" "$DATA/$ID" "$GIT_HOOKS_DIR" "$FM_ROOT" "$KIND" "${MODE:-}" claude) || exit 1
+        FM_SANDBOX_PROFILE=$(printf '%s\n' "$FM_SANDBOX_RENDER" | sed -n 's/^profile=//p')
+        FM_SANDBOX_PIDIR=$(printf '%s\n' "$FM_SANDBOX_RENDER" | sed -n 's/^pi_dir=//p')
+        [ -n "$FM_SANDBOX_PROFILE" ] && [ -n "$FM_SANDBOX_PIDIR" ] || {
+          echo "error: sandbox profile render for $ID printed no paths" >&2
+          exit 1
+        }
+        LAUNCH="FM_AGENT_SANDBOX_CLAUDE_TOKEN_FILE=$(shell_quote "$FM_SANDBOX_TOKEN") FM_AGENT_SANDBOX_CAPTURE_LOG=$(shell_quote "$TASK_TMP/nono-capture.log") env -u SSH_AUTH_SOCK -u HERDR_SOCKET_PATH -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY CLAUDE_CONFIG_DIR=$(shell_quote "$TASK_TMP/claude") PI_CODING_AGENT_DIR=$(shell_quote "$FM_SANDBOX_PIDIR") TMPDIR=$(shell_quote "$TASK_TMP") nono run --profile $(shell_quote "$FM_SANDBOX_PROFILE") --allow-cwd --no-rollback-prompt -- $LAUNCH"
       else
         echo "warning: sandboxed Claude sign-in needs a setup token; launching $ID unsandboxed" >&2
       fi
