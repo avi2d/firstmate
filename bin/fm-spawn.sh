@@ -5447,6 +5447,35 @@ esac
 # A home's worker account pin replaces that forwarding: the launch names the
 # pinned root (or unsets the variable for the ordinary Claude account) and
 # sheds the environment credentials Claude ranks above the root's login.
+if { [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; } && [ "$KIND" != secondmate ] && { [ "$KIND" = scout ] || [ "${MODE:-}" = no-mistakes ]; }; then
+  if "$SCRIPT_DIR/fm-agent-sandbox.sh" enabled "$CONFIG"; then
+    "$SCRIPT_DIR/fm-agent-sandbox.sh" check "$CONFIG" || exit 1
+    FM_SANDBOX_ROUTE=$("$SCRIPT_DIR/fm-agent-sandbox.sh" model-route "${MODEL:-}") || exit 1
+    case "$FM_SANDBOX_ROUTE" in
+    proxy:opencode-go)
+      FM_SANDBOX_RENDER=$("$SCRIPT_DIR/fm-agent-sandbox.sh" render "$STATE_REAL" "$ID" "$WT" "$TASK_TMP" "$DATA/$ID" "$GIT_HOOKS_DIR" "$FM_ROOT" "$KIND" "${MODE:-}") || exit 1
+      FM_SANDBOX_PROFILE=$(printf '%s\n' "$FM_SANDBOX_RENDER" | sed -n 's/^profile=//p')
+      FM_SANDBOX_PIDIR=$(printf '%s\n' "$FM_SANDBOX_RENDER" | sed -n 's/^pi_dir=//p')
+      [ -n "$FM_SANDBOX_PROFILE" ] && [ -n "$FM_SANDBOX_PIDIR" ] || {
+        echo "error: sandbox profile render for $ID printed no paths" >&2
+        exit 1
+      }
+      LAUNCH="FM_AGENT_SANDBOX_PI_BIN=$(shell_quote "$PI_BIN") FM_AGENT_SANDBOX_CAPTURE_LOG=$(shell_quote "$TASK_TMP/nono-capture.log") env -u SSH_AUTH_SOCK -u HERDR_SOCKET_PATH PI_CODING_AGENT_DIR=$(shell_quote "$FM_SANDBOX_PIDIR") TMPDIR=$(shell_quote "$TASK_TMP") nono run --profile $(shell_quote "$FM_SANDBOX_PROFILE") --allow-cwd --no-rollback-prompt -- $LAUNCH"
+      ;;
+    claude)
+      if "$SCRIPT_DIR/fm-agent-sandbox.sh" claude-token-check "$CONFIG" 2>/dev/null; then
+        echo "warning: sandboxed Claude sign-in is not proven yet; launching $ID unsandboxed" >&2
+      else
+        echo "warning: sandboxed Claude sign-in needs a setup token; launching $ID unsandboxed" >&2
+      fi
+      ;;
+    *)
+      echo "warning: the worker sandbox covers the opencode-go provider only; launching $ID unsandboxed" >&2
+      ;;
+    esac
+  fi
+fi
+FM_SANDBOX_PIDIR=${FM_SANDBOX_PIDIR:-}
 if [ -n "$WORKER_ACCOUNT" ]; then
   case "$HARNESS" in
   claude)
@@ -5457,7 +5486,7 @@ if [ -n "$WORKER_ACCOUNT" ]; then
     fi
     ;;
   pi | pi-signed)
-    LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "$WORKER_ACCOUNT_ROOT") $LAUNCH"
+    LAUNCH="PI_CODING_AGENT_DIR=$(shell_quote "${FM_SANDBOX_PIDIR:-$WORKER_ACCOUNT_ROOT}") $LAUNCH"
     ;;
   esac
 elif [ "$HARNESS" = claude ] && [ -z "$CLAUDE_ACCOUNT_SELECTION" ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
