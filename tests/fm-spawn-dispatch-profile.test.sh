@@ -634,6 +634,9 @@ test_chained_raw_launch_strips_ai_trailer_in_every_step() {
     cd "$WT_DIR" || exit 1
     unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
     fm_git_identity 'Captain Tests' 'captain@example.invalid'
+    GIT_CONFIG_GLOBAL="$CASE_DIR/fixture-gitconfig"
+    { echo '[user]'; echo 'name = Captain Tests'; echo 'email = captain@example.invalid'; } > "$GIT_CONFIG_GLOBAL"
+    export GIT_CONFIG_GLOBAL
     bash -c "$launch"
   ) || fail "executing the chained raw launch failed"$'\n'"launch: $launch"
   body=$(git -C "$WT_DIR" log -1 --format=%B)
@@ -1783,8 +1786,8 @@ test_claude_crewmate_launch_carries_the_attribution_policy() {
   pass "a claude crewmate launch carries the attribution-off policy in its own settings"
 }
 
-test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks() {
-  local rec id out status launch
+test_keep_ai_trailers_omits_attribution_settings_but_keeps_the_identity_guard() {
+  local rec id out status launch msg
   id=profile-claude-keep-attribution-z25
   rec=$(make_spawn_case profile-claude-keep-attribution claude "$id")
   read_case_record "$rec"
@@ -1795,14 +1798,21 @@ test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks() {
   expect_code 0 "$status" "claude spawn with keep-ai-trailers should succeed"$'\n'"$out"
   launch=$(cat "$LAUNCH_LOG")
   assert_attribution_policy_absent "$launch" "opted-in claude"
-  assert_not_contains "$launch" 'GIT_CONFIG_KEY_0=core.hooksPath' \
-    "opted-in launch still overrides the repository hooksPath"
-  [ ! -e "$HOME_DIR/state/$id.git-hooks" ] \
-    || fail "opted-in launch installed AI trailer strip hooks"
-  pass "keep-ai-trailers omits Claude attribution settings and the pane strip hooks"
+  assert_contains "$launch" 'GIT_CONFIG_KEY_0=core.hooksPath' \
+    "opted-in launch drops the pane hooks override"
+  [ -d "$HOME_DIR/state/$id.git-hooks" ] || fail "opted-in launch did not install the per-task hooks"
+  [ -x "$HOME_DIR/state/$id.git-hooks/pre-commit" ] || fail "opted-in install missed the commit guard"
+  [ -x "$HOME_DIR/state/$id.git-hooks/pre-push" ] || fail "opted-in install missed the push guard"
+  msg="$CASE_DIR/keep-msg.txt"
+  echo 'fix: kept' >"$msg"
+  echo >>"$msg"
+  echo 'Co-authored-by: Cursor <cursoragent@cursor.com>' >>"$msg"
+  (cd "$WT_DIR" && "$HOME_DIR/state/$id.git-hooks/commit-msg" "$msg") || fail "the keep-trailers commit-msg hook failed"
+  assert_contains "$(cat "$msg")" "Co-authored-by: Cursor" "keep-ai-trailers stripped the trailer"
+  pass "keep-ai-trailers omits Claude attribution settings but keeps the commit identity guard"
 }
 
-test_keep_ai_trailers_reaches_secondmate_crew_launches() {
+test_keep_ai_trailers_reaches_secondmate_crew_launches_with_the_identity_guard() {
   local rec sm_rec sm_id crew_id sm out status launch
   sm_id=profile-keep-attribution-sm-z26
   crew_id=profile-keep-attribution-crew-z27
@@ -1825,11 +1835,12 @@ test_keep_ai_trailers_reaches_secondmate_crew_launches() {
   expect_code 0 "$status" "secondmate crew spawn should succeed"$'\n'"$out"
   launch=$(cat "$LAUNCH_LOG")
   assert_attribution_policy_absent "$launch" "secondmate crew claude"
-  assert_not_contains "$launch" 'GIT_CONFIG_KEY_0=core.hooksPath' \
-    "secondmate crew launch still overrides the repository hooksPath"
-  [ ! -e "$HOME_DIR/state/$crew_id.git-hooks" ] \
-    || fail "secondmate crew launch installed AI trailer strip hooks"
-  pass "keep-ai-trailers is inherited so a secondmate's crew launch keeps AI trailers"
+  assert_contains "$launch" 'GIT_CONFIG_KEY_0=core.hooksPath' \
+    "secondmate crew launch drops the pane hooks override"
+  [ -d "$HOME_DIR/state/$crew_id.git-hooks" ] || fail "secondmate crew launch did not install the per-task hooks"
+  [ -x "$HOME_DIR/state/$crew_id.git-hooks/pre-commit" ] || fail "secondmate crew install missed the commit guard"
+  [ -x "$HOME_DIR/state/$crew_id.git-hooks/pre-push" ] || fail "secondmate crew install missed the push guard"
+  pass "keep-ai-trailers is inherited so a secondmate's crew launch keeps AI trailers and the identity guard"
 }
 
 test_claude_secondmate_launch_carries_the_attribution_policy() {
@@ -2418,8 +2429,8 @@ test_claude_task_launch_carries_control_channel_authority
 test_claude_secondmate_launch_omits_task_control_channel_authority
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
-test_keep_ai_trailers_omits_attribution_settings_and_strip_hooks
-test_keep_ai_trailers_reaches_secondmate_crew_launches
+test_keep_ai_trailers_omits_attribution_settings_but_keeps_the_identity_guard
+test_keep_ai_trailers_reaches_secondmate_crew_launches_with_the_identity_guard
 test_claude_secondmate_launch_carries_the_attribution_policy
 test_active_dispatch_profile_does_not_block_secondmate_launch
 

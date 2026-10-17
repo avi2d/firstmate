@@ -349,6 +349,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0005-per-task-git-hooks-strip-and-identity-guard.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

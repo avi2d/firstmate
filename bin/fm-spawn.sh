@@ -479,13 +479,14 @@
 # ~/.cursor/cli-config.json attribution-off is not durable (it does not travel
 # with this repo, defaults back to on when unset, and only feeds the CLI's
 # request to the server, so it suppresses the trailer rather than preventing
-# it). Unless config/keep-ai-trailers is present, every spawn installs
-# state/<id>.git-hooks as a GIT_CONFIG core.hooksPath for the pane, so git
-# commit-msg strips known AI trailers at the commit object for every launched
-# runtime, Claude included as defense in depth. bin/fm-git-strip-ai-trailers.sh
-# owns the identities, the hook install, and chaining the repository git is
-# actually running in so a project husky hook still runs. Author identity is
-# not rewritten.
+# it). Every spawn installs state/<id>.git-hooks as a GIT_CONFIG core.hooksPath
+# for the pane, so a pre-commit guard refuses a foreign author or committer
+# for every launched runtime, Claude included, and git commit-msg strips known
+# AI trailers at the commit object unless the home opts in to keeping them.
+# bin/fm-git-strip-ai-trailers.sh owns the trailer identities, the hook
+# install, the identity reference, and chaining the repository git is actually
+# running in so a project husky hook still runs. Author identity is never
+# rewritten. A foreign one is refused.
 # Publishing the record and moving this home's backlog item to In flight are one
 # step, not two: bin/fm-backlog-transition-lib.sh owns that invariant, and this
 # script performs the transition under the task's own meta lock before it reports
@@ -1501,8 +1502,8 @@ spawn_abort_cleanup() {
     fm_lock_release "$CONFIG_INHERIT_LOCK" || true
   fi
   # The per-id spawn lock is retaken so a concurrent spawn of the same id, which
-  # reinstalls this strip dir, is never undone. A launched agent whose endpoint
-  # was not closed may still be committing, so it keeps its strip.
+  # reinstalls this hooks dir, is never undone. A launched agent whose endpoint
+  # was not closed may still be committing, so it keeps its hooks.
   if [ "$status" -ne 0 ] && [ -n "$GIT_HOOKS_DIR" ] &&
     { [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; } &&
     fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
@@ -5113,19 +5114,24 @@ EOF
   esac
 fi
 
-# Per-task git hooksPath that strips AI commit trailers at the commit object.
-# Installed for every kind, including secondmate, unless the home opts in to
-# keeping trailers. Cursor and other non-Claude runtimes inject the trailer
-# after the typed message, so the typed message is not the object. When
-# installed, the pane receives this directory via GIT_CONFIG_* below, which
+# Per-task git hooksPath for the pane. Installed for every kind, including
+# secondmate, with or without config/keep-ai-trailers. The commit-msg strip
+# removes AI trailers at the commit object unless the home opts in to keeping
+# them. The pre-commit identity guard and the pre-push backstop run in both
+# modes. The pane receives this directory via GIT_CONFIG_* below, which
 # overrides a project's husky core.hooksPath without rewriting it; the installer
-# chains the previous hooks so they still run. Real secondmate
-# homes are firstmate clones; a launch whose worktree is not git fails closed
-# rather than shipping a runtime that cannot strip.
+# chains the previous hooks so they still run. Real secondmate homes are
+# firstmate clones; a launch whose worktree is not git fails closed rather
+# than shipping a runtime without the guard.
 GIT_HOOKS_DIR="$STATE_REAL/$ID.git-hooks"
 if [ "$KEEP_AI_TRAILERS" = 0 ]; then
   "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh" install "$GIT_HOOKS_DIR" "$WT" || {
-    echo "error: could not install the AI-trailer strip hooks for $ID" >&2
+    echo "error: could not install the per-task git hooks for $ID" >&2
+    exit 1
+  }
+else
+  "$FM_ROOT/bin/fm-git-strip-ai-trailers.sh" install "$GIT_HOOKS_DIR" "$WT" --keep-trailers || {
+    echo "error: could not install the per-task git hooks for $ID" >&2
     exit 1
   }
 fi
@@ -5530,15 +5536,12 @@ if [ "$KIND" = secondmate ]; then
   # injected carrier and this on/off snapshot are guaranteed to agree.
   LAUNCH="FM_ROOT_OVERRIDE= FM_STATE_OVERRIDE= FM_DATA_OVERRIDE= FM_PROJECTS_OVERRIDE= FM_CONFIG_OVERRIDE= FM_PUBLIC_FOLLOWUP_PRIMARY_HOME=$sq_primary_home FM_HOME=$sq_home FM_TRACE_CONTEXT=$SPAWN_TRACE_EFFECTIVE FM_SUPERVISION_MODEL=$supervision_model $LAUNCH"
 fi
-# Pane-scoped override: git in this worker reads our commit-msg strip without
+# Pane-scoped override: git in this worker reads our per-task hooks without
 # rewriting the project's core.hooksPath. GIT_CONFIG_* takes precedence over
-# config files and is inherited by child git processes. When the home opts in
-# to keeping trailers, leave core.hooksPath alone so the repository's hooks run
-# directly. An export statement inside the pane command carries the override
-# across every step of a compound raw launch while firstmate's own git is unchanged.
-if [ "$KEEP_AI_TRAILERS" = 0 ]; then
-  LAUNCH="export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$(shell_quote "$GIT_HOOKS_DIR"); $LAUNCH"
-fi
+# config files and is inherited by child git processes. An export statement
+# inside the pane command carries the override across every step of a compound
+# raw launch while firstmate's own git is unchanged.
+LAUNCH="export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$(shell_quote "$GIT_HOOKS_DIR"); $LAUNCH"
 # Every agent this fleet launches - crewmate, scout, and secondmate, on a fresh
 # spawn and on a relaunch alike - runs with the compact-adviser kill switch on.
 # This is an export statement rather than a forwarded ambient name or a

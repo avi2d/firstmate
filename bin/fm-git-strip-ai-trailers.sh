@@ -1,60 +1,6 @@
 #!/usr/bin/env bash
-# Strip AI co-author trailers from a commit message, and
-# install that strip as a per-task git commit-msg hook for a fleet launch.
+# Install per-task git hooks for a fleet launch, and run the commit parts.
 #
-# Usage:
-#   fm-git-strip-ai-trailers.sh <msgfile>
-#       Commit-msg hook mode. Git passes the proposed message file as $1.
-#       Rewrites that file in place, then exits 0 so the commit proceeds.
-#   fm-git-strip-ai-trailers.sh install <hooks-dir> <worktree>
-#       Recreate <hooks-dir> as a core.hooksPath for this launch: a commit-msg
-#       hook that runs this strip, plus one wrapper per client-side hook name
-#       git documents except reference-transaction and post-index-change,
-#       which are deliberately excluded (see FM_GIT_CLIENT_HOOKS below).
-#       Each wrapper unsets GIT_CONFIG_* and then resolves
-#       core.hooksPath (or $GIT_DIR/hooks) in the repository git is actually
-#       running in, so a husky directory that only appears after npm install
-#       still runs, and git -C some-other-repo does not inherit the task
-#       worktree's hooks. That lookup also ignores GIT_CONFIG_PARAMETERS,
-#       because git -c core.hooksPath=<this dir> (or a child process that
-#       inherits it) carries the override there, and a lookup that honored it
-#       would find this directory again and never run the repository's own
-#       hook - a skipped pre-push guard. An empty core.hooksPath means no
-#       repository hook, as in plain git; any other failed lookup exits
-#       nonzero rather than skipping the repository's hook. Does not touch the
-#       project's git config; the caller prefixes the pane with
-#       GIT_CONFIG_COUNT / GIT_CONFIG_KEY_0 / GIT_CONFIG_VALUE_0.
-#
-# WHY THIS EXISTS. Claude launches already carry attribution-off in their
-# per-launch --settings JSON. Cursor and other non-Claude runtimes inject a
-# Co-Authored-By trailer at the tooling layer AFTER the worker types a clean
-# message, so the typed message is not the commit object.
-# A prior per-machine ~/.cursor/cli-config.json attribution-off is not durable:
-# it does not travel with Firstmate, it defaults back to on when unset, and it
-# only feeds the CLI's request to the server - the trailer text is emitted by
-# the model, so the setting suppresses rather than prevents it. Verified live
-# on cursor-agent 2026.09.15 with attribution on: the trailer is already in
-# .git/COMMIT_EDITMSG when the commit-msg hook runs, so the spawn-owned hook is
-# the layer that sees the assembled message before the commit object is written.
-# Human Co-Authored-By trailers are left untouched. Author identity is not
-# rewritten.
-#
-# ACCEPTED RESIDUAL, ruled 2026-09-17. git commit --no-verify skips every hook,
-# so a worker that passes it still lands the trailer, as would a runtime that
-# writes the commit object without running git. Both incidents that motivated
-# this strip came through an ordinary hook-running commit, so the ruling is to
-# accept that gap rather than add a push-side rewrite or a push-side check. A
-# trailer found on a fleet commit therefore points at one of those two paths,
-# not at an unnoticed hole in the matcher.
-#
-# ACCEPTED RESIDUAL, ruled 2026-09-17. Inside a fleet pane git reports this
-# directory as the repository's hooks directory, so a hook manager run there
-# (lefthook's npm postinstall, pre-commit install) targets it and would
-# displace the strip. install leaves the directory and every hook in it
-# read-only, so such a manager fails loudly instead of silently winning. Hook
-# managers therefore cannot install from inside fleet panes until a registered
-# project genuinely needs it. Whoever removes the directory restores the owner
-# write bit first.
 set -u
 unset CDPATH GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
 
@@ -63,8 +9,8 @@ SELF="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  fm-git-strip-ai-trailers.sh <msgfile>
-  fm-git-strip-ai-trailers.sh install <hooks-dir> <worktree>
+  fm-git-strip-ai-trailers.sh <msgfile> | guard-commit | guard-push <name> <url>
+  fm-git-strip-ai-trailers.sh install <hooks-dir> <worktree> [--keep-trailers]
 EOF
   exit 2
 }
@@ -147,6 +93,139 @@ write_executable() {
   chmod 500 "$dest"
 }
 
+split_ident() {
+  local ident=$1 name rest email
+  case "$ident" in
+  *'<'*'>'*) ;;
+  *) return 1 ;;
+  esac
+  name=${ident%% <*}
+  rest=${ident#*<}
+  email=${rest%%>*}
+  [ -n "$name" ] && [ -n "$email" ] && [ "$name" != "$ident" ] || return 1
+  printf '%s\n%s\n' "$name" "$email"
+}
+
+# The pane GIT_CONFIG_* entries stay: they only point core.hooksPath here.
+guard_reference() {
+  local ident var=$1
+  ident=$(unset GIT_CONFIG_PARAMETERS GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL; git var "$var" 2>/dev/null) || return 1
+  split_ident "$ident"
+}
+
+# A foreign author or committer stops here instead of in CI.
+guard_commit() {
+  local var eff ref eff_name eff_email ref_name ref_email
+  for var in GIT_AUTHOR_IDENT GIT_COMMITTER_IDENT; do
+    eff=$(git var "$var" 2>/dev/null) || {
+      echo "fm-git-strip-ai-trailers: refusing commit: git cannot resolve $var here" >&2
+      return 1
+    }
+    eff=$(split_ident "$eff") || {
+      echo "fm-git-strip-ai-trailers: refusing commit: git resolved an unreadable $var" >&2
+      return 1
+    }
+    eff_name=${eff%%$'\n'*}
+    eff_email=${eff#*$'\n'}
+    ref=$(guard_reference "$var") || {
+      echo "fm-git-strip-ai-trailers: refusing commit: no user.name or user.email in this machine's git config files (git config user.name and user.email)" >&2
+      return 1
+    }
+    ref_name=${ref%%$'\n'*}
+    ref_email=${ref#*$'\n'}
+    if [ "$eff_name" != "$ref_name" ] || [ "$eff_email" != "$ref_email" ]; then
+      echo "fm-git-strip-ai-trailers: refusing commit with an author or committer that differs from this machine's git config files (git config user.name and user.email)" >&2
+      echo "fm-git-strip-ai-trailers: commit with the configured identity instead of -c user.name, --author, or GIT_AUTHOR_* and GIT_COMMITTER_* overrides" >&2
+      return 1
+    fi
+  done
+}
+
+# Amend and rebase replay commits past the commit-time hook, so the pushed range is checked here.
+guard_push() {
+  local ref_a ref_c ref_an ref_ae ref_cn ref_ce
+  local local_ref local_sha remote_ref remote_sha extra
+  ref_a=$(guard_reference GIT_AUTHOR_IDENT) || {
+    echo "fm-git-strip-ai-trailers: refusing push: no user.name or user.email in this machine's git config files (git config user.name and user.email)" >&2
+    return 1
+  }
+  ref_c=$(guard_reference GIT_COMMITTER_IDENT) || {
+    echo "fm-git-strip-ai-trailers: refusing push: no user.name or user.email in this machine's git config files (git config user.name and user.email)" >&2
+    return 1
+  }
+  ref_an=${ref_a%%$'\n'*}
+  ref_ae=${ref_a#*$'\n'}
+  ref_cn=${ref_c%%$'\n'*}
+  ref_ce=${ref_c#*$'\n'}
+  while read -r local_ref local_sha remote_ref remote_sha extra; do
+    [ -n "$local_ref" ] || continue
+    if [ -z "$local_sha" ] || [ -z "$remote_ref" ] || [ -z "$remote_sha" ] || [ -n "$extra" ]; then
+      echo "fm-git-strip-ai-trailers: refusing push: unreadable pre-push input" >&2
+      return 1
+    fi
+    case "$local_sha" in
+    *[!0]*) ;;
+    *) continue ;;
+    esac
+    guard_push_range "$local_sha" "$remote_sha" "$ref_an" "$ref_ae" "$ref_cn" "$ref_ce" || return 1
+  done
+}
+
+guard_push_range() {
+  local local_sha=$1 remote_sha=$2 ref_an=$3 ref_ae=$4 ref_cn=$5 ref_ce=$6
+  local lines excludes line sha an ae cn ce extra short
+  excludes=$(git for-each-ref --format='%(objectname)' refs/remotes/ 2>/dev/null) || {
+    echo "fm-git-strip-ai-trailers: refusing push: cannot list the remote refs" >&2
+    return 1
+  }
+  # A merge of a tracked remote branch lands its commits inside the pushed range,
+  # so every range excludes what any remote already holds and only new commits are checked.
+  case "$remote_sha" in
+  *[!0]*)
+    if [ -z "$excludes" ]; then
+      lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$remote_sha..$local_sha" 2>/dev/null) || {
+        echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2
+        return 1
+      }
+    else
+      # shellcheck disable=SC2086
+      lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$local_sha" --not "$remote_sha" $excludes 2>/dev/null) || {
+        echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2
+        return 1
+      }
+    fi
+    ;;
+  *)
+    if [ -z "$excludes" ]; then
+      lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$local_sha" 2>/dev/null) || {
+        echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2
+        return 1
+      }
+    else
+      # shellcheck disable=SC2086
+      lines=$(git log --format='%H%x1f%an%x1f%ae%x1f%cn%x1f%ce' "$local_sha" --not $excludes 2>/dev/null) || {
+        echo "fm-git-strip-ai-trailers: refusing push: cannot list the pushed range" >&2
+        return 1
+      }
+    fi
+    ;;
+  esac
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    IFS=$'\x1f' read -r sha an ae cn ce extra <<< "$line"
+    if [ -z "$sha" ] || [ -z "$an" ] || [ -z "$ae" ] || [ -z "$cn" ] || [ -z "$ce" ] || [ -n "$extra" ]; then
+      echo "fm-git-strip-ai-trailers: refusing push: cannot read a pushed commit's identity" >&2
+      return 1
+    fi
+    if [ "$an" != "$ref_an" ] || [ "$ae" != "$ref_ae" ] || [ "$cn" != "$ref_cn" ] || [ "$ce" != "$ref_ce" ]; then
+      short=$(git rev-parse --short "$sha" 2>/dev/null) || short=$sha
+      echo "fm-git-strip-ai-trailers: refusing push with commit $short whose author or committer differs from this machine's git config files (git config user.name and user.email)" >&2
+      echo "fm-git-strip-ai-trailers: push only commits with the configured identity" >&2
+      return 1
+    fi
+  done <<< "$lines"
+}
+
 # Shared body for every wrapper: after the pane-wide GIT_CONFIG override is
 # cleared, resolve this repository's own hooks directory the way git does
 # (core.hooksPath, else the common dir's hooks) and exec that name if it
@@ -210,8 +289,13 @@ pre-merge-commit prepare-commit-msg post-commit pre-rebase post-checkout
 post-merge pre-push post-rewrite pre-auto-gc sendemail-validate'
 
 install_hooks() {
-  local hooks_dir=$1 wt=$2 name
+  local hooks_dir=$1 wt=$2 strip=1 name
   [ -n "$hooks_dir" ] && [ -n "$wt" ] || usage
+  case "${3:-}" in
+  ''|--strip) strip=1 ;;
+  --keep-trailers) strip=0 ;;
+  *) usage ;;
+  esac
   [ -d "$wt" ] || {
     echo "error: worktree is not a directory: $wt" >&2
     return 1
@@ -226,14 +310,39 @@ install_hooks() {
   chmod 700 "$hooks_dir" 2>/dev/null || true
   hooks_dir=$(CDPATH='' cd -- "$hooks_dir" && pwd -P) || return 1
 
-  write_executable "$hooks_dir/commit-msg" <<EOF
+  if [ "$strip" = 1 ]; then
+    write_executable "$hooks_dir/commit-msg" <<EOF
 #!/usr/bin/env bash
 set -u
 $(quote_for_hook "$SELF") "\$1" || exit \$?
 $(runtime_chain_body "$hooks_dir")
 EOF
+  else
+    write_executable "$hooks_dir/commit-msg" <<EOF
+#!/usr/bin/env bash
+set -u
+$(runtime_chain_body "$hooks_dir")
+EOF
+  fi
+
+  write_executable "$hooks_dir/pre-commit" <<EOF
+#!/usr/bin/env bash
+set -u
+$(quote_for_hook "$SELF") guard-commit || exit \$?
+$(runtime_chain_body "$hooks_dir")
+EOF
+
+  write_executable "$hooks_dir/pre-push" <<EOF
+#!/usr/bin/env bash
+set -u
+$(quote_for_hook "$SELF") guard-push "\$@" || exit \$?
+$(runtime_chain_body "$hooks_dir")
+EOF
 
   for name in $FM_GIT_CLIENT_HOOKS; do
+    case "$name" in
+    pre-commit|pre-push) continue ;;
+    esac
     write_executable "$hooks_dir/$name" <<EOF
 #!/usr/bin/env bash
 set -u
@@ -246,8 +355,19 @@ EOF
 CMD=${1:-}
 case "$CMD" in
 install)
+  case "$#" in
+  3) install_hooks "$2" "$3" ;;
+  4) install_hooks "$2" "$3" "$4" ;;
+  *) usage ;;
+  esac
+  ;;
+guard-commit)
+  [ "$#" -eq 1 ] || usage
+  guard_commit
+  ;;
+guard-push)
   [ "$#" -eq 3 ] || usage
-  install_hooks "$2" "$3"
+  guard_push
   ;;
 -h | --help)
   usage

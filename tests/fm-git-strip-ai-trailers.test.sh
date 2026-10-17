@@ -19,6 +19,9 @@ TMP_ROOT=$(fm_test_tmproot fm-git-strip-ai-trailers)
 
 fm_git_identity 'Captain Tests' 'captain@example.invalid'
 
+export GIT_CONFIG_GLOBAL="$TMP_ROOT/fixture-gitconfig"
+{ echo '[user]'; echo 'name = Captain Tests'; echo 'email = captain@example.invalid'; } > "$GIT_CONFIG_GLOBAL"
+
 with_hooks_env() {  # <hooks-dir> <command...>
   local hooks=$1
   shift
@@ -314,6 +317,7 @@ test_repository_pre_push_runs_on_every_override_channel() {
   write_refusing_pre_push "$repo/.git/hooks/pre-push" "$marker"
   hooks="$TMP_ROOT/hooks-guarded"
   "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  git -C "$repo" commit -q --amend --no-edit --author='Captain Tests <captain@example.invalid>' || fail "fixture amend should succeed"
   for label in env param env+param child-env child-param; do
     rm -f "$marker"
     case "$label" in
@@ -356,6 +360,295 @@ test_strip_msgfile_alone_does_not_rewrite_author_fields() {
   pass "commit-msg file mode strips the trailer and keeps the subject"
 }
 
+test_guard_commit_allows_same_value_c_override() {
+  local repo hooks
+  repo="$TMP_ROOT/guard-same-value"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-same-value"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" -c user.name='Captain Tests' -c user.email='captain@example.invalid' commit -q -m 'fix: same-value override' || fail "a same-value -c override was refused"
+  [ "$(git -C "$repo" log -1 --format='%an <%ae>')" = "Captain Tests <captain@example.invalid>" ] || fail "the author was rewritten"
+  pass "a -c override matching the configured identity is allowed"
+}
+
+test_guard_commit_allows_amend_without_edit() {
+  local repo hooks
+  repo="$TMP_ROOT/guard-amend"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-amend"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -q -m 'fix: amend me' || fail "a configured-identity commit was refused"
+  with_hooks_env "$hooks" git -C "$repo" commit -q --amend --no-edit || fail "an amend keeping the configured identity was refused"
+  pass "an amend that keeps the configured identity is allowed"
+}
+
+test_guard_commit_refuses_c_identity_override() {
+  local repo hooks err head
+  repo="$TMP_ROOT/guard-c-override"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-c"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  head=$(git -C "$repo" rev-parse HEAD)
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  err=$(with_hooks_env "$hooks" env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL git -C "$repo" -c user.name=firstmate -c user.email=invented@example.com commit -m 'fix: foreign -c identity' 2>&1) &&
+    fail "a -c identity override commit succeeded"
+  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+  assert_not_contains "$err" "invented@example.com" "the refusal printed the foreign email"
+  assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused commit moved HEAD"
+  pass "a -c user.name and user.email override is refused at commit time"
+}
+
+test_guard_commit_refuses_author_flag() {
+  local repo hooks err head
+  repo="$TMP_ROOT/guard-author-flag"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-author-flag"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  head=$(git -C "$repo" rev-parse HEAD)
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  err=$(with_hooks_env "$hooks" git -C "$repo" commit -m 'fix: foreign author' --author='Sneaky <sneaky@example.com>' 2>&1) &&
+    fail "a --author override commit succeeded"
+  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+  assert_not_contains "$err" "sneaky@example.com" "the refusal printed the foreign email"
+  assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused commit moved HEAD"
+  pass "a --author override is refused at commit time"
+}
+
+test_guard_commit_refuses_author_env_override() {
+  local repo hooks err head
+  repo="$TMP_ROOT/guard-author-env"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-author-env"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  head=$(git -C "$repo" rev-parse HEAD)
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  err=$(with_hooks_env "$hooks" env GIT_AUTHOR_NAME='Env Evil' GIT_AUTHOR_EMAIL=env-evil@example.com git -C "$repo" commit -m 'fix: env author' 2>&1) &&
+    fail "a GIT_AUTHOR_* override commit succeeded"
+  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+  assert_not_contains "$err" "env-evil@example.com" "the refusal printed the foreign email"
+  assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused commit moved HEAD"
+  pass "a GIT_AUTHOR_* override is refused at commit time"
+}
+
+test_guard_commit_refuses_committer_env_override() {
+  local repo hooks err head
+  repo="$TMP_ROOT/guard-committer-env"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-committer-env"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  head=$(git -C "$repo" rev-parse HEAD)
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  err=$(with_hooks_env "$hooks" env GIT_COMMITTER_NAME='Env Evil' GIT_COMMITTER_EMAIL=env-evil@example.com git -C "$repo" commit -m 'fix: env committer' 2>&1) &&
+    fail "a GIT_COMMITTER_* override commit succeeded"
+  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+  assert_not_contains "$err" "env-evil@example.com" "the refusal printed the foreign email"
+  assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused commit moved HEAD"
+  pass "a GIT_COMMITTER_* override is refused at commit time"
+}
+
+test_guard_commit_matches_plain_git_where_no_identity_is_configured() {
+  local repo hooks err empty
+  repo="$TMP_ROOT/guard-auto-derived"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-auto-derived"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  empty="$TMP_ROOT/empty-home"
+  mkdir -p "$empty"
+  echo change >>"$repo/README.md"
+  git -C "$repo" add README.md
+  if env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT >/dev/null 2>&1; then
+    env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" commit -q -m "fix: auto-derived" || fail "a commit with the auto-derived machine identity was refused"
+    echo more >>"$repo/README.md"
+    git -C "$repo" add README.md
+    err=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" -c user.name=firstmate -c user.email="invented@example.com" commit -m "fix: foreign with no base" 2>&1) &&
+      fail "a foreign override succeeded with no configured identity"
+    assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+    assert_not_contains "$err" "invented@example.com" "the refusal printed the foreign email"
+    pass "an auto-derived machine identity is allowed and a foreign override is still refused"
+  else
+    err=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL -u GIT_CONFIG_GLOBAL HOME="$empty" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$hooks" git -C "$repo" -c user.name=firstmate -c user.email="invented@example.com" commit -m "fix: foreign with no identity anywhere" 2>&1) &&
+      fail "a foreign override succeeded with no resolvable identity"
+    assert_contains "$err" "no user.name or user.email" "the refusal did not name the missing machine identity"
+    assert_not_contains "$err" "invented@example.com" "the refusal printed the foreign email"
+    pass "with no resolvable machine identity a foreign override is still refused"
+  fi
+}
+
+
+test_guard_commit_refuses_when_identity_is_unreadable() {
+  local repo hooks err broken head
+  repo="$TMP_ROOT/guard-unreadable"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-unreadable"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  broken="$TMP_ROOT/broken-gitconfig"
+  echo '[user' >"$broken"
+  head=$(git -C "$repo" rev-parse HEAD)
+  err=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL GIT_CONFIG_GLOBAL="$broken" GIT_CONFIG_NOSYSTEM=1 "$STRIP" guard-commit 2>&1) &&
+    fail "guard-commit succeeded with an unreadable identity"
+  assert_contains "$err" "git cannot resolve GIT_AUTHOR_IDENT here" "the refusal did not name the unresolvable identity"
+  assert_equals "$head" "$(git -C "$repo" rev-parse HEAD)" "a refused guard-commit moved HEAD"
+  pass "a commit with an unreadable identity is refused at commit time"
+}
+
+test_guard_push_refuses_a_smuggled_foreign_commit() {
+  local repo remote hooks err
+  repo="$TMP_ROOT/guard-smuggled"
+  remote="$TMP_ROOT/guard-smuggled.git"
+  make_repo "$repo"
+  git init -q --bare "$remote"
+  git -C "$repo" remote add origin "$remote"
+  hooks="$TMP_ROOT/hooks-guard-smuggled"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  git -C "$repo" commit -q --amend --no-edit --author='Captain Tests <captain@example.invalid>' || fail "fixture amend should succeed"
+  echo clean >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -qm 'fix: clean history' || fail "a configured-identity commit was refused"
+  with_hooks_env "$hooks" git -C "$repo" push -q origin "HEAD:refs/heads/main" || fail "a configured-identity push was refused"
+  echo smuggled >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" env GIT_AUTHOR_NAME=Smuggled GIT_AUTHOR_EMAIL=smuggled@example.com git -C "$repo" commit -q --no-verify -m 'fix: smuggled' || fail "the fixture smuggle commit failed"
+  err=$(with_hooks_env "$hooks" git -C "$repo" push origin "HEAD:refs/heads/sneaky" 2>&1) &&
+    fail "a push carrying a foreign commit succeeded"
+  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+  assert_not_contains "$err" "smuggled@example.com" "the refusal printed the foreign email"
+  git -C "$remote" rev-parse -q --verify "refs/heads/sneaky" >/dev/null &&
+    fail "the smuggled commit reached the remote"
+  pass "a push carrying a foreign commit is refused before it reaches the remote"
+}
+
+seed_merge_main_repo() {
+  local repo=$1 remote=$2 hooks=$3
+  git init -q -b main --bare "$remote"
+  make_repo "$repo"
+  git -C "$repo" remote add origin "$remote"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main || fail "the base push should pass the guard"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    GIT_AUTHOR_NAME="Main Author" GIT_AUTHOR_EMAIL="author@example.com" \
+    GIT_COMMITTER_NAME="Web Flow" GIT_COMMITTER_EMAIL="webflow@example.com" \
+    git -C "$repo" commit -q --allow-empty -m "main: squash by another author and committer"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    git -C "$repo" push -q origin main || fail "the foreign main commit should reach the remote"
+  git -C "$repo" fetch -q origin || fail "fetch should succeed"
+  git -C "$repo" checkout -q -b feature HEAD~1
+  echo feature >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -q -m "feature: own work" || fail "the feature commit should pass the guard"
+  with_hooks_env "$hooks" git -C "$repo" push -q origin feature || fail "the feature push should pass the guard"
+  git -C "$repo" merge -q origin/main -m "feature: merge main" || fail "the merge should succeed"
+}
+
+test_guard_push_passes_a_merge_of_remote_main_by_other_identities() {
+  local repo remote hooks
+  repo="$TMP_ROOT/guard-merge-main"
+  remote="$TMP_ROOT/guard-merge-main.git"
+  hooks="$TMP_ROOT/hooks-guard-merge-main"
+  seed_merge_main_repo "$repo" "$remote" "$hooks"
+  with_hooks_env "$hooks" git -C "$repo" push -q origin feature || fail "a push after merging remote main was refused"
+  pass "a push after merging remote main by other identities passes the guard"
+}
+
+test_guard_push_still_refuses_a_smuggled_commit_beside_a_remote_merge() {
+  local repo remote hooks err
+  repo="$TMP_ROOT/guard-merge-smuggled"
+  remote="$TMP_ROOT/guard-merge-smuggled.git"
+  hooks="$TMP_ROOT/hooks-guard-merge-smuggled"
+  seed_merge_main_repo "$repo" "$remote" "$hooks"
+  echo smuggled >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+    git -C "$repo" -c user.name="Smuggled" -c user.email="smuggled@example.com" commit -q --no-verify -m "feature: smuggled" || fail "the smuggled commit should bypass the skipped hooks"
+  err=$(with_hooks_env "$hooks" git -C "$repo" push origin feature 2>&1) &&
+    fail "a push carrying a smuggled commit succeeded"
+  assert_contains "$err" "differs from this machine's git config files" "the refusal did not name the configured identity as the reference"
+  assert_not_contains "$err" "smuggled@example.com" "the refusal printed the foreign email"
+  pass "a push carrying a smuggled commit beside a remote merge is still refused"
+}
+
+test_guard_push_passes_a_new_branch_over_fetched_upstream_commits() {
+  local repo remote hooks
+  repo="$TMP_ROOT/guard-upstream"
+  remote="$TMP_ROOT/guard-upstream.git"
+  hooks="$TMP_ROOT/hooks-guard-upstream"
+  git init -q -b main --bare "$remote"
+  make_repo "$repo"
+  git -C "$repo" remote add origin "$remote"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    GIT_AUTHOR_NAME="Upstream Author" GIT_AUTHOR_EMAIL="upstream@example.com" \
+    GIT_COMMITTER_NAME="Upstream Committer" GIT_COMMITTER_EMAIL="upcommit@example.com" \
+    git -C "$repo" commit -q --allow-empty -m "upstream: work by other authors"
+  env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    git -C "$repo" push -q origin main || fail "the upstream history should reach the remote"
+  git -C "$repo" fetch -q origin || fail "fetch should succeed"
+  git -C "$repo" checkout -q -b downstream origin/main
+  echo downstream >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -q -m "downstream: own work" || fail "the downstream commit should pass the guard"
+  with_hooks_env "$hooks" git -C "$repo" push -q -u origin downstream || fail "a new branch over fetched upstream commits was refused"
+  pass "a new branch over fetched upstream commits by other authors passes the guard"
+}
+test_guard_keep_trailers_install_keeps_trailers_and_guards_identity() {
+  local repo hooks msg body err
+  repo="$TMP_ROOT/guard-keep"
+  make_repo "$repo"
+  hooks="$TMP_ROOT/hooks-guard-keep"
+  "$STRIP" install "$hooks" "$repo" --keep-trailers || fail "install --keep-trailers should succeed"
+  msg="$TMP_ROOT/keep-msg.txt"
+  echo 'fix: kept' >"$msg"
+  echo >>"$msg"
+  echo 'Co-authored-by: Cursor <cursoragent@cursor.com>' >>"$msg"
+  (cd "$repo" && "$hooks/commit-msg" "$msg") || fail "the keep-trailers commit-msg hook failed"
+  assert_contains "$(cat "$msg")" "Co-authored-by: Cursor" "keep-trailers stripped the trailer"
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -q --trailer 'Co-authored-by: Cursor <cursoragent@cursor.com>' -m 'fix: kept trailer' || fail "a configured-identity commit was refused"
+  body=$(git -C "$repo" log -1 --format=%B)
+  assert_contains "$body" "Co-authored-by: Cursor" "keep-trailers stripped the trailer from the commit object"
+  err=$(with_hooks_env "$hooks" env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL git -C "$repo" -c user.name=firstmate -c user.email=invented@example.com commit -m 'fix: foreign under keep' 2>&1) &&
+    fail "a -c identity override succeeded under --keep-trailers"
+  assert_contains "$err" "differs from this machine's git config files" "the keep-trailers refusal did not name the configured identity"
+  assert_not_contains "$err" "invented@example.com" "the refusal printed the foreign email"
+  pass "a --keep-trailers install keeps AI trailers and still guards the worker identity"
+}
+
+test_guard_project_pre_commit_still_runs() {
+  local repo hooks
+  repo="$TMP_ROOT/guard-chain"
+  make_repo "$repo"
+  write_marker_hook "$repo/.git/hooks/pre-commit" guard-chain-pre-commit
+  hooks="$TMP_ROOT/hooks-guard-chain"
+  "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  echo note >>"$repo/README.md"
+  git -C "$repo" add README.md
+  with_hooks_env "$hooks" git -C "$repo" commit -q -m 'fix: chained project hook' || fail "a configured-identity commit was refused"
+  [ -f "$repo/guard-chain-pre-commit.ran" ] || fail "the project pre-commit hook did not run before the guard allowed the commit"
+  pass "the project pre-commit hook runs and the configured commit is allowed"
+}
+
+test_guard_commit_allows_same_value_c_override
+test_guard_commit_allows_amend_without_edit
+test_guard_commit_refuses_c_identity_override
+test_guard_commit_refuses_author_flag
+test_guard_commit_refuses_author_env_override
+test_guard_commit_refuses_committer_env_override
+test_guard_commit_matches_plain_git_where_no_identity_is_configured
+test_guard_commit_refuses_when_identity_is_unreadable
+test_guard_push_refuses_a_smuggled_foreign_commit
+test_guard_push_passes_a_merge_of_remote_main_by_other_identities
+test_guard_push_still_refuses_a_smuggled_commit_beside_a_remote_merge
+test_guard_push_passes_a_new_branch_over_fetched_upstream_commits
+test_guard_keep_trailers_install_keeps_trailers_and_guards_identity
+test_guard_project_pre_commit_still_runs
 test_cursor_trailer_does_not_reach_the_commit_object
 test_human_coauthor_is_kept
 test_human_at_a_vendor_domain_is_kept
