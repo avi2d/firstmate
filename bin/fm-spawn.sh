@@ -689,6 +689,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-project-capacity-lib.sh
 . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
+# shellcheck source=bin/fm-mac-load-lib.sh
+. "$SCRIPT_DIR/fm-mac-load-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # shellcheck source=bin/fm-quota-axi-lib.sh
@@ -3234,6 +3236,36 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
   if [ "$FM_PROJECT_CAPACITY_OCCUPANTS" -ge "$SPAWN_PROJECT_CAPACITY" ]; then
     echo "deferred: project $(basename "$PROJ_ABS") admits $SPAWN_PROJECT_CAPACITY worker(s) at once on this machine ($FM_PROJECT_CAPACITY_FILE) and $FM_PROJECT_CAPACITY_OCCUPANTS already hold a place ($FM_PROJECT_CAPACITY_OCCUPANT_IDS); task $ID was not launched and its backlog item stays queued - dispatch it again once one of them records its ready PR or is cleaned up" >&2
     exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
+  fi
+fi
+# The Mac load gate extends the capacity path above: a heavy start waits while
+# the five-minute average is high or four heavy workers already run.
+if [ "$KIND" != secondmate ] && fm_mac_load_gate_active; then
+  if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
+    SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
+      echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2
+      exit 1
+    }
+  fi
+  if ! fm_mac_load_config "$SPAWN_CAPACITY_CONFIG"; then
+    echo "error: spawn refused: the machine load declaration is unreadable ($FM_MAC_LOAD_ERROR)" >&2
+    exit 1
+  fi
+  if ! SPAWN_LOADAVG=$(fm_mac_loadavg_5min); then
+    echo "error: spawn refused: the five-minute load average cannot be read; refusing a heavy start rather than guessing it" >&2
+    exit 1
+  fi
+  if fm_mac_load_high "$SPAWN_LOADAVG"; then
+    echo "deferred: five-minute load average is $SPAWN_LOADAVG (limit $FM_MAC_LOAD_LIMIT); task $ID was not launched and its backlog item stays queued - dispatch it again once the average drops" >&2
+    exit "$FM_MAC_LOAD_DEFER_EXIT"
+  fi
+  if ! fm_mac_heavy_count "$STATE" "$ID"; then
+    echo "error: spawn refused: this machine's task records cannot all be read to count heavy workers ($FM_MAC_LOAD_ERROR)" >&2
+    exit 1
+  fi
+  if [ "$FM_MAC_HEAVY_COUNT" -ge "$FM_MAC_HEAVY_LIMIT" ]; then
+    echo "deferred: $FM_MAC_HEAVY_COUNT heavy worker(s) already run on this machine (limit $FM_MAC_HEAVY_LIMIT: $FM_MAC_HEAVY_IDS); task $ID was not launched and its backlog item stays queued - dispatch it again once one of them records its ready PR or is cleaned up" >&2
+    exit "$FM_MAC_LOAD_DEFER_EXIT"
   fi
 fi
 [ -f "$BRIEF" ] || {

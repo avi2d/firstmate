@@ -52,6 +52,11 @@ export FM_GATE_REFUSE_BYPASS=1
 # leaked harness pin alone stays inert outside a suite.
 export FM_TEST_SEAM=1
 
+# Pin the Mac load gate's kernel read low for every suite. A loaded Mac would
+# otherwise defer spawns mid-test through the real gate, so no case can observe
+# admission deterministically. Cases that verify the gate set FM_MAC_LOAD_MOCK_5MIN themselves.
+export FM_MAC_LOAD_MOCK_5MIN="${FM_MAC_LOAD_MOCK_5MIN:-1.0}"
+
 # Clear the task-worker marker bin/fm-spawn.sh exports into ship and scout
 # panes. This suite builds git-init fixture repositories whose primary checkout
 # it runs a copied bin/fm-test-run.sh in, and that runner refuses the primary
