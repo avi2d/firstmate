@@ -22,6 +22,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Single owner of the CI npm-tool pins. Every cache key below embeds its pin
+# with no restore-keys fallback, so a bump installs fresh instead of reusing a stale tree.
+env:
+  FM_CI_TASKS_AXI_VERSION: '0.2.6'
+  FM_CI_PI_VERSION: '1.3.0'
+
 # Timeout policy: docs/fm-test-portable-shards.md "Timeouts" owns the three
 # tiers and their rationale; tests/fm-ci-workflow.test.sh guards this workflow.
 # Each job comment identifies the tier implemented by its executable value.
@@ -107,15 +113,38 @@ jobs:
           set -eu
           bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Restore cached tasks-axi
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/node_modules/tasks-axi
+            /usr/local/bin/tasks-axi
+          key: tasks-axi-${{ env.FM_CI_TASKS_AXI_VERSION }}-${{ runner.os }}
       - name: Install tasks-axi
         run: |
           set -eu
-          npm install -g tasks-axi
+          if [ -x /usr/local/bin/tasks-axi ] && [ "$(tasks-axi --version)" = "${FM_CI_TASKS_AXI_VERSION}" ]; then
+            echo "tasks-axi ${FM_CI_TASKS_AXI_VERSION} restored from cache"
+          else
+            npm install -g "tasks-axi@${FM_CI_TASKS_AXI_VERSION}"
+          fi
           tasks-axi --version
+      - name: Restore cached Pi package
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/node_modules/@earendil-works/pi-coding-agent
+            /usr/local/bin/pi
+          key: pi-coding-agent-${{ env.FM_CI_PI_VERSION }}-${{ runner.os }}
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          installed=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/package.json 2>/dev/null | head -1)
+          if [ "${installed}" = "${FM_CI_PI_VERSION}" ]; then
+            echo "pi-coding-agent ${FM_CI_PI_VERSION} restored from cache"
+          else
+            npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
+          fi
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable parallel shard 1
         run: |
@@ -151,10 +180,21 @@ jobs:
           set -eu
           bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Restore cached tasks-axi
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/node_modules/tasks-axi
+            /usr/local/bin/tasks-axi
+          key: tasks-axi-${{ env.FM_CI_TASKS_AXI_VERSION }}-${{ runner.os }}
       - name: Install tasks-axi
         run: |
           set -eu
-          npm install -g tasks-axi
+          if [ -x /usr/local/bin/tasks-axi ] && [ "$(tasks-axi --version)" = "${FM_CI_TASKS_AXI_VERSION}" ]; then
+            echo "tasks-axi ${FM_CI_TASKS_AXI_VERSION} restored from cache"
+          else
+            npm install -g "tasks-axi@${FM_CI_TASKS_AXI_VERSION}"
+          fi
           tasks-axi --version
       - name: Run portable parallel shard 2
         run: |
@@ -208,18 +248,41 @@ jobs:
             exit 1
           }
           tmux -V
+      - name: Restore cached tasks-axi
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/node_modules/tasks-axi
+            /usr/local/bin/tasks-axi
+          key: tasks-axi-${{ env.FM_CI_TASKS_AXI_VERSION }}-${{ runner.os }}
       - name: Install tasks-axi for backlog-handoff delegation
         run: |
           set -eu
-          npm install -g tasks-axi
+          if [ -x /usr/local/bin/tasks-axi ] && [ "$(tasks-axi --version)" = "${FM_CI_TASKS_AXI_VERSION}" ]; then
+            echo "tasks-axi ${FM_CI_TASKS_AXI_VERSION} restored from cache"
+          else
+            npm install -g "tasks-axi@${FM_CI_TASKS_AXI_VERSION}"
+          fi
           tasks-axi --version
       # The Pi extension tests read the installed Pi package's own types and
       # runtime, so without it they gate-skip and pass silently. It is a public
       # npm package and needs no credential, so CI can hold the real thing.
+      - name: Restore cached Pi package
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/node_modules/@earendil-works/pi-coding-agent
+            /usr/local/bin/pi
+          key: pi-coding-agent-${{ env.FM_CI_PI_VERSION }}-${{ runner.os }}
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          installed=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/package.json 2>/dev/null | head -1)
+          if [ "${installed}" = "${FM_CI_PI_VERSION}" ]; then
+            echo "pi-coding-agent ${FM_CI_PI_VERSION} restored from cache"
+          else
+            npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
+          fi
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable serial shard ${{ matrix.shard }}
         env:
@@ -416,6 +479,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+      - name: Resolve npm global prefix
+        shell: /bin/bash {0}
+        run: |
+          set -eu
+          prefix=$(npm prefix -g)
+          printf 'NPM_PREFIX=%s\n' "$prefix" >> "$GITHUB_ENV"
+      - name: Restore cached tasks-axi
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.NPM_PREFIX }}/lib/node_modules/tasks-axi
+            ${{ env.NPM_PREFIX }}/bin/tasks-axi
+          key: tasks-axi-${{ env.FM_CI_TASKS_AXI_VERSION }}-${{ runner.os }}
       - name: Run snapshot consumers with stock Bash
         shell: /bin/bash {0}
         env:
@@ -438,7 +514,11 @@ jobs:
           [ "$parse_fail" -eq 0 ] || { echo "::error::stock macOS Bash 3.2 parse sweep failed"; exit 1; }
 
           command -v npm >/dev/null || { echo "::error::npm is required to install tasks-axi"; exit 1; }
-          npm install -g tasks-axi@0.2.6 >/dev/null
+          if [ -x "$NPM_PREFIX/bin/tasks-axi" ] && [ "$("$NPM_PREFIX/bin/tasks-axi" --version)" = "${FM_CI_TASKS_AXI_VERSION}" ]; then
+            echo "tasks-axi ${FM_CI_TASKS_AXI_VERSION} restored from cache"
+          else
+            npm install -g "tasks-axi@${FM_CI_TASKS_AXI_VERSION}" >/dev/null
+          fi
           PATH="$(npm prefix -g)/bin:$PATH"
           export PATH
           command -v tasks-axi >/dev/null || { echo "::error::tasks-axi is required for the stock Bash regressions"; exit 1; }
