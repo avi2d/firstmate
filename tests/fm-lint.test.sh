@@ -848,6 +848,11 @@ fm_lint_nox_one_root() {
 }
 
 test_local_exclusion_list_covers_every_no_external_sources_code() {
+  # The Lint jobs already lint every canonical root, so CI skips this second whole-repo pass.
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    pass "SKIP (the CI Lint jobs already lint every root): local exclusion completeness"
+    return
+  fi
   if ! pinned_ready; then
     pass "SKIP (ShellCheck $REQUIRED not resolved): local exclusion completeness"
     return
