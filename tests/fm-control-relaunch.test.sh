@@ -44,23 +44,11 @@ TASK_TMPS=()
 
 # A relaunch types into an adopted pane only when the pane's real process tree
 # is a bare shell, so the stub's #{pane_pid} names one of these.
-start_pane_shell() {  # [harness-name] -> echoes the pane shell's pid
-  if [ -n "${1:-}" ]; then
-    bash -c "(exec -a '$1' /bin/sleep 100000) & wait" >/dev/null 2>&1 &
-  else
-    bash -c '/bin/sleep 100000 & wait' >/dev/null 2>&1 &
-  fi
-  printf '%s\n' "$!"
-}
-stop_pane_shell() {  # <pid>
-  pkill -P "$1" 2>/dev/null || true
-  kill "$1" 2>/dev/null || true
-}
-BARE_PANE_SHELL=$(start_pane_shell)
+BARE_PANE_SHELL=$(fm_test_start_pane_shell)
 
 relaunch_cleanup() {
   local d
-  stop_pane_shell "$BARE_PANE_SHELL"
+  fm_test_stop_pane_shell "$BARE_PANE_SHELL"
   for d in "${TASK_TMPS[@]:-}"; do
     [ -n "$d" ] && fm_test_remove_tree "$d"
   done
@@ -1412,14 +1400,16 @@ test_checkpoint_refuses_uninspectable_head_and_status() {
 # harness process runs under the pane, the shape a sandboxed agent Herdr never
 # registered left behind.
 pane_shell_running_harness() {  # <case-dir> -> echoes the pane shell's pid
-  local pane child=''
-  pane=$(start_pane_shell claude)
+  local pane seen=0
+  pane=$(fm_test_start_pane_shell claude)
   for _ in $(seq 1 50); do
-    child=$(pgrep -P "$pane" 2>/dev/null | head -1)
-    [ -z "$child" ] || break
+    if ( . "$ROOT/bin/fm-agent-process-lib.sh"; fm_agent_process_harness_below ps "$pane" ) >/dev/null 2>&1; then
+      seen=1
+      break
+    fi
     /bin/sleep 0.1
   done
-  [ -n "$child" ] || { stop_pane_shell "$pane"; fail "the pane's harness process never started"; }
+  [ "$seen" = 1 ] || { fm_test_stop_pane_shell "$pane"; fail "the pane's harness process never started"; }
   printf '%s\n' "$pane" > "$1/fake/pane-pid"
   printf '%s\n' "$pane"
 }
@@ -1432,7 +1422,7 @@ test_relaunch_refuses_a_dead_reading_over_a_running_harness() {
   pane=$(pane_shell_running_harness "$dir")
   before=$(cat "$dir/home/state/rl80.meta")
   out=$(run_control "$dir" rl80 relaunch --note "must never reach a live agent"); rc=$?
-  stop_pane_shell "$pane"
+  fm_test_stop_pane_shell "$pane"
   expect_code 1 "$rc" "a relaunch must refuse a dead reading over a pane still running a harness"$'\n'"$out"
   assert_contains "$out" "may still be alive" "the refusal should say the agent may still be alive"
   [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch typed into the pane: $(cat "$dir/fake/literal")"
@@ -1873,7 +1863,7 @@ test_spawn_relaunch_refuses_a_dead_reading_over_a_running_harness() {
   printf 'zsh' > "$dir/fake/command"
   pane=$(pane_shell_running_harness "$dir")
   out=$(run_spawn "$dir" rl81 --relaunch); rc=$?
-  stop_pane_shell "$pane"
+  fm_test_stop_pane_shell "$pane"
   expect_code 1 "$rc" "fm-spawn --relaunch must refuse a dead reading over a pane still running a harness"$'\n'"$out"
   assert_contains "$out" "refusing to type a launch command" "the refusal should name the launch it withheld"
   [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch typed into the pane: $(cat "$dir/fake/literal")"

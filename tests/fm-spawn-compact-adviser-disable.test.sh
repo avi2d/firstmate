@@ -17,6 +17,7 @@ set -u
 
 CONTROL="$ROOT/bin/fm-control.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-compact-adviser)
+BARE_PANE_SHELL=$(fm_test_start_pane_shell)
 
 # A synthetic pane value the launch must override rather than inherit: the
 # switch is a floor, so a pane that already carries the wrong value still has to
@@ -274,6 +275,7 @@ case "${1:-}" in
         *cursor_y*) printf '1\n'; exit 0 ;;
         *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*) cat "$D/cwd"; printf '\n'; exit 0 ;;
+        *pane_pid*) cat "$D/pane-pid"; exit 0 ;;
       esac
     done
     printf 'fakepane\n'; exit 0 ;;
@@ -309,6 +311,7 @@ test_relaunch_rebuilds_the_switch() {
     printf 'codex' > "$dir/fake/command"
     printf '%s\n' "fm-$id" > "$dir/fake/windows"
     printf '%s' "$wt" > "$dir/fake/cwd"
+    printf '%s\n' "$BARE_PANE_SHELL" > "$dir/fake/pane-pid"
     {
       echo "window=fmses:fm-$id"
       echo "endpoint_task_id=$id"
