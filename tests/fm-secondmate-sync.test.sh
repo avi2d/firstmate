@@ -643,6 +643,14 @@ case "\$cmd \$sub" in
       printf '{"error":{"code":"agent_not_found","message":"gone"}}\n' >&2
     fi
     ;;
+  "pane process-info")
+    if [ "\${4:-}" = "${stale#*:}" ]; then
+      printf '{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":4242,"foreground_processes":[{"argv":["-zsh"],"argv0":"zsh","cmdline":"-zsh","cwd":"/tmp","name":"zsh","pid":4242}],"pane_id":"${stale#*:}","shell_pid":4242},"type":"pane_process_info"}}\n'
+    else
+      printf '{"error":{"code":"pane_not_found","message":"missing"}}\n' >&2
+      exit 1
+    fi
+    ;;
   "pane send-text"|"pane run"|"pane send-keys")
     if [ "\$arg" = "${stale#*:}" ]; then
       exit 1
@@ -653,6 +661,14 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/herdr"
+  cat > "$fakebin/herdr-ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"pid=,ppid=,comm="*) printf '%s\n' ' 4242     1 -zsh' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/herdr-ps"
   printf '%s\n' "$fakebin"
 }
 
@@ -696,7 +712,7 @@ SH
     return
   fi
   out=$(PATH="$herdrfb:$toolchain:$BASE_PATH" HERDR_ENV=1 FM_BACKEND=herdr \
-    FM_SEND_SETTLE=0 \
+    FM_HERDR_PS_BIN="$herdrfb/herdr-ps" FM_SEND_SETTLE=0 \
     FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
 

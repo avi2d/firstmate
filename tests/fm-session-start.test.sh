@@ -466,6 +466,14 @@ case "${1:-} ${2:-}" in
       exit 1
     fi
     ;;
+  "pane process-info")
+    if [ "${4:-}" = p-old ] && [ ! -e "$killed" ]; then
+      printf '%s\n' '{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":4242,"foreground_processes":[{"argv":["-zsh"],"argv0":"zsh","cmdline":"-zsh","cwd":"/tmp","name":"zsh","pid":4242}],"pane_id":"p-old","shell_pid":4242},"type":"pane_process_info"}}'
+    else
+      printf '%s\n' '{"error":{"code":"pane_not_found"}}' >&2
+      exit 1
+    fi
+    ;;
   "agent get")
     if [ "${3:-}" = p-new ] && [ -e "$spawned" ]; then
       printf '%s\n' '{"result":{"agent":{"agent_status":"idle"}}}'
@@ -486,6 +494,14 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/herdr"
+  cat > "$fakebin/herdr-ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"pid=,ppid=,comm="*) printf '%s\n' ' 4242     1 -zsh' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/herdr-ps"
 }
 
 # make_fake_herdr <fakebin> <live-pane> [odd-status-pane]: `herdr pane get
@@ -682,6 +698,7 @@ EOF
 run_session_start_herdr_secondmate() {
   local root=$1 home=$2 fakebin=$3 mate=$4 log=$5 state=$6
   FM_BACKEND=herdr FM_FAKE_HERDR_LOG="$log" FM_FAKE_HERDR_STATE="$state" \
+    FM_HERDR_PS_BIN="$fakebin/herdr-ps" \
     FM_FAKE_SECOND_MATE_ID="$SESSION_START_HERDR_SECOND_MATE_ID" \
     FM_FAKE_HARNESS_PID=$$ \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH"
