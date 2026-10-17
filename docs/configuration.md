@@ -851,8 +851,8 @@ A home with the file set refuses the spawn when nono is missing or its version d
 A no-mistakes ship additionally receives the daemon data directory and read-write git directories, so its pipeline client can reach the gate.
 That grant reaches state the daemon mediates for other tasks, so a ship is isolated from secrets and captain files but not from all other task state.
 A claude-bridge worker receives a dedicated token route instead of the proxy key: the setup token stays outside the sandbox, a supervisor-side capture hands it to the nono proxy, and the worker sees only a phantom placeholder in `ANTHROPIC_AUTH_TOKEN` with its config redirected to a task-owned directory.
-Only the opencode-go provider is routed through the sandbox today.
-A worker on a claude-bridge model launches unsandboxed with a warning until its setup token path is proven, and any other provider does the same.
+The opencode-go and claude-bridge providers are routed through the sandbox today.
+A claude-bridge worker without a passing setup token, and a worker on any other provider, launches unsandboxed with a warning.
 The setup token for sandboxed Claude workers lives at `config/agent-sandbox-claude-token` with owner-only permissions once the captain creates it with `claude setup-token`.
 Secondmates, direct-PR workers, and local-only workers stay unsandboxed.
 Mechanics live in `bin/fm-agent-sandbox.sh` and its `--help` output.
