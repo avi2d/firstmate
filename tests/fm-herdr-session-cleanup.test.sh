@@ -33,7 +33,13 @@ cat > "$FAKE_PS" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
   "-axo pid=,ppid=") printf '1 0\n67 1\n' ;;
+  "-axo pid=,ppid=,comm=")
+    printf '1 0 launchd\n67 1 sh\n'
+    [ ! -e "${FM_TEST_HARNESS_BELOW:-/nonexistent}" ] || printf '68 67 nono\n69 68 pi\n'
+    ;;
   "-p 67 -o stat=") printf 'Ss\n' ;;
+  "-p 68 -o args=") printf 'nono run -- pi\n' ;;
+  "-p 69 -o args=") printf 'pi\n' ;;
   *) exit 1 ;;
 esac
 SH
@@ -66,6 +72,7 @@ LOCK_LOG="$TMP_ROOT/locks.log"
 CLOSE_LOG="$TMP_ROOT/closes.log"
 mkdir -p "$FIXTURE_DIR"
 
+export FM_HERDR_PS_BIN="$FAKE_PS" FM_TEST_HARNESS_BELOW="$FIXTURE_DIR/harness-below"
 fm_backend_name() { printf herdr; }
 fm_backend_herdr_session() { printf test; }
 fm_backend_herdr_presentation_session_lock_path() { printf '%s/presentation.lock' "$TMP_ROOT"; }
@@ -160,6 +167,9 @@ fm_backend_herdr_cli() {
       ;;
     "pane get")
       printf '{"result":{"pane":{"pane_id":"%s","tab_id":"%s","workspace_id":"%s"}}}\n' "$PANE" "$TAB" "$WS"
+      ;;
+    "pane process-info")
+      printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":67,"foreground_process_group_id":67,"foreground_processes":[{"argv":["/bin/sh"],"name":"sh","pid":67}]}}}\n' "$PANE"
       ;;
     "agent get")
       case "$(cat "$FIXTURE_DIR/agent")" in
@@ -276,6 +286,7 @@ reset_fixture; printf '2\n' > "$FIXTURE_DIR/tabs"; printf '2\n' > "$FIXTURE_DIR/
 reset_fixture; printf '2\n' > "$FIXTURE_DIR/panes"; assert_preserved "multiple panes"
 reset_fixture; : > "$FIXTURE_DIR/process-unsafe"; assert_preserved "non-idle shell"
 reset_fixture; : > "$FIXTURE_DIR/process-unsafe"; assert_preserved "child process or shell job"
+reset_fixture; : > "$FIXTURE_DIR/harness-below"; assert_preserved "unregistered agent below a sandbox launcher"
 reset_fixture; : > "$FIXTURE_DIR/error-api-snapshot"; assert_preserved "unreadable snapshot"
 reset_fixture; : > "$FIXTURE_DIR/error-workspace-get"; assert_preserved "unreadable topology check"
 reset_fixture; : > "$FIXTURE_DIR/race"; assert_preserved "revalidation race"

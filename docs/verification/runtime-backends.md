@@ -1664,7 +1664,7 @@ That command is the guard that refreshes this record; run it after every Herdr u
 For Pi on Herdr 0.9.0, `herdr agent get` reflects whether the agent process remains live; its registration does not persist merely because the pane and parent shell do.
 A Pi launched as a child of the pane shell (not via `exec`) that then `/quit`s or is SIGKILL'd leaves the pane and shell in place, and `agent get` returns `agent_not_found`.
 A sibling live idle Pi stays `agent=pi` with `agent_status=idle`.
-`fm_backend_herdr_pane_agent_state` maps that `agent_not_found` leftover shell to `no-agent` and `fm_backend_herdr_agent_state` maps it to `dead` (relaunch-allowed), while the live idle pane stays `alive`.
+`fm_backend_herdr_pane_agent_state` maps that `agent_not_found` leftover shell to `no-agent` once `pane process-info` shows nothing but shells with no harness below them, and `fm_backend_herdr_agent_state` maps it to `dead`, which allows a relaunch, while the live idle pane stays `alive`.
 `herdr pane get` `.agent_status` can still read `idle` after the occupant is gone; liveness is `agent get`, never that pane field.
 
 ```sh
@@ -1792,6 +1792,62 @@ ok - real herdr 0.9.0 + pi 0.85.1: the registration left behind by a quit pi rea
 `tests/fm-backend-herdr.test.sh` pins the logic portably with canned `process-info` bodies over real processes, driving the signals apart: the identical shell-only foreground reads `stale-agent` for a childless shell and `live` when an agent-named process is still a descendant of that shell, a `working`, `done`, or `blocked` record over a shell-only pane reads the same as `idle`, an unreadable process view reads `unknown` and refuses husk closing, a transient prompt helper beside the shell settles into `stale-agent` on the next shell-only sample while a foreground that never settles within the bound still reads `live`, and `busy_state` verifies a `working` record before reporting busy.
 `tests/fm-crew-state.test.sh` pins the recovery classifier: a stale registration over a shell-only pane reports agent gone rather than alive or unreachable, and a stale `working` record never reports the pane working.
 A stale-registration pane is never a husk: create, reclaim, presentation recovery, and session cleanup keep refusing it, and only recovery reuses it.
+
+### Agents the nono sandbox runs
+
+Measured 2026-10-17 on macOS aarch64 against Herdr 0.9.5, nono 0.80.0, and Pi 1.2.0 in an isolated `fm-lab-` session.
+One Pi worker was launched in a pane with the wrapper `bin/fm-spawn.sh` builds when `config/agent-sandbox` is set, and the same live pane was read through the adapter before and after this change.
+
+`agent get` answered `agent_not_found`, and the process view under the pane shell was:
+
+```text
+{"shell_pid":89133,"foreground_process_group_id":89730,"foreground":[{"pid":89856,"name":"log"},{"pid":89730,"name":"nono"}]}
+89133 88848 89133 89730 ttys010  Ss   -zsh
+89730 89133 89730 89730 ttys010  S+   nono
+89855 89730 89855 89855 ttys012  Ss+  pi
+89856 89730 89730 89730 ttys010  S+   /usr/bin/log
+```
+
+Pi is a child of `nono` but leads a session of its own on another terminal, so neither the pane's foreground group nor its tty contains it.
+Herdr kept answering `agent_not_found` through a whole turn in that run.
+An earlier run showed a short-lived placeholder record during a turn, `agent=pi` with `agent_status=unknown` and then `working`, which went back to `agent_not_found` once the turn ended.
+Pi 1.2.0 draws its busy indicator into the editor's top border as `── ⠸ Working ───`, a shape the Pi busy pattern did not match before this change.
+
+Before the change, every reader took the live worker for an exited one.
+The doorbell was withheld, an explicit send was refused, and `fm-spawn --relaunch` typed its launch line into the live Pi, which queued it as a steering message:
+
+```text
+agent_state=dead agent_alive=dead composer=unknown busy=unknown
+fm-send: doorbell not typed because the agent in fm-lab-sandbox-liveness-88824-28407:w1:p1 has exited; the steer is durably recorded at /tmp/fm-sandbox-liveness-misread/proof.qQP2sT/home-BASE/state/sbx1.inbox/001.msg for recovery (stuck-crewmate-recovery), and the watcher will not re-ring a dead pane
+error: text not submitted to fm-lab-sandbox-liveness-88824-28407:w1:p1 (delivery unconfirmed; verdict=unknown; tried explicit target 'fm-lab-sandbox-liveness-88824-28407:w1:p1' matched /tmp/fm-sandbox-liveness-misread/proof.qQP2sT/home-BASE/state/sbx1.meta; backend=herdr)
+spawned sbx1 harness=pi kind=ship mode=no-mistakes yolo=off window=fm-lab-sandbox-liveness-88824-28407:w1:p1 worktree=/tmp/fm-sandbox-liveness-misread/proof.qQP2sT/wt
+ Steering: . '/tmp/fm-sbx1+f07c64f3aa0ffbdf483f2ec2d9e74d011ac4d2a8e991502e296b9f77e5c24109/launch.s1792235365.97923...
+```
+
+After it, both sends returned 0, Pi answered the explicit one, the relaunch refused, and the pane read `dead` and admitted a launch only once Pi had quit:
+
+```text
+agent_state=alive agent_alive=alive composer=empty busy=idle launch_pane=occupied
+error: task sbx1's endpoint reads 'alive'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh sbx1 exit)
+agent_state=dead agent_alive=dead composer=empty busy=unknown launch_pane=shell
+```
+
+The native busy verdict stays `unknown` for such a pane, because only a registration carries it.
+The live guard that refreshes this record spends no model token:
+
+```sh
+tests/fm-herdr-pi-sandbox-live-e2e.test.sh
+```
+
+```text
+# sandboxed pi: foreground ["log","nono"], herdr registration 'agent_not_found'
+ok - real herdr 0.9.5 + nono 0.80.0 + pi 1.2.0: a sandboxed pi reads alive, refuses a launch, and has a provably empty composer
+ok - real herdr 0.9.5 + nono 0.80.0 + pi 1.2.0: a quit sandboxed pi reads dead and admits a launch
+```
+
+`tests/fm-backend-herdr.test.sh` pins the same process layout portably, and `tests/fm-tmux-agent-liveness.test.sh` builds it in real tmux with `script`, which holds the pane's foreground while its child runs on a terminal of its own.
+`tests/fm-control-relaunch.test.sh` pins the launch check on its own: a `dead` reading over a pane still running a harness refuses in both `fm-control relaunch` and `fm-spawn --relaunch` before anything is typed.
+`tests/fm-herdr-session-cleanup.test.sh` proves session cleanup leaves such a pane alone, and `tests/fm-composer-lib.test.sh` pins the Pi busy indicator from the captured row.
 
 ### Agents resumed by a restart
 

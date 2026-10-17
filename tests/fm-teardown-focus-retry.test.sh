@@ -196,6 +196,7 @@ install_fake_ps() {
 set -u
 case "$*" in
   "-axo pid=,ppid=") printf '1 0\n67 1\n' ;;
+  "-axo pid=,ppid=,comm=") printf '1 0 launchd\n67 1 sh\n' ;;
   "-p 67 -o stat=") printf 'Ss\n' ;;
   "-p 67 -o comm=") printf 'sh\n' ;;
   *) exit 1 ;;

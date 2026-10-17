@@ -95,23 +95,28 @@ fm_tmux_composer_caps() {
 #   - identity: the pane tty's FOREGROUND process group (pgid = tpgid, the
 #     same scoping as fm_backend_tmux_foreground_comms) contains a pi-family
 #     process (pi, pi-signed, pi-launcher - docs/verification/
-#     runtime-backends.md "Agent liveness name sources"), falling back to
-#     tmux's own foreground-derived #{pane_current_command}. A pane whose
+#     runtime-backends.md "Agent liveness name sources"), or a pi-family
+#     process runs below that group, which is where the nono sandbox puts it
+#     (bin/fm-agent-process-lib.sh's fm_agent_process_harness_below), falling
+#     back to tmux's own foreground-derived #{pane_current_command}. A pane whose
 #     agent died to a shell has no pi foreground process and gets NO identity,
 #     which is exactly what keeps the strict blank-row rule honest: a blank
 #     row between two stale rules stays unknown.
 #   - status: pi's verified busy footer via fm_pane_is_busy, mapped onto the
 #     idle/working vocabulary herdr's probe reports natively.
 # Prints "pi<TAB>idle" or "pi<TAB>working"; exits 1 when the pane is not a
-# live pi.
+# live pi. The caller has sourced bin/fm-agent-process-lib.sh, as
+# bin/backends/tmux.sh does.
 fm_tmux_composer_identity() {  # <target>
-  local target=$1 tty pgid tpgid comm found=0 status
+  local target=$1 tty pid pgid tpgid comm found=0 status harness name
+  local -a fg_pids=()
   tty=$(tmux display-message -p -t "$target" '#{pane_tty}' 2>/dev/null) || tty=
   case "$tty" in
     /dev/*)
-      while read -r _ pgid tpgid comm; do
+      while read -r pid pgid tpgid comm; do
         [ -n "$comm" ] || continue
         [ "$pgid" = "$tpgid" ] || continue
+        fg_pids+=("$pid")
         case "${comm##*/}" in
           pi|pi-signed|pi-launcher|Pi) found=1 ;;
         esac
@@ -120,6 +125,11 @@ $(LC_ALL=C ps -t "${tty#/dev/}" -o pid=,pgid=,tpgid=,comm= 2>/dev/null)
 EOF
       ;;
   esac
+  if [ "$found" -ne 1 ] && [ "${#fg_pids[@]}" -gt 0 ] \
+    && harness=$(fm_agent_process_harness_below ps "${fg_pids[@]}"); then
+    name=${harness#*$'\t'}
+    fm_agent_process_is_pi "${name%%$'\t'*}" "${harness##*$'\t'}" && found=1
+  fi
   if [ "$found" -ne 1 ]; then
     comm=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null) || comm=
     case "${comm##*/}" in

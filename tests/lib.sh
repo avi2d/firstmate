@@ -661,6 +661,23 @@ fm_agent_standin() {  # <dir> -> echoes the stand-in path; nonzero when none sur
   printf '%s\n' "$dir/standin"
 }
 
+# A real shell process for a fake pane's root pid: bare, or with one child
+# carrying the given harness name. It exits within a second of the test shell.
+fm_test_start_pane_shell() {  # [harness-name] -> echoes the shell's pid
+  # shellcheck disable=SC2016  # $1 and $2 belong to the inner bash -c process.
+  bash -c '
+    if [ -n "$2" ]; then (exec -a "$2" /bin/sleep 100000) & fi
+    while kill -0 "$1" 2>/dev/null; do /bin/sleep 1; done
+    pkill -P "$$" 2>/dev/null
+  ' _ "$$" "${1:-}" </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!"
+}
+
+fm_test_stop_pane_shell() {  # <pid>
+  pkill -P "$1" 2>/dev/null || true
+  kill "$1" 2>/dev/null || true
+}
+
 # --- portable file timestamps -----------------------------------------------
 
 # fm_touch_epoch <epoch> <path> [path...]: set each path's modification time to

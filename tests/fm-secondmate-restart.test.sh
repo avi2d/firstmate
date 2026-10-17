@@ -34,6 +34,7 @@ TMP_ROOT=$(fm_test_tmproot fm-secondmate-restart)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 trap 'fm_test_remove_tree "$TMP_ROOT"' EXIT
+BARE_PANE_SHELL=$(fm_test_start_pane_shell)
 
 # A session-provider stub that models the two things this pass depends on: the
 # harness exit command stops the agent, a launch brief starts the replacement,
@@ -112,6 +113,7 @@ case "${1:-}" in
           if [ -f "$D/command.$target" ]; then cat "$D/command.$target"; else cat "$D/command"; fi
           printf '\n'; exit 0 ;;
         *pane_current_path*) cat "$D/cwd"; printf '\n'; exit 0 ;;
+        *pane_pid*) cat "$D/pane-pid"; exit 0 ;;
       esac
       prev=$a
     done
@@ -143,6 +145,7 @@ new_case() {
   : > "$dir/fake/rings"
   printf 'claude' > "$dir/fake/command"
   printf 'claude' > "$dir/fake/becomes"
+  printf '%s\n' "$BARE_PANE_SHELL" > "$dir/fake/pane-pid"
   make_stub "$dir"
   printf '%s\n' "$dir"
 }

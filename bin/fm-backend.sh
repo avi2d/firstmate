@@ -1021,6 +1021,34 @@ fm_backend_agent_state() {  # <backend> <target>
   esac
 }
 
+# fm_backend_launch_pane_state: shell|occupied|unreadable|unverified for the
+# endpoint a launch command is about to be typed into. It is read from the
+# operating system's process view, independently of fm_backend_agent_state's
+# verdict, because typing a launch into a pane whose agent is in fact alive
+# starts a second agent inside the first: only `shell` licenses typing.
+fm_backend_launch_pane_state() {  # <backend> <target>
+  local backend=$1 target=$2
+  fm_backend_source "$backend" || { printf 'unverified'; return 0; }
+  case "$backend" in
+    tmux) fm_backend_tmux_pane_process_state "$target" ;;
+    herdr) fm_backend_herdr_launch_pane_state "$target" ;;
+    *) printf 'unverified' ;;
+  esac
+}
+
+# Succeeds silently when fm_backend_launch_pane_state proves a bare shell;
+# otherwise prints why a launch must not be typed into the endpoint.
+fm_backend_launch_pane_refusal() {  # <backend> <target>
+  local state
+  state=$(fm_backend_launch_pane_state "$1" "$2")
+  case "$state" in
+    shell) return 0 ;;
+    occupied) printf 'its pane runs something other than a bare shell, so its agent may still be alive' ;;
+    *) printf 'its pane'"'"'s processes could not be read (%s), so its agent may still be alive' "$state" ;;
+  esac
+  return 1
+}
+
 # Only Herdr resumes an agent into a restored pane, so every other backend
 # prints `unverified` rather than a verdict.
 fm_backend_task_isolation() {  # <backend> <target> <worktree> <task-id>

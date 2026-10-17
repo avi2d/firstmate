@@ -912,6 +912,10 @@ relaunch_rollback() {
         # worse inaccuracy.
         journal_write "failed:$RELAUNCH_PHASE" "rollback=none-new-record-kept" || true
         echo "error: $ID was relaunched on $TARGET_HARNESS but no running agent could be confirmed; its work is preserved at $WT" >&2
+      elif [ "$(agent_state 2>/dev/null)" != dead ] \
+         || ! state=$(fm_backend_launch_pane_refusal "$BACKEND" "$T" 2>/dev/null); then
+        journal_write "failed:$RELAUNCH_PHASE" "rollback=prior-record-kept-agent-unproven" || true
+        echo "error: $ID's replacement did not launch, and its endpoint is not proven agent-free (${state:-its agent reads alive or unreadable}); an agent may still be running there, and its work plus the recorded progress note are preserved at $WT" >&2
       else
         journal_write "failed:$RELAUNCH_PHASE" "rollback=prior-record-kept" || true
         echo "error: $ID's agent was stopped but the replacement did not launch; no agent is running, and its work plus the recorded progress note are preserved at $WT" >&2
@@ -1119,7 +1123,7 @@ record_note() {
 }
 
 do_relaunch() {
-  local exit_result state note_line
+  local exit_result state note_line refusal
   local -a spawn_args
 
   require_state_verified_backend relaunch
@@ -1147,6 +1151,9 @@ do_relaunch() {
     note_line="note_file=$NOTE_FILE"
   else
     note_line="note=none"
+  fi
+  if [ "$(agent_state)" = dead ] && ! refusal=$(fm_backend_launch_pane_refusal "$BACKEND" "$T"); then
+    die "task $ID's endpoint $T reads 'dead', but $refusal; relaunch refuses to type a launch command into it, which could start a second agent inside the first. Nothing changed"
   fi
   safe_checkpoint
   cp -p "$META" "$META_PRIOR" || die "could not preserve task $ID's durable record before relaunching"

@@ -42,8 +42,13 @@ mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 TASK_TMPS=()
 
+# A relaunch types into an adopted pane only when the pane's real process tree
+# is a bare shell, so the stub's #{pane_pid} names one of these.
+BARE_PANE_SHELL=$(fm_test_start_pane_shell)
+
 relaunch_cleanup() {
   local d
+  fm_test_stop_pane_shell "$BARE_PANE_SHELL"
   for d in "${TASK_TMPS[@]:-}"; do
     [ -n "$d" ] && fm_test_remove_tree "$d"
   done
@@ -108,6 +113,7 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
+        *pane_pid*) cat "$D/pane-pid"; exit 0 ;;
         *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
@@ -195,6 +201,7 @@ new_case() {
   printf 'claude' > "$dir/fake/becomes"
   printf '%s\n' "fm-$id" > "$dir/fake/windows"
   printf '%s' fmses > "$dir/fake/session-name"
+  printf '%s\n' "$BARE_PANE_SHELL" > "$dir/fake/pane-pid"
   make_tmux_stub "$dir"
   printf '%s\n' "$dir"
 }
@@ -1388,6 +1395,42 @@ test_checkpoint_refuses_uninspectable_head_and_status() {
   pass "fm-control relaunch: checkpoint inspection failures refuse before stopping"
 }
 
+# A `dead` reading licenses typing into the pane only once its process tree
+# shows a bare shell. The stub reads `dead` from its shell title while a real
+# harness process runs under the pane, the shape a sandboxed agent Herdr never
+# registered left behind.
+pane_shell_running_harness() {  # <case-dir> -> echoes the pane shell's pid
+  local pane seen=0
+  pane=$(fm_test_start_pane_shell claude)
+  for _ in $(seq 1 50); do
+    if ( . "$ROOT/bin/fm-agent-process-lib.sh"; fm_agent_process_harness_below ps "$pane" ) >/dev/null 2>&1; then
+      seen=1
+      break
+    fi
+    /bin/sleep 0.1
+  done
+  [ "$seen" = 1 ] || { fm_test_stop_pane_shell "$pane"; fail "the pane's harness process never started"; }
+  printf '%s\n' "$pane" > "$1/fake/pane-pid"
+  printf '%s\n' "$pane"
+}
+
+test_relaunch_refuses_a_dead_reading_over_a_running_harness() {
+  local dir out rc pane before
+  dir=$(new_case dead-over-live rl80)
+  add_ship_task "$dir" rl80 claude
+  printf 'zsh' > "$dir/fake/command"
+  pane=$(pane_shell_running_harness "$dir")
+  before=$(cat "$dir/home/state/rl80.meta")
+  out=$(run_control "$dir" rl80 relaunch --note "must never reach a live agent"); rc=$?
+  fm_test_stop_pane_shell "$pane"
+  expect_code 1 "$rc" "a relaunch must refuse a dead reading over a pane still running a harness"$'\n'"$out"
+  assert_contains "$out" "may still be alive" "the refusal should say the agent may still be alive"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch typed into the pane: $(cat "$dir/fake/literal")"
+  [ -z "$(cat "$dir/fake/keys")" ] || fail "a refused relaunch sent keys to the pane: $(cat "$dir/fake/keys")"
+  [ "$before" = "$(cat "$dir/home/state/rl80.meta")" ] || fail "a refused relaunch changed the durable record"
+  pass "fm-control relaunch: a dead reading over a pane still running a harness refuses before typing anything"
+}
+
 # --- 5. failure after the agent is stopped -----------------------------------
 
 test_launch_failure_keeps_the_prior_record_and_reports_it() {
@@ -1422,7 +1465,7 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
     run_control "$dir" rl30 relaunch --harness codex --note "preserve concurrent metadata" \
       > "$dir/control.out" &
   control_pid=$!
-  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 200 ]; do
+  while [ ! -e "$dir/cwd-race-ready" ] && [ "$i" -lt 1000 ]; do
     /bin/sleep 0.01
     i=$((i + 1))
   done
@@ -1813,6 +1856,20 @@ test_spawn_relaunch_refuses_a_live_agent() {
   pass "fm-spawn --relaunch: refuses to launch a second agent into a live endpoint"
 }
 
+test_spawn_relaunch_refuses_a_dead_reading_over_a_running_harness() {
+  local dir out rc pane
+  dir=$(new_case spawn-dead-over-live rl81)
+  add_ship_task "$dir" rl81 claude
+  printf 'zsh' > "$dir/fake/command"
+  pane=$(pane_shell_running_harness "$dir")
+  out=$(run_spawn "$dir" rl81 --relaunch); rc=$?
+  fm_test_stop_pane_shell "$pane"
+  expect_code 1 "$rc" "fm-spawn --relaunch must refuse a dead reading over a pane still running a harness"$'\n'"$out"
+  assert_contains "$out" "refusing to type a launch command" "the refusal should name the launch it withheld"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch typed into the pane: $(cat "$dir/fake/literal")"
+  pass "fm-spawn --relaunch: a dead reading over a pane still running a harness never receives a launch"
+}
+
 test_spawn_relaunch_refuses_a_symlinked_task_record_before_inspection() {
   local dir meta target out rc
   dir=$(new_case symlink-meta rl37)
@@ -2098,8 +2155,9 @@ case "${1:-} ${2:-}" in
     exit 0 ;;
   'pane process-info')
     # A retained registration with a shell-only pane models an exited agent
-    # whose Herdr status authority still belongs to its previous session.
-    if [ -f "$D/herdr-agent-registration" ]; then
+    # whose Herdr status authority still belongs to its previous session, and
+    # a pane with no registration and no agent is the bare shell it reads as.
+    if [ -f "$D/herdr-agent-registration" ] || [ ! -f "$D/herdr-agent-live" ]; then
       printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":4242,"foreground_processes":[]}}}\n' \
         "$(cat "$D/herdr-pane")"
     else
@@ -2151,7 +2209,7 @@ SH
   chmod +x "$fb/herdr"
   cat > "$fb/ps" <<'SH'
 #!/usr/bin/env bash
-if [ -f "$FM_FAKE_DIR/herdr-agent-registration" ]; then
+if [ -f "$FM_FAKE_DIR/herdr-agent-registration" ] || [ ! -f "$FM_FAKE_DIR/herdr-agent-live" ]; then
   case "$*" in
     '-axo pid=,ppid=,comm=') printf '4242 1 bash\n' ;;
     '-p 4242 -o args=') printf 'bash\n' ;;
@@ -2601,6 +2659,8 @@ test_concurrent_relaunch_is_refused
 test_direct_spawn_relaunch_participates_in_the_lifecycle_lock
 test_promotion_participates_in_the_lifecycle_lock_before_metadata_resolution
 test_spawn_relaunch_refuses_a_live_agent
+test_relaunch_refuses_a_dead_reading_over_a_running_harness
+test_spawn_relaunch_refuses_a_dead_reading_over_a_running_harness
 test_spawn_relaunch_refuses_a_symlinked_task_record_before_inspection
 test_spawn_relaunch_keeps_its_early_meta_lock_continuous
 test_spawn_relaunch_refuses_a_pending_authoritative_close
