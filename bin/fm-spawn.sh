@@ -1915,7 +1915,14 @@ if [ "$RELAUNCH" -eq 1 ]; then
     esac
   fi
   case "$RELAUNCH_STATE" in
-    dead) ;;
+    dead)
+      # The launch is typed into the adopted pane, so a live agent the
+      # classifier missed would receive it as a prompt.
+      if ! RELAUNCH_PANE_REFUSAL=$(fm_backend_launch_pane_refusal "$BACKEND" "$RELAUNCH_TARGET"); then
+        echo "error: task $ID's endpoint $RELAUNCH_TARGET reads 'dead', but $RELAUNCH_PANE_REFUSAL; refusing to type a launch command into it, which could start a second agent inside the first" >&2
+        exit 1
+      fi
+      ;;
     missing) RELAUNCH_REBIND=1 ;;
     *)
       echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2

@@ -324,6 +324,7 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
 fm_backend_tmux_agent_state() {  # <target>
   local target=$1 comm session window windows inventory_status
   local foreground argv0s name pid fg_seen=0 fg_shell=0 fg_other=0
+  local -a fg_pids=()
   case "$target" in
     *:*:*|'':*|*:'') printf 'unreadable'; return 0 ;;
     *:*) ;;
@@ -404,6 +405,16 @@ EOF
     return 0
   fi
 
+  # A foreground that is not purely shells can be a launcher whose harness
+  # runs on a terminal of its own, as the nono sandbox does.
+  if [ "$fg_other" -eq 1 ]; then
+    read -ra fg_pids <<< "$(fm_backend_tmux_foreground_pids "$target" | tr '\n' ' ')"
+    if [ "${#fg_pids[@]}" -gt 0 ] && fm_agent_process_harness_below ps "${fg_pids[@]}" >/dev/null; then
+      printf 'alive'
+      return 0
+    fi
+  fi
+
   # A readable foreground process group settles the negative verdicts: only a
   # group that is nothing but shells is confidently agent-free.
   if [ "$fg_seen" -eq 1 ]; then
@@ -421,6 +432,29 @@ EOF
   case "$(fm_agent_process_classify_name "$comm")" in
     shell) printf 'dead' ;;
     *) printf 'ambiguous' ;;
+  esac
+}
+
+# fm_backend_tmux_pane_process_state: shell|occupied|unreadable for the pane
+# a launch command would be typed into, read from processes alone. `shell`
+# needs the pane's root process to be a shell and no harness anywhere under it,
+# which also rules out a suspended agent and a sandboxed one running on a
+# terminal of its own.
+fm_backend_tmux_pane_process_state() {  # <target>
+  local root comm args argv0 rc=0
+  root=$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || { printf 'unreadable'; return 0; }
+  case "$root" in ''|*[!0-9]*) printf 'unreadable'; return 0 ;; esac
+  comm=$(LC_ALL=C ps -p "$root" -o comm= 2>/dev/null) || { printf 'unreadable'; return 0; }
+  args=$(LC_ALL=C ps -p "$root" -o args= 2>/dev/null) || args=
+  args=${args#"${args%%[![:space:]]*}"}
+  argv0=${args%%[[:space:]]*}
+  [ "$(fm_agent_process_classify "$comm" "$argv0" "$args" "$root")" = shell ] \
+    || { printf 'occupied'; return 0; }
+  fm_agent_process_harness_below ps "$root" >/dev/null || rc=$?
+  case "$rc" in
+    0) printf 'occupied' ;;
+    1) printf 'shell' ;;
+    *) printf 'unreadable' ;;
   esac
 }
 

@@ -1011,6 +1011,29 @@ test_selected_content_is_composer_scoped_and_wrap_normalized() {
   pass "fm_composer_extract_selected_content: scopes user content and excludes furniture"
 }
 
+# --- Pi 1.2.0 sets its busy indicator into the editor's top border -----------
+
+# Rows captured from a live Pi 1.2.0 pane mid-turn: the top border carries a
+# spinner glyph and "Working", and the bottom border is a plain rule.
+PI_BUSY_BORDER_ROW='── ⠸ Working ───────────────────────────────────────────────────────────────────────────────────────────────────────────'
+PI_PLAIN_BORDER_ROW=''
+
+test_pi_busy_border_indicator_reads_busy() {
+  printf '%s\n' "$PI_BUSY_BORDER_ROW" | fm_busy_lines_match pi \
+    || fail "Pi 1.2.0's bordered busy indicator must read busy for pi"
+  printf '%s\n' "$PI_BUSY_BORDER_ROW" | fm_busy_lines_match \
+    || fail "Pi 1.2.0's bordered busy indicator must read busy when no harness is recorded"
+  printf 'Working...\n' | fm_busy_lines_match pi \
+    || fail "Pi's ellipsis busy line must still read busy"
+  ! printf '%s\n' "$PI_PLAIN_BORDER_ROW" | fm_busy_lines_match pi \
+    || fail "Pi's plain editor border must not read busy"
+  ! printf 'Working on the parser now\n' | fm_busy_lines_match pi \
+    || fail "transcript text mentioning Working must not read busy"
+  ! printf '%s\n' "$PI_BUSY_BORDER_ROW" | fm_busy_lines_match claude \
+    || fail "another harness must not borrow Pi's busy indicator"
+  pass "fm_busy_lines_match: Pi 1.2.0's spinner-in-border indicator reads busy, its plain border and prose do not"
+}
+
 test_bare_shell_glyphs_are_unknown
 test_stripped_unbordered_content_uses_plain_content
 test_bare_shell_prompt_with_command_is_not_empty
@@ -1232,6 +1255,7 @@ test_quoted_exit_picker_text_is_not_a_dialog() {
 }
 
 test_background_exit_picker_stays_pending_and_blocks_retry
+test_pi_busy_border_indicator_reads_busy
 test_dialog_heading_and_footer_must_be_the_recorded_lines
 test_dialog_note_skips_the_match_when_no_sink_is_set
 test_quoted_exit_picker_text_is_not_a_dialog

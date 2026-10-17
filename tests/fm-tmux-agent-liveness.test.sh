@@ -89,6 +89,19 @@ wait
 SH
 chmod +x "$LAB/bin/agent-launcher"
 
+# The nono sandbox's shape: the launcher holds the pane's foreground and runs
+# the harness in a session of its own on a terminal of its own, so the harness
+# is in neither the pane's foreground group nor on the pane's tty. `script`
+# builds exactly that.
+cat > "$LAB/bin/sandbox-launcher" <<SH
+#!/bin/sh
+if script -V 2>/dev/null | grep -q util-linux; then
+  exec script -q -c "'$LAB/bin/pi' 900" /dev/null
+fi
+exec script -q /dev/null "$LAB/bin/pi" 900
+SH
+chmod +x "$LAB/bin/sandbox-launcher"
+
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
 fm_backend_source tmux || fail "fm_backend_source tmux failed"
@@ -252,11 +265,25 @@ comms_classify_agent "$SESSION:launcher" \
   || fail "the launcher's harness child must be visible in the foreground process group"
 pass "tmux liveness: a launcher whose own identity reads as a bare shell classifies alive from its harness child"
 
+# --- a launcher whose harness runs on a terminal of its own -----------------
+
+new_window sandbox "$LAB/bin/sandbox-launcher"
+wait_for_state "$SESSION:sandbox" alive \
+  || fail "a sandbox launcher whose harness runs on its own terminal must classify alive"
+! comms_classify_agent "$SESSION:sandbox" \
+  || fail "the sandboxed harness was in the pane's foreground group, so this case proves nothing"
+[ "$(fm_backend_launch_pane_state tmux "$SESSION:sandbox")" = occupied ] \
+  || fail "a pane whose launcher runs a sandboxed harness must never read as a bare shell to type a launch into"
+pass "tmux liveness: a harness the launcher runs on a terminal of its own classifies alive and blocks a launch"
+
 # --- an idle shell is still confidently dead --------------------------------
 
 wait_for_state "$SESSION:idle" dead \
   || fail "an idle shell pane must classify dead"
 pass "tmux liveness: an idle shell pane classifies dead"
+[ "$(fm_backend_launch_pane_state tmux "$SESSION:idle")" = shell ] \
+  || fail "an idle shell pane must read as a bare shell a launch may be typed into"
+pass "tmux launch pane: an idle shell pane admits a launch"
 
 # --- a harness-named BACKGROUND process must not fake an agent --------------
 # Scoping to the foreground process group is what prevents this false alive; a
@@ -278,6 +305,9 @@ wait_for_state "$SESSION:background" dead \
 kill -0 "$bg_pid" 2>/dev/null \
   || fail "the background harness-named process died during the check, so this case proves nothing"
 pass "tmux liveness: a harness-named background process in an idle pane still classifies dead"
+[ "$(fm_backend_launch_pane_state tmux "$SESSION:background")" = occupied ] \
+  || fail "a pane still holding a harness process, even backgrounded, must refuse a launch"
+pass "tmux launch pane: a dead verdict over a still-running harness process refuses a launch"
 
 # --- an absent window never inherits tmux's active-window fallback ----------
 # tmux answers a display-message for an absent target from the CLIENT's active

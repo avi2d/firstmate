@@ -106,6 +106,45 @@ $sorted
 EOF
 }
 
+# Every agent_not_found answer is followed by a process-info read, and the
+# process table make_bare_shell_ps writes must be named by FM_HERDR_PS_BIN.
+BARE_SHELL_PID=4242
+herdr_response_slots() {  # <resp-dir>
+  local f
+  for f in "$1"/[0-9]*.*; do
+    [ -e "$f" ] || continue
+    f=${f##*/}
+    printf '%s\n' "${f%%.*}"
+  done | sort -rn -u
+}
+
+herdr_bare_shell_after() {  # <resp-dir> <pane> <slot>...
+  local resp=$1 pane=$2 slot n f
+  shift 2
+  for slot in $(printf '%s\n' "$@" | sort -rn); do
+    for n in $(herdr_response_slots "$resp"); do
+      [ "$n" -gt "$slot" ] || continue
+      for f in "$resp/$n".*; do
+        mv "$f" "$resp/$((n + 1)).${f##*.}"
+      done
+    done
+    printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"%s","shell_pid":%s,"foreground_process_group_id":%s,"foreground_processes":[{"pid":%s,"name":"zsh","argv0":"zsh","argv":["-zsh"],"cmdline":"-zsh"}]}}}\n' \
+      "$pane" "$BARE_SHELL_PID" "$BARE_SHELL_PID" "$BARE_SHELL_PID" > "$resp/$((slot + 1)).out"
+  done
+}
+
+make_bare_shell_ps() {  # <dir> -> echoes the fake ps path
+  cat > "$1/ps" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *-axo*) printf '%s 1 zsh\\n' $BARE_SHELL_PID ;;
+  *) printf -- '-zsh\\n' ;;
+esac
+SH
+  chmod +x "$1/ps"
+  printf '%s\n' "$1/ps"
+}
+
 # herdr_submit_identity_prefix: submit first asks `agent get` which harness
 # the pane runs. A non-Claude harness skips the payload proof, so a fixture
 # numbered for the old send-text-first sequence moves one slot later.
@@ -598,6 +637,79 @@ test_registered_agent_with_a_live_foreground_process_stays_alive() {
   [ "$out" = "live alive refused" ] \
     || fail "a registered agent whose foreground process is Pi must stay live/alive, got '$out'"
   pass "herdr stale registration: a registered agent with a live Pi foreground process still reads alive"
+}
+
+# --- an agent the nono sandbox runs ------------------------------------------
+#
+# The process layout measured on Herdr 0.9.5 with nono 0.80.0 and Pi 1.2.0:
+# nono and its `log stream` hold the pane's foreground, while Pi runs below
+# nono in a session of its own on another terminal. Herdr registers nothing for
+# that pane outside a turn, and only a placeholder `unknown` record during one.
+
+sandbox_case() {  # <dir-suffix> <agent-get-json> <harness-below:0|1> -> "<pane-state> <agent-state> <launch> <identity>"
+  local dir="$TMP_ROOT/sandbox-$1"
+  mkdir -p "$dir"
+  printf '%s\n' "$2" > "$dir/agent-get.json"
+  printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":5000,"foreground_process_group_id":5001,"foreground_processes":[{"pid":5001,"name":"nono","argv0":"nono","argv":["nono","run","--profile","fm","--","pi"],"cmdline":"nono run --profile fm -- pi"},{"pid":5002,"name":"log","argv0":"/usr/bin/log","argv":["/usr/bin/log","stream"],"cmdline":"/usr/bin/log stream"}]}}}' \
+    > "$dir/process-info.json"
+  cat > "$dir/ps" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *-axo*)
+    printf '1 0 launchd\\n5000 1 zsh\\n5001 5000 nono\\n5002 5001 log\\n'
+    [ "$3" = 0 ] || printf '5003 5001 pi\\n'
+    ;;
+  "-p 5001 -o args=") printf 'nono run --profile fm -- pi\\n' ;;
+  "-p 5002 -o args=") printf '/usr/bin/log stream\\n' ;;
+  "-p 5003 -o args=") printf 'pi\\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$dir/ps"
+  SANDBOX_DIR="$dir" FM_HERDR_PS_BIN="$dir/ps" FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 bash -c '
+    . "$0/bin/fm-backend.sh"
+    fm_backend_source herdr || exit 1
+    fm_backend_herdr_cli() {
+      case "$*" in
+        *"pane get"*) printf "%s\n" "{\"result\":{\"pane\":{\"pane_id\":\"w1:p2\"}}}" ;;
+        *"agent get"*) cat "$SANDBOX_DIR/agent-get.json" ;;
+        *"pane process-info"*) cat "$SANDBOX_DIR/process-info.json" ;;
+        *"status --json"*) printf "%s\n" "{\"server\":{\"running\":true}}" ;;
+        *) return 1 ;;
+      esac
+    }
+    fm_backend_herdr_rendered_busy_state() { printf idle; }
+    identity=$(fm_backend_herdr_composer_identity fmtest:w1:p2) || identity=none
+    printf "%s %s %s %s" \
+      "$(fm_backend_herdr_pane_agent_state fmtest w1:p2)" \
+      "$(fm_backend_agent_state herdr fmtest:w1:p2)" \
+      "$(fm_backend_launch_pane_state herdr fmtest:w1:p2)" \
+      "$(printf "%s" "$identity" | tr "\t" /)"
+  ' "$ROOT"
+}
+
+test_unregistered_sandboxed_agent_reads_alive() {
+  local out
+  out=$(sandbox_case unregistered '{"error":{"code":"agent_not_found","message":"agent target w1:p2 not found"}}' 1)
+  [ "$out" = "live alive occupied pi/idle" ] \
+    || fail "a Pi running below nono with no Herdr registration must read live/alive, block a launch, and identify as an idle Pi; got '$out'"
+  pass "herdr sandbox: an unregistered Pi below nono reads alive, blocks a launch, and keeps its composer identity"
+}
+
+test_placeholder_record_over_a_sandboxed_agent_reads_alive() {
+  local out
+  out=$(sandbox_case placeholder '{"result":{"agent":{"agent":"pi","agent_status":"unknown","pane_id":"w1:p2"}}}' 1)
+  [ "$out" = "live alive occupied pi/unknown" ] \
+    || fail "Herdr's placeholder record over a Pi below nono must read live/alive; got '$out'"
+  pass "herdr sandbox: a placeholder record over a sandboxed Pi reads alive"
+}
+
+test_unregistered_launcher_without_a_harness_is_not_dead() {
+  local out
+  out=$(sandbox_case no-harness '{"error":{"code":"agent_not_found"}}' 0)
+  [ "$out" = "unknown unreadable occupied none" ] \
+    || fail "an unregistered pane whose foreground is not a bare shell must stay unproven, never dead; got '$out'"
+  pass "herdr sandbox: an unregistered pane holding a non-shell foreground is never read as agent-free"
 }
 
 # --- launch isolation of the agent a pane is running --------------------------
@@ -1434,8 +1546,9 @@ test_create_task_refuses_when_any_duplicate_label_is_live() {
   printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/7.out"
   # 8: pane process-info -> a live Pi process backs that registration (#4115)
   printf '%s\n' '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p3","shell_pid":4242,"foreground_process_group_id":4243,"foreground_processes":[{"pid":4243,"name":"node","argv0":"pi"}]}}}' > "$resp/8.out"
+  herdr_bare_shell_after "$resp" w1:p2 4
   fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_PS_BIN="$(make_bare_shell_ps "$dir")" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-mixed1 /tmp/proj' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "create_task must refuse when any same-labeled tab hosts a live registered agent"
@@ -1483,8 +1596,9 @@ test_create_task_closes_and_replaces_no_agent_husk() {
   # 5: tab create -> the replacement tab (created BEFORE the husk is closed)
   printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/5.out"
   printf '{"result":{"tabs":[{"tab_id":"w1:t3","label":"fm-husk2","workspace_id":"w1"}]}}\n' > "$resp/7.out"
+  herdr_bare_shell_after "$resp" w1:p2 4
   fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_PS_BIN="$(make_bare_shell_ps "$dir")" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-husk2 /tmp/proj' "$ROOT" ) \
     || fail "create_task should close-and-replace a no-agent husk (restored plain shell) instead of refusing"
   read -r tab pane <<EOF
@@ -1511,8 +1625,10 @@ test_create_task_closes_all_duplicate_husks_after_replacement() {
   printf '{"error":{"code":"agent_not_found","message":"agent target w1:p3 not found"}}\n' > "$resp/7.out"
   printf '{"result":{"tab":{"tab_id":"w1:t4"},"root_pane":{"pane_id":"w1:p4"}}}\n' > "$resp/8.out"
   printf '{"result":{"tabs":[{"tab_id":"w1:t4","label":"fm-husk-many","workspace_id":"w1"}]}}\n' > "$resp/11.out"
+  herdr_bare_shell_after "$resp" w1:p3 7
+  herdr_bare_shell_after "$resp" w1:p2 4
   fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_PS_BIN="$(make_bare_shell_ps "$dir")" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-husk-many /tmp/proj' "$ROOT" ) \
     || fail "create_task should close-and-replace all same-labeled husks after creating a replacement"
   read -r tab pane <<EOF
@@ -1543,8 +1659,9 @@ test_create_task_refuses_when_preexisting_husk_tab_remains() {
   printf '{"result":{"tab":{"tab_id":"w1:t3"},"root_pane":{"pane_id":"w1:p3"}}}\n' > "$resp/5.out"
   printf '1\n' > "$resp/6.exit"
   printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-stale-husk","workspace_id":"w1"},{"tab_id":"w1:t3","label":"fm-stale-husk","workspace_id":"w1"}]}}\n' > "$resp/7.out"
+  herdr_bare_shell_after "$resp" w1:p2 4
   fb=$(make_herdr_fakebin "$dir")
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_PS_BIN="$(make_bare_shell_ps "$dir")" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_create_task fmtest:w1 fm-stale-husk /tmp/proj' "$ROOT" 2>&1 )
   status=$?
   [ "$status" -ne 0 ] || fail "create_task must fail when a preexisting same-labeled husk remains after close-and-replace"
@@ -3710,8 +3827,9 @@ test_projection_reclaim_replaces_only_exact_husk_and_advances_binding() {
   cp "$resp/1.out" "$resp/26.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t3","label":"fm-fm-hibit-r1"}]}}' > "$resp/27.out"
   printf '%s\n' '{"result":{"panes":[{"pane_id":"w2:p3","tab_id":"w2:t3"}]}}' > "$resp/28.out"
+  herdr_bare_shell_after "$resp" w2:p2 5 14 19
   fb=$(make_herdr_fakebin "$dir")
-  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_PS_BIN="$(make_bare_shell_ps "$dir")" \
     bash -c '
       . "$0/bin/backends/herdr.sh"
       fm_backend_herdr_projection_reclaim_task \
@@ -3731,7 +3849,7 @@ test_projection_reclaim_replaces_only_exact_husk_and_advances_binding() {
   [ -n "$agent_line" ] && [ "$agent_line" -lt "$close_line" ] \
     || fail "reclaim did not recheck the old pane agent state before the close"
   boundary_mutations=$(sed -n "$((agent_line + 1)),$((close_line - 1))p" "$log" \
-    | grep -Ev $'\x1f(tab\x1flist|pane\x1flist|workspace\x1flist|terminal\x1ftitle\x1fclear)' || true)
+    | grep -Ev $'\x1f(tab\x1flist|pane\x1flist|pane\x1fprocess-info|workspace\x1flist|terminal\x1ftitle\x1fclear)' || true)
   [ -z "$boundary_mutations" ] \
     || fail "reclaim mutated between the old pane agent recheck and the close: $boundary_mutations"
   assert_not_contains "$calls" $'workspace\x1fclose' "reclaim introduced workspace-close authority"
@@ -3754,8 +3872,10 @@ test_projection_recovery_is_read_only_and_refuses_live_duplicate_risk() {
   printf '{"result":{"panes":[{"pane_id":"w2:p1","tab_id":"w2:t1"}]}}\n' > "$resp/5.out"
   printf '{"result":{"pane":{"pane_id":"w2:p1"}}}\n' > "$resp/6.out"
   printf '{"error":{"code":"agent_not_found"}}\n' > "$resp/7.out"
+  herdr_bare_shell_after "$resp" w2:p1 7
+  herdr_bare_shell_after "$resp" w1:p1 4
   fb=$(make_herdr_fakebin "$dir")
-  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_PS_BIN="$(make_bare_shell_ps "$dir")" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_recovery_allows_flat fmtest "$1" task-p3' "$ROOT" "$journal" \
     >/dev/null || fail "agent-free duplicate token matches should allow flat fallback"
   calls=$(cat "$log")
@@ -6026,6 +6146,9 @@ test_stale_registration_ignores_status_and_reads_the_process
 test_pane_agent_session_ref_reports_a_resumable_reference_with_its_agent
 test_pane_agent_session_ref_degrades_to_nothing_when_not_resumable
 test_registered_agent_with_a_live_foreground_process_stays_alive
+test_unregistered_sandboxed_agent_reads_alive
+test_placeholder_record_over_a_sandboxed_agent_reads_alive
+test_unregistered_launcher_without_a_harness_is_not_dead
 test_task_isolation_reads_the_agent_directory_from_the_kernel
 test_task_isolation_judges_only_the_outermost_harness
 test_task_isolation_without_a_harness_or_a_readable_view

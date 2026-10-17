@@ -2129,16 +2129,18 @@ fm_backend_herdr_explicit_close_pane_confirmed() {  # <session> <pane_id>
 #   agent      - a foreground process is a verified harness (any identity
 #                surface: kernel name, argv[0], or a node-bundle argument), or
 #                a verified harness is still a descendant of the pane shell
-#                outside the foreground group (suspended or backgrounded). A
-#                registered agent whose process still exists is never demoted.
+#                outside the foreground group: suspended, backgrounded, or run
+#                by the nono sandbox on a terminal of its own behind a `nono`
+#                foreground. A registered agent whose process still exists is
+#                never demoted.
 #   shell      - every foreground process is a recognized shell AND no
 #                descendant of the pane shell is a verified harness: positive
 #                proof the pane is shell-only. The descendant walk is what makes
 #                this safe for the crew shape, where a nested `treehouse get`
 #                shell sits under the pane's top shell.
-#   other      - the foreground group holds something that is neither: a tool
-#                the agent is running in its own process group, a pager, a
-#                stranger's process. Not a shell-only pane. An idle shell
+#   other      - the foreground group holds something that is neither, and no
+#                verified harness runs anywhere under the pane shell: a pager,
+#                a stranger's process. Not a shell-only pane. An idle shell
 #                transiently hosts prompt helpers such as starship in its
 #                foreground group (the same shape the idle-shell proof settles
 #                on), so this verdict alone is resampled for the same bounded
@@ -2175,7 +2177,7 @@ fm_backend_herdr_pane_process_state() {  # <session> <pane_id>
 # the settle retry.
 fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
   local session=$1 pane_id=$2 info shell_pid count i pid name argv0 args verdict
-  local others=0 ps_bin rows
+  local others=0 ps_bin rc
   info=$(fm_backend_herdr_cli "$session" pane process-info --pane "$pane_id" 2>/dev/null) \
     || { printf 'unreadable'; return 0; }
   printf '%s' "$info" | jq -e --arg pane "$pane_id" '
@@ -2209,49 +2211,20 @@ fm_backend_herdr_pane_process_state_sample() {  # <session> <pane_id>
     i=$((i + 1))
   done
 
-  # Nothing in the foreground is a harness. A foreground that is not purely
-  # shells is already `other`, whatever else the pane holds. Before calling a
-  # shells-only foreground a shell-only PANE, look for a harness that is still a
-  # descendant of the pane shell outside the foreground group; only its
-  # absence, read from the real process table, is proof of an agent-free pane.
-  [ "$others" -eq 0 ] || { printf 'other'; return 0; }
+  # Nothing in the foreground is a harness. Look for one anywhere under the
+  # pane shell before judging the pane: a sandbox launcher holds the
+  # foreground while its harness runs in a session of its own, and a
+  # shells-only foreground can still sit over a harness outside its group.
+  # Only its absence, read from the real process table, is proof of an
+  # agent-free pane; a foreground that is not purely shells is `other`.
   ps_bin=${FM_HERDR_PS_BIN:-ps}
-  command -v "$ps_bin" >/dev/null 2>&1 || { printf 'unreadable'; return 0; }
-  rows=$(LC_ALL=C "$ps_bin" -axo pid=,ppid=,comm= 2>/dev/null) || { printf 'unreadable'; return 0; }
-  printf '%s\n' "$rows" | awk -v shell="$shell_pid" '$1 == shell { found = 1 } END { exit(found ? 0 : 1) }' \
-    || { printf 'unreadable'; return 0; }
-  while IFS=$'\t' read -r pid name; do
-    [ -n "$pid" ] || continue
-    args=$(LC_ALL=C "$ps_bin" -p "$pid" -o args= 2>/dev/null) || continue
-    args=${args#"${args%%[![:space:]]*}"}
-    argv0=${args%%[[:space:]]*}
-    if [ "$(fm_agent_process_classify "$name" "$argv0" "$args" "$pid")" = agent ]; then
-      printf 'agent'
-      return 0
-    fi
-  done <<EOF
-$(printf '%s\n' "$rows" | awk -v shell="$shell_pid" '
-  {
-    pid[NR] = $1; ppid[NR] = $2
-    line = $0
-    sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+/, "", line)
-    comm[NR] = line
-  }
-  END {
-    want[shell] = 1
-    changed = 1
-    while (changed) {
-      changed = 0
-      for (n = 1; n <= NR; n++) {
-        if ((ppid[n] in want) && !(pid[n] in want)) { want[pid[n]] = 1; changed = 1 }
-      }
-    }
-    for (n = 1; n <= NR; n++) {
-      if ((pid[n] in want) && pid[n] != shell) printf "%s\t%s\n", pid[n], comm[n]
-    }
-  }')
-EOF
-  printf 'shell'
+  rc=0
+  fm_agent_process_harness_below "$ps_bin" "$shell_pid" >/dev/null || rc=$?
+  case "$rc" in
+    0) printf 'agent' ;;
+    1) [ "$others" -eq 0 ] && printf 'shell' || printf 'other' ;;
+    *) [ "$others" -eq 0 ] && printf 'unreadable' || printf 'other' ;;
+  esac
 }
 
 # A Herdr server restart resumes a registered agent by typing its resume
@@ -2313,9 +2286,11 @@ fm_backend_herdr_task_isolation() {  # <target> <worktree> <task-id>
 #                 reaped it - verified empirically: killing a pane's shell pid
 #                 on a live server makes herdr immediately drop both the pane
 #                 and its tab from `pane get`/`tab list`).
-#   no-agent    - `pane get` succeeds (the pane structurally exists) but `agent
-#                 get` responds with error code agent_not_found: nothing is
-#                 registered in it - exactly what a herdr session-layout restore
+#   no-agent    - `pane get` succeeds (the pane structurally exists), `agent
+#                 get` responds with error code agent_not_found, and
+#                 fm_backend_herdr_pane_process_state proves the pane
+#                 shell-only: nothing is registered in it and nothing runs a
+#                 harness - exactly what a herdr session-layout restore
 #                 produces (verified empirically: `session stop` + fresh `herdr
 #                 server` restart leaves the pane alive, agent_status "unknown",
 #                 agent get -> agent_not_found - docs/herdr-backend.md "ID
@@ -2335,14 +2310,21 @@ fm_backend_herdr_task_isolation() {  # <target> <worktree> <task-id>
 #   live        - `agent get` succeeds with a registered agent_status and the
 #                 process-level view is `agent` or `other`: a harness process
 #                 is running, or something that is not a bare shell is, so the
-#                 registration keeps its authority. An idle or blocked agent
+#                 registration keeps its authority. A pane with no registration,
+#                 or only a placeholder status such as `unknown`, whose
+#                 process-level view is `agent` is live too: Herdr registers
+#                 only what it sees in the pane's foreground and what reports
+#                 through its socket, and a Pi worker in the nono sandbox
+#                 (bin/fm-agent-sandbox.sh) does neither, because nono holds
+#                 the foreground and the launch withholds the socket. An idle or blocked agent
 #                 is still a genuine, still-registered agent, not a restored
 #                 husk, so it is never a close-and-replace candidate.
 #   unknown     - anything else: an unparseable/unexpected response from
 #                 either call, a `pane get` success whose own echoed pane_id
 #                 does not round-trip (guards against misreading a herdr
-#                 response shape change as "the pane exists"), or a registered
-#                 agent whose process-level view is unreadable - the
+#                 response shape change as "the pane exists"), an unregistered
+#                 pane whose process-level view is `other` or unreadable, or a
+#                 registered agent whose process-level view is unreadable - the
 #                 registration alone is no longer trusted, and its absence is
 #                 not claimed either. The caller must fail safe toward refusal
 #                 here, never toward closing - this is the conservative
@@ -2360,13 +2342,24 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
   out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1)
   code=$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)
   if [ -n "$code" ]; then
-    [ "$code" = "agent_not_found" ] && printf 'no-agent' || printf 'unknown'
+    [ "$code" = "agent_not_found" ] || { printf 'unknown'; return 0; }
+    case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in
+      agent) printf 'live' ;;
+      shell) printf 'no-agent' ;;
+      *) printf 'unknown' ;;
+    esac
     return 0
   fi
   status=$(printf '%s' "$out" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)
   case "$status" in
     working|idle|done|blocked) ;;
-    *) printf 'unknown'; return 0 ;;
+    *)
+      # Herdr's own placeholder record over a harness it saw but that never
+      # reports a lifecycle state: a sandboxed Pi mid-turn.
+      [ "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" = agent ] \
+        && printf 'live' || printf 'unknown'
+      return 0
+      ;;
   esac
   case "$(fm_backend_herdr_pane_process_state "$session" "$pane_id")" in
     agent|other) printf 'live' ;;
@@ -2498,6 +2491,17 @@ fm_backend_herdr_agent_state() {  # <target>
         *) printf 'unreadable' ;;
       esac
       ;;
+  esac
+}
+
+# shell|occupied|unreadable for the pane a launch command would be typed into,
+# from fm_backend_herdr_pane_process_state alone, never from a registration.
+fm_backend_herdr_launch_pane_state() {  # <target>
+  fm_backend_herdr_parse_target "$1" || { printf 'unreadable'; return 0; }
+  case "$(fm_backend_herdr_pane_process_state "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE")" in
+    shell) printf 'shell' ;;
+    agent|other) printf 'occupied' ;;
+    *) printf 'unreadable' ;;
   esac
 }
 
@@ -3262,12 +3266,64 @@ fm_backend_herdr_agent_identity_raw() {  # <session> <pane> -> <agent>\t<status>
   printf '%s' "$out" | jq -r '[.result.agent.agent // "", .result.agent.agent_status // ""] | @tsv' 2>/dev/null
 }
 
+# The harness process <pane_id> runs, as "<name>\t<argv0>", from the same
+# process view fm_backend_herdr_pane_process_state judges; fails unless one is
+# proven.
+fm_backend_herdr_pane_harness() {  # <session> <pane_id>
+  local info shell_pid count i name argv0 args pid found
+  info=$(fm_backend_herdr_cli "$1" pane process-info --pane "$2" 2>/dev/null) || return 1
+  shell_pid=$(printf '%s' "$info" | jq -er --arg pane "$2" '
+    select(.result.type == "pane_process_info" and .result.process_info.pane_id == $pane)
+    | .result.process_info.shell_pid | select(type == "number" and . > 1) | floor' 2>/dev/null) \
+    || return 1
+  count=$(printf '%s' "$info" | jq -er \
+    '.result.process_info.foreground_processes | select(type == "array") | length' 2>/dev/null) \
+    || return 1
+  i=0
+  while [ "$i" -lt "$count" ]; do
+    pid=$(printf '%s' "$info" | jq -r --argjson i "$i" \
+      '.result.process_info.foreground_processes[$i].pid | select(type == "number") | floor' 2>/dev/null)
+    name=$(printf '%s' "$info" | jq -r --argjson i "$i" \
+      '.result.process_info.foreground_processes[$i].name // empty' 2>/dev/null)
+    argv0=$(printf '%s' "$info" | jq -r --argjson i "$i" '
+      .result.process_info.foreground_processes[$i] as $p
+      | (($p.argv // [])[0]) // $p.argv0 // empty' 2>/dev/null)
+    args=$(printf '%s' "$info" | jq -r --argjson i "$i" '
+      .result.process_info.foreground_processes[$i] as $p
+      | $p.cmdline // (($p.argv // []) | join(" ")) // empty' 2>/dev/null)
+    if [ "$(fm_agent_process_classify "$name" "$argv0" "$args" "$pid")" = agent ]; then
+      printf '%s\t%s' "$name" "$argv0"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  found=$(fm_agent_process_harness_below "${FM_HERDR_PS_BIN:-ps}" "$shell_pid") || return 1
+  printf '%s' "${found#*$'\t'}"
+}
+
 # fm_backend_herdr_composer_identity: the native agent identity/state probe
 # backing the shared classifier's separated (pi) shape - the genuine herdr
-# primitive no other backend has natively.
+# primitive no other backend has natively. A pane Herdr holds no registration
+# for falls back to the tmux adapter's answer, a Pi process plus Pi's rendered
+# busy footer, because a sandboxed Pi never registers (see
+# fm_backend_herdr_pane_agent_state).
 fm_backend_herdr_composer_identity() {  # <target> -> "<agent>\t<status>"
+  local identity harness
   fm_backend_herdr_parse_target "$1" || return 1
-  fm_backend_herdr_agent_identity_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE"
+  identity=$(fm_backend_herdr_agent_identity_raw "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE") \
+    || identity=
+  if [ -n "${identity%%$'\t'*}" ]; then
+    printf '%s' "$identity"
+    return 0
+  fi
+  harness=$(fm_backend_herdr_pane_harness "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE") \
+    || return 1
+  fm_agent_process_is_pi "${harness%%$'\t'*}" "${harness#*$'\t'}" || return 1
+  case "$(fm_backend_herdr_rendered_busy_state "$1" pi)" in
+    busy) printf 'pi\tworking' ;;
+    idle) printf 'pi\tidle' ;;
+    *) return 1 ;;
+  esac
 }
 
 # fm_backend_herdr_composer_state: thin adapter - capture plus capabilities
@@ -3601,7 +3657,10 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
         printf 'unknown'
         return 0
       fi
-      if [ "$verdict" = pending ] && [ "$raw_status" != working ] \
+      # An unregistered Pi (a sandboxed one) has no native status to confirm
+      # with, and its working screen reads unknown, so the footer turning busy
+      # across this Enter is the only proof its turn started.
+      if { [ "$verdict" = pending ] || [ "$verdict" = unknown ]; } && [ "$raw_status" != working ] \
         && [ "$footer_baseline" = idle ] \
         && [ "$(fm_backend_herdr_rendered_busy_state "$target")" = busy ]; then
         verdict=busy

@@ -59,6 +59,10 @@ Either source naming a verified harness is enough for `alive`, because a false `
 
 Scoping the second source to the foreground process group rather than to the pane's descendants is deliberate: a harness-named process left running in the background of an otherwise idle pane must not read as an agent.
 The same scoping covers multi-process launchers without a special case, so the Pi Launcher path is attributed through its `pi-signed` wrapper and `pi` engine even though its title is the exact foreground command `pi-launcher`.
+A foreground that holds something other than shells is also searched below for a harness, because the nono sandbox launcher holds the foreground while its harness runs in a session of its own on a terminal of its own.
+An idle shell's background jobs are still not searched.
+A `dead` verdict alone does not admit a launch.
+Before one is typed, `fm_backend_launch_pane_state` requires the pane's root process to be a shell with no harness anywhere under it, so a suspended or backgrounded agent blocks a relaunch.
 Direct executable identities `pi`, `pi-signed`, and `Pi` remain accepted exactly, and similar or prefixed process names are not accepted through those exact Pi-family entries.
 Muse is likewise anchored to the exact `muse` launcher identity or the installed `muse-bin-<version>` prefix, so unrelated names such as `musescore` and `amuse` remain ambiguous.
 omp is anchored to the exact `omp` identity for the same reason, so `ompd` and `comp` remain ambiguous.

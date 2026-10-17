@@ -115,6 +115,71 @@ fm_agent_process_classify() {  # <name> <argv0> <args> [pid] -> agent|shell|othe
   fi
 }
 
+# fm_agent_process_harness_below: the first verified harness strictly below any
+# <root-pid>, read from the live process table, printed as
+# "<pid>\t<name>\t<argv0>". Returns 1 when there is none, and 2 when the table
+# cannot be read or holds none of the roots.
+#
+# A pane's foreground group cannot answer this alone: the nono sandbox holds
+# the pane terminal and runs its harness on a terminal of its own, in a session
+# of its own, so the live agent is never in the pane's foreground group or on
+# its tty. Only the parent links reach it.
+fm_agent_process_harness_below() {  # <ps-bin> <root-pid>...
+  local ps_bin=$1 rows pid name args argv0
+  shift
+  command -v "$ps_bin" >/dev/null 2>&1 || return 2
+  rows=$(LC_ALL=C "$ps_bin" -axo pid=,ppid=,comm= 2>/dev/null) || return 2
+  printf '%s\n' "$rows" | awk -v roots="$*" '
+    BEGIN { n = split(roots, r, " "); for (i = 1; i <= n; i++) want[r[i]] = 1 }
+    ($1 in want) { found = 1 }
+    END { exit(found ? 0 : 1) }' || return 2
+  while IFS=$'\t' read -r pid name; do
+    [ -n "$pid" ] || continue
+    args=$(LC_ALL=C "$ps_bin" -p "$pid" -o args= 2>/dev/null) || continue
+    args=${args#"${args%%[![:space:]]*}"}
+    argv0=${args%%[[:space:]]*}
+    if [ "$(fm_agent_process_classify "$name" "$argv0" "$args" "$pid")" = agent ]; then
+      printf '%s\t%s\t%s' "$pid" "$name" "$argv0"
+      return 0
+    fi
+  done <<EOF
+$(printf '%s\n' "$rows" | awk -v roots="$*" '
+  {
+    pid[NR] = $1; ppid[NR] = $2
+    line = $0
+    sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+/, "", line)
+    comm[NR] = line
+  }
+  END {
+    n = split(roots, r, " ")
+    for (i = 1; i <= n; i++) { want[r[i]] = 1; root[r[i]] = 1 }
+    changed = 1
+    while (changed) {
+      changed = 0
+      for (k = 1; k <= NR; k++) {
+        if ((ppid[k] in want) && !(pid[k] in want)) { want[pid[k]] = 1; changed = 1 }
+      }
+    }
+    for (k = 1; k <= NR; k++) {
+      if ((pid[k] in want) && !(pid[k] in root)) printf "%s\t%s\n", pid[k], comm[k]
+    }
+  }')
+EOF
+  return 1
+}
+
+# fm_agent_process_is_pi: whether one harness identity is the Pi family, whose
+# composer only a live identity can prove.
+fm_agent_process_is_pi() {  # <name> <argv0>
+  local n
+  for n in "${1##*/}" "${2##*/}"; do
+    case "$n" in
+      pi|pi-signed|pi-launcher|Pi) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # A launch's working directory and task marker are read from the kernel, never
 # from the pane, because a multiplexer reports the pane shell's directory rather
 # than the agent's.

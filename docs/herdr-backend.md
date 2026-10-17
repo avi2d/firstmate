@@ -718,6 +718,25 @@ The first agent or shell sample in that window decides.
 No registered status outranks the process view, because an agent killed mid-turn leaves `working` behind just as a quit one leaves `idle`.
 The native busy verdict is verified the same way, so a shell-only pane never reads busy.
 
+### Agents Herdr never registers
+
+Herdr registers only an agent it sees in the pane's foreground or one that reports through its socket.
+A Pi worker in the nono sandbox does neither.
+`nono` and its `log stream` hold the pane's foreground, Pi runs below `nono` in a session of its own on a terminal of its own, and the launch withholds `HERDR_SOCKET_PATH`.
+That layout was measured on Herdr 0.9.5, nono 0.80.0, and Pi 1.2.0, and [verification](verification/runtime-backends.md#agents-the-nono-sandbox-runs) records it.
+`agent get` then answers `agent_not_found` outside a turn and at most a placeholder `unknown` status during one.
+
+So an absent registration, or a placeholder status, is judged by the same process view, searched below the pane shell whatever holds the foreground:
+
+| What the process view shows | Verdict |
+| --- | --- |
+| A harness anywhere below the pane shell | `live`, which recovery reads as `alive`. |
+| Nothing but shells, with no harness below them | `no-agent`, which recovery reads as `dead`. |
+| Anything else, or an unreadable view | `unknown`: neither a live agent nor its absence is claimed. |
+
+With no registration to name the harness, the composer probe takes Pi's identity from that process and its idle or working state from Pi's rendered busy indicator, the same pair the tmux adapter uses.
+The native busy verdict stays `unknown`, because only a registration carries it.
+
 ### Process-view version support
 
 The `pane process-info` subcommand that this process-level proof depends on is present in every supported release client from the 0.7.1 floor upward (measured 2026-09-10 on the pinned 0.7.1, 0.7.3, 0.7.4, and 0.7.5 release clients - [verification](verification/runtime-backends.md) "Stale agent registration").
@@ -873,6 +892,7 @@ tests/fm-backend-herdr-launcher-workspace-e2e.test.sh
 tests/fm-backend-herdr-presentation-e2e.test.sh
 tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
+tests/fm-herdr-pi-sandbox-live-e2e.test.sh
 tests/fm-herdr-pi-fullscreen-scrollbar-live-e2e.test.sh
 tests/fm-herdr-restore-isolation-live-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
