@@ -353,6 +353,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0006-mac-load-gate.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
