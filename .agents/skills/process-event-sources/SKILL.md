@@ -37,6 +37,7 @@ A worker-owned board uses `bin/fm-procevent-lavish.sh arm <artifact.html> --for 
 Arm it once, then re-arm only when a round is actually waiting: arming again with nothing to acknowledge is refused.
 A terminal round is never re-armed: the board stays yours until you acknowledge it with `bin/fm-procevent.sh handled <source-id> <sequence>`, which retires it, and until then `retire` refuses the board too.
 Never arm a board that a live task hosts; follow the [crew-hosted Lavish board contract](../../../docs/configuration.md#crew-hosted-lavish-review-boards) for reply acceptance and older-version limits.
+A board a sandboxed worker declared with `needs-decision [key=board-handoff]` but never opened is the one exception: it has no listener yet, so open and arm it with `bin/fm-lavish-board-handoff.sh <board> --for <task-id>` instead of granting the sandbox anything new.
 
 Registering a source is not the same fact as listening to it.
 Lavish `arm` waits until this registration's listener is confirmed running and does not report ready without that evidence; other adapters still record the source for the watcher's next reconcile.
