@@ -607,13 +607,18 @@ fm_afk_contract_locked_cmd() {  # <command> [args...]
 }
 
 fm_afk_contract_main() {
-  local cmd=${1:-} path
+  local cmd=${1:-} path rc=0
   [ -n "$cmd" ] || { fm_afk_contract_usage >&2; return 2; }
   shift
   case "$cmd" in
     enter)
       fm_afk_contract_parse_inputs "$@" || return 2
-      fm_afk_contract_locked_cmd fm_afk_contract_cmd_enter ;;
+      fm_afk_contract_locked_cmd fm_afk_contract_cmd_enter
+      rc=$?
+      if [ -z "${FM_MAC_KEEPAWAKE_DISABLE:-}" ]; then
+        "$FM_AFK_CONTRACT_DIR/fm-mac-keepawake.sh" sync >/dev/null 2>&1 || true
+      fi
+      return "$rc" ;;
     propose|confirm)
       fm_afk_contract_log "'$cmd' was retired with the wait-for-go gate: /afk is itself the go, so run 'enter' to write the record in the same turn"
       return 2 ;;
@@ -640,7 +645,12 @@ fm_afk_contract_main() {
     clauses|flags|refused|grants)
       fm_afk_contract_log "'$cmd' was retired with the clause and merge-grant apparatus: the record is the captain's words (read them with 'words' or 'readback')"
       return 2 ;;
-    archive) fm_afk_contract_locked_cmd fm_afk_contract_cmd_archive ;;
+    archive) fm_afk_contract_locked_cmd fm_afk_contract_cmd_archive
+      rc=$?
+      if [ -z "${FM_MAC_KEEPAWAKE_DISABLE:-}" ]; then
+        "$FM_AFK_CONTRACT_DIR/fm-mac-keepawake.sh" sync >/dev/null 2>&1 || true
+      fi
+      return "$rc" ;;
     archived)
       [ "$#" -eq 1 ] || { fm_afk_contract_usage >&2; return 2; }
       path="$(fm_afk_contract_archive_dir)/$1.afk-contract"
