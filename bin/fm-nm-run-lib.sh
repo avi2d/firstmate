@@ -394,9 +394,10 @@ fm_nm_run_is_pipeline_owned_active() {  # <toon-output>
   fm_nm_run_is_active "$1"
 }
 
-# The gate evidence in an `axi status` TOON, as ONE set of patterns. Both
+# The gate evidence in an `axi status` TOON, as ONE set of patterns. These
 # readers must agree exactly: fm_nm_run_is_parked below decides whether a run
-# keeps the strict head rule, and fm-crew-state.sh's nm_gate_step_row /
+# keeps the strict head rule, fm_nm_toon_has_ask_user shares its findings rule
+# with fm-crew-state.sh's nm_gate_awaits_human_decision, and fm-crew-state.sh's nm_gate_step_row /
 # nm_gate_status / nm_has_gate render the `parked at <gate>` detail from the
 # same evidence. If a new parked marker is added to one reader only, an
 # unverified run's gate detail reaches the crew report.
@@ -412,6 +413,59 @@ FM_NM_GATE_ROW_RE='^[[:space:]]*[^,]+,[[:space:]]*"?(awaiting_approval|fix_revie
 fm_nm_run_is_parked() {  # <toon-output>
   printf '%s\n' "$1" | grep -Eq \
     "$FM_NM_GATE_LINE_RE|$FM_NM_AWAITING_AGENT_RE|$FM_NM_GATE_SCALAR_RE|$FM_NM_GATE_ROW_RE"
+}
+
+# 0 if the findings table in captured `axi status` TOON $1 holds a row whose
+# `action` column is exactly `ask-user`.
+# Read by position from the braced header's own column index, over preceding
+# short scalar columns only, so a `description` quoting action words never mints it.
+fm_nm_toon_has_ask_user() {  # <toon-output>
+  local header count cols idx i name field rows row rest
+  header=$(printf '%s\n' "$1" | grep -E '^[[:space:]]*findings\[[0-9]+\]\{[^}]*\}:' | head -1)
+  [ -n "$header" ] || return 1
+  count=$(printf '%s' "$header" | sed -n 's/^[[:space:]]*findings\[\([0-9][0-9]*\)\].*/\1/p')
+  case "$count" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$count" -gt 0 ] || return 1
+  cols=$(printf '%s' "$header" | sed -n 's/^[^{]*{\([^}]*\)}.*/\1/p')
+  [ -n "$cols" ] || return 1
+  idx=0
+  i=0
+  while [ -n "$cols" ]; do
+    i=$((i + 1))
+    name=$(fm_nm_strip_quotes "$(fm_nm_trim "${cols%%,*}")")
+    if [ "$name" = action ]; then idx=$i; break; fi
+    case "$name" in
+      id|severity|file|line) ;;
+      *) return 1 ;;
+    esac
+    case "$cols" in *,*) cols=${cols#*,} ;; *) cols='' ;; esac
+  done
+  [ "$idx" -gt 0 ] || return 1
+  rows=$(printf '%s\n' "$1" \
+    | awk -v n="$count" 'f { print; if (++c >= n) exit; next } /^[[:space:]]*findings\[[0-9]+\]\{/ { f = 1 }')
+  while IFS= read -r row; do
+    case "$row" in *,*) ;; *) continue ;; esac
+    rest=$row
+    i=1
+    while [ "$i" -lt "$idx" ]; do
+      case "$rest" in *,*) rest=${rest#*,} ;; *) rest=''; break ;; esac
+      i=$((i + 1))
+    done
+    [ -n "$rest" ] || continue
+    field=$(fm_nm_strip_quotes "$(fm_nm_trim "${rest%%,*}")")
+    [ "$field" = ask-user ] && return 0
+  done <<EOF
+$rows
+EOF
+  return 1
+}
+
+# 0 if the run in captured `axi status` TOON $1 is parked at a gate whose
+# answer is owed by the worker itself: parked, with no ask-user row.
+fm_nm_run_parked_awaiting_agent() {  # <toon-output>
+  fm_nm_run_is_parked "$1" || return 1
+  fm_nm_toon_has_ask_user "$1" && return 1
+  return 0
 }
 
 # 0 if the run in captured `axi status` TOON $1 is EXECUTING: in flight and
