@@ -965,6 +965,8 @@ The opencode-go and claude-bridge providers are routed through the sandbox today
 A claude-bridge worker without a passing setup token, and a worker on any other provider, launches unsandboxed with a warning.
 The setup token for sandboxed Claude workers lives at `config/agent-sandbox-claude-token` with owner-only permissions once the captain creates it with `claude setup-token`.
 Secondmates, direct-PR workers, and local-only workers stay unsandboxed.
+After a sandboxed launch lands, `fm-spawn.sh` stops nono per-session debug system-log stream through `bin/fm-sandbox-quiet.sh` on tmux and herdr panes.
+Enforcement stays in the kernel profile, but the post-run denial footer can no longer attribute denials and falls back to its no-denials text.
 Mechanics live in `bin/fm-agent-sandbox.sh` and its `--help` output.
 
 ## Claude permission mode (config/claude-permission-mode)

@@ -4682,6 +4682,43 @@ spawn_send_key() { # <target> <key>
   esac
 }
 
+# A sandboxed launch starts nono, and nono 0.80.0 holds one system-wide debug
+# log subscription per session while it runs. Stop that stream once the launch
+# is delivered: enforcement stays in the kernel profile, only the post-run
+# denial attribution goes blind. Gated on the launch itself, so an adopted pane
+# that never starts nono is untouched. Never fatal: an unresolvable pane root
+# or a missing stream only warns, and the worker keeps running with its stream.
+spawn_sandbox_quiet_after_launch() { # <target>
+  local target=$1 root="" info=""
+  case "$LAUNCH" in
+  *"nono run"*) ;;
+  *) return 0 ;;
+  esac
+  case "$BACKEND" in
+  tmux)
+    root=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || root=
+    ;;
+  herdr)
+    if [ -n "${HERDR_SES:-}" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+      info=$(fm_backend_herdr_cli "$HERDR_SES" pane process-info --pane "$HERDR_PANE_ID" 2>/dev/null) || info=
+      root=$(printf '%s' "$info" | jq -er '.result.process_info.shell_pid | select(type == "number" and . > 1) | floor' 2>/dev/null) || root=
+    fi
+    ;;
+  *)
+    echo "warning: task $ID sandboxed launch keeps its log stream: backend $BACKEND has no pane-root probe" >&2
+    return 0
+    ;;
+  esac
+  case "$root" in
+  ''|*[!0-9]*)
+    echo "warning: task $ID sandboxed launch keeps its log stream: pane root for $target did not resolve" >&2
+    return 0
+    ;;
+  esac
+  "$SCRIPT_DIR/fm-sandbox-quiet.sh" --wait "${FM_SANDBOX_QUIET_WAIT:-30}" "$root" 2>&1 ||
+    echo "warning: task $ID sandboxed launch keeps its log stream: quiet helper failed" >&2
+}
+
 # Enter the exact copy recorded for this task immediately before trust setup and
 # launch. Herdr restores a pane's shell cwd from its durable tab layout, so a
 # treehouse subshell's foreground cwd is not enough to keep a later pane restart
@@ -6655,6 +6692,8 @@ if ! spawn_send_key "$T" Enter; then
   [ "$ORCA_LAUNCH_ENV_ENABLED" != 1 ] || spawn_orca_launch_send_fail
   exit 1
 fi
+spawn_sandbox_quiet_after_launch "$T"
+
 if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
   spawn_orca_wait_launch_consumed
   trap - HUP INT TERM
