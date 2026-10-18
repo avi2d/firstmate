@@ -52,7 +52,11 @@ km_away_present() {
 km_work_in_flight() {
   local state=$1 meta
   for meta in "$state"/*.meta; do
-    [ -e "$meta" ] && return 0
+    [ -e "$meta" ] || return 1
+    if grep -q '^remote_host=.' "$meta" 2>/dev/null; then
+      continue
+    fi
+    return 0
   done
   return 1
 }

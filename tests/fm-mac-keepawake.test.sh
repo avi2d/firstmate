@@ -153,6 +153,30 @@ test_linux_stays_untouched() {
   pass "Linux homes stay unchanged"
 }
 
+test_remote_secondmate_meta_alone_releases() {
+  local home state holder out
+  home=$(mkhome remote-alone-releases)
+  state="$home/state"
+  stub_caffeinate "$home"
+  hold_session
+  holder=$HOLDER
+  printf '%s\n' "$holder" > "$state/.lock"
+  printf 'kind=secondmate\nmode=secondmate\nremote_host=winbox\n' > "$state/winbox.meta"
+  printf 'kind=secondmate\nmode=secondmate\nremote_host=winbox-ru\n' > "$state/winbox-ru.meta"
+  FM_MAC_KEEPAWAKE_UNAME=Darwin "$KEEPAWAKE" sync --state "$state" || { stop_pid "$holder"; fail "sync failed with only remote metas present"; }
+  sleep 1
+  [ ! -e "$home/caffeinate.calls" ] || { stop_pid "$holder"; fail "remote secondmate metas alone took a Mac assertion"; }
+  out=$(FM_MAC_KEEPAWAKE_UNAME=Darwin "$KEEPAWAKE" status --state "$state")
+  case "$out" in *needed=0*) ;; *) stop_pid "$holder"; fail "status did not report idle with only remote metas: $out" ;; esac
+  printf 'project=x\n' > "$state/job.meta"
+  FM_MAC_KEEPAWAKE_UNAME=Darwin "$KEEPAWAKE" sync --state "$state" || { stop_pid "$holder"; fail "sync failed after local work appeared"; }
+  sleep 1
+  grep -F "caffeinate -s -i -w $holder" "$home/caffeinate.calls" >/dev/null || { stop_pid "$holder"; fail "local work beside remote metas did not take an assertion"; }
+  stop_keepawake "$state"
+  stop_pid "$holder"
+  pass "remote secondmate metas alone release the assertion"
+}
+
 test_recorded_sleep_sample_reports_slept() {
   local home state
   home=$(mkhome slept-sample)
@@ -213,6 +237,7 @@ test_work_start_takes_assertion
 test_idle_and_back_releases
 test_quiet_record_holds_nothing
 test_linux_stays_untouched
+test_remote_secondmate_meta_alone_releases
 test_recorded_sleep_sample_reports_slept
 test_contract_enter_and_archive_drive_sync
 test_guard_banner_names_sleep
