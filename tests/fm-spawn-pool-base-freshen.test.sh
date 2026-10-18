@@ -183,6 +183,8 @@ test_stale_pool_base_refreshes_before_branching() {
       "$branch_head" "$current" "$(cat "$POOL_DIR/advanced-main.txt")"
   fi
 
+  # The fixture pool has one slot, which a live record keeps reserved.
+  rm -f "$HOME_DIR/state/$id.meta"
   id='pool-current-base-repeat-r1'
   fm_test_spawn_brief "$HOME_DIR" "$id"
   out=$(run_spawn "$id" --mode no-mistakes --yolo off)
@@ -528,6 +530,8 @@ strand_submodule_pin_via_spawn() {  # <seed-id>
     || fail "the first spawn did not move the pooled base across the moved submodule pin"
   [ "$(git -C "$POOL_DIR/ui" rev-parse HEAD)" = "$SUBPIN1" ] \
     || fail "the first spawn did not strand the submodule on the pin the old base recorded"
+  # The fixture pool has one slot, which a live record keeps reserved.
+  rm -f "$HOME_DIR/state/$id.meta"
 }
 
 test_stale_submodule_pin_explains_itself() {
@@ -743,6 +747,59 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+# A Treehouse whose only slot is free in its own eyes: `get` lands in that slot
+# (the fake pane path), `status` lists it unleased, and `lease` is recorded.
+# The lease help line is real treehouse v3.1.2 output.
+make_leasing_treehouse() {
+  cat > "$FAKEBIN_DIR/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$CASE_DIR/treehouse.log"
+case "\$1 \${2:-}" in
+  'lease --help') printf 'Usage:\n  treehouse lease <name> [flags]\n' ;;
+  'status --json') printf '[{"name":"1","path":"%s","status":"available","lease_id":""}]\n' "$POOL_DIR" ;;
+esac
+exit 0
+SH
+  chmod +x "$FAKEBIN_DIR/treehouse"
+}
+
+# The incident: a task's agent was stopped, so Treehouse saw nothing running in
+# its slot and handed that same copy to the next spawn. Oracle: the task record
+# is the reservation (a live record's worktree= belongs to that task until
+# teardown), and `treehouse lease --help` promises a leased slot is never handed
+# out by a later get. Rejects a spawn that adopts the stopped task's copy.
+test_stopped_task_keeps_its_recorded_worktree() {
+  local rec id out status before
+  id='pool-reserved-r1'
+  rec=$(make_case reserved "$id")
+  read_case_record "$rec"
+  lay_out_as_pool_slot
+  make_leasing_treehouse
+  printf 'window=firstmate:fm-stopped-r1\nworktree=%s\nproject=%s\nkind=ship\n' \
+    "$POOL_DIR" "$PROJECT_DIR" > "$HOME_DIR/state/stopped-r1.meta"
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a spawn launched into a copy a stopped task's record still names"$'\n'"$out"
+  assert_contains "$out" "task stopped-r1 still records as its worktree" \
+    "the refusal did not name the task that holds the copy"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "the refused spawn published a record for the reserved copy"
+  [ ! -e "$SLOT_CLAIM" ] || fail "the refused spawn claimed the reserved slot: $(cat "$SLOT_CLAIM")"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+    || fail "the refused spawn moved the stopped task's copy"
+  assert_grep 'lease 1 --lease-holder stopped-r1' "$CASE_DIR/treehouse.log" \
+    "spawn did not lease the stopped task's slot before asking for a worktree"
+
+  rm -f "$HOME_DIR/state/stopped-r1.meta"
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "a spawn into a copy no record names should launch"$'\n'"$out"
+  assert_grep "lease 1 --lease-holder $id" "$CASE_DIR/treehouse.log" \
+    "a launched task did not lease its own slot"
+  pass "a second spawn never receives the worktree a stopped task's record names, and a launched task leases its own"
+}
+
 publish_feature_branch() { # <branch>
   git -C "$CASE_DIR/publisher" checkout --quiet -b "$1"
   printf 'only on %s\n' "$1" > "$CASE_DIR/publisher/feature-only.txt"
@@ -876,6 +933,7 @@ test_scout_base_branch_refused_on_gerrit_forge() {
 
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_stopped_task_keeps_its_recorded_worktree
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_named_base_branch_starts_from_that_branch

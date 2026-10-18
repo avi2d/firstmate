@@ -105,6 +105,10 @@ signed_in_claude_root() {
 spawn_ship() {
   local id=$1
   shift
+  # A live record reserves its copy, so each task needs its own.
+  WT="$CASE/wt-$id"
+  [ -d "$WT" ] || git -C "$PROJ" worktree add --quiet -b "wt-$id" "$WT" >/dev/null 2>&1 ||
+    fail "could not create a copy for $id"
   fm_test_spawn_brief "$HOME_DIR" "$id"
   signed_in_claude_root "$CASE/ambient-claude"
   : > "$CASE/launch.log"

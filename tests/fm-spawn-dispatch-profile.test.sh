@@ -74,6 +74,17 @@ make_spawn_case() {
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$launchlog"
 }
 
+# make_batch_copies <project> <case-dir> <id>...: one copy per task, read back
+# through FM_FAKE_PANE_PATH_ROOT, since a live record reserves its copy.
+make_batch_copies() {
+  local proj=$1 root=$2/copies id
+  shift 2
+  for id in "$@"; do
+    git -C "$proj" worktree add --quiet -b "wt-$id" "$root/fm-$id" || fail "could not create a copy for $id"
+  done
+  printf '%s\n' "$root"
+}
+
 enable_dispatch_profile() {
   local home=$1
   printf '%s\n' '{"rules":[{"when":"current events","use":{"harness":"grok","model":"grok-4","effort":"high"}}],"default":{"harness":"codex","model":"gpt-5","effort":"medium"}}' \
@@ -439,6 +450,7 @@ test_home_defaults_preserve_absolute_or_resolve_relative_paths() {
     "relative FM_HOME leaked into Pi's default cross-process extension path"
   assert_contains "$launch" "< '$home_real/data/$relative_id/launch-brief.md'" \
     "relative FM_HOME leaked into the default cross-process brief path"
+  rm -f "$HOME_DIR/state/$relative_id.meta"
 
   linked_home="$CASE_DIR/home-link"
   ln -s "$HOME_DIR" "$linked_home"
@@ -1009,11 +1021,12 @@ test_native_pi_ultra_is_explicit_and_model_scoped() {
 }
 
 test_batch_preserves_native_ultra() {
-  local rec id1=ultra-batch-a id2=ultra-batch-b out launch
+  local rec id1=ultra-batch-a id2=ultra-batch-b out launch copies
   rec=$(make_spawn_case ultra-batch pi "$id1" "$id2")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+  copies=$(make_batch_copies "$PROJ_DIR" "$CASE_DIR" "$id1" "$id2")
+  out=$(FM_FAKE_PANE_PATH_ROOT=$copies run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness pi --model codex-native/gpt-6-astra --effort ultra)
   expect_code 0 "$?" "native Ultra batch failed: $out"
   assert_meta_profile "$HOME_DIR/state/$id1.meta" pi codex-native/gpt-6-astra ultra
@@ -1579,14 +1592,15 @@ test_pi_exclude_tools_do_not_leak_across_homes_or_to_secondmates() {
 }
 
 test_batch_forwards_shared_profile_flags() {
-  local rec id1 id2 out status
+  local rec id1 id2 out status copies
   id1=profile-batch-a-z9
   id2=profile-batch-b-z10
   rec=$(make_spawn_case profile-batch claude "$id1" "$id2")
   read_case_record "$rec"
   enable_dispatch_profile "$HOME_DIR"
+  copies=$(make_batch_copies "$PROJ_DIR" "$CASE_DIR" "$id1" "$id2")
 
-  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+  out=$(FM_FAKE_PANE_PATH_ROOT=$copies run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id1=$PROJ_DIR" "$id2=$PROJ_DIR" --harness codex --model gpt-5 --effort high)
   status=$?
   expect_code 0 "$status" "batch spawn with shared profile flags should succeed"

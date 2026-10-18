@@ -82,6 +82,7 @@ A relaunch does take one session reference when the endpoint's own runtime recor
    Ship and scout replacements also pass the [worker tool exclusion checks](configuration.md#worker-tool-exclusions-configcrew-exclude-tools) at this step.
 2. **Safe checkpoint.**
    The recorded worktree must exist and be a worktree root; its head and dirty state are recorded.
+   A worktree that another live task's record also names is refused, naming both tasks, because that copy may now hold the other task's work.
    For a `kind=secondmate` task, the home's identity marker must match and its child records must be readable, so a relaunch can never strand child work behind an unreadable home.
    A secondmate's own crewmates run in their own endpoints and outlive its relaunch; the relaunched secondmate reconciles them from its home's durable records at startup.
 3. **Record the note.**
@@ -89,7 +90,9 @@ A relaunch does take one session reference when the endpoint's own runtime recor
    A secondmate relaunch does not require one and never rewrites its standing charter.
 4. **Stop the old agent** through the `exit` verb, with its postcondition.
 5. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which reuses the recorded worktree instead of creating one, adopts the recorded endpoint when it still exists, clears the previous harness's per-task wiring, and arms a fresh busy generation.
-   When the recorded endpoint is proven gone rather than merely idle or unreachable - which only Herdr can establish - the launch owner creates one fresh endpoint in that same worktree and the republished record rebinds the task to it - see [Reclaiming a task whose endpoint is gone](#reclaiming-a-task-whose-endpoint-is-gone).
+   Only Herdr can prove a recorded endpoint gone rather than merely idle or unreachable.
+   When it does, the launch owner creates one fresh endpoint in that same worktree, placed exactly as a fresh spawn would be, and the republished record rebinds the task to it.
+   See [Reclaiming a task whose endpoint is gone](#reclaiming-a-task-whose-endpoint-is-gone).
 6. **Preserve runtime-bound status authority where supported.**
    The endpoint's runtime may bind pane status to one session identity; the launch owner preserves it only when that runtime records a reference the replacement adapter can consume, and otherwise launches the ordinary fresh session.
    This reference is a launch input, never authority to send, close, or act on the pane.
@@ -135,16 +138,26 @@ What a reclaim is not:
 - It is **not** a peer seat's operation. `fm-control` resolves an exact task id against **this** home's `state/`, so only the home that owns the task can reclaim it.
 - It does **not** cover a secondmate. A secondmate whose endpoint is gone already has one recovery path - `bin/fm-spawn.sh <id> --secondmate`, driven by the session-start sweep or the watcher's liveness tick - so control-plane reclaim refuses and names it rather than becoming a second path to the same outcome.
 
-The re-created tab is opened in the herdr session the record names, never in whichever session the recovering seat happens to sit in - relocating a task onto another herdr server would be an identity change published as a self-consistent but wrong record.
+The re-created endpoint is placed exactly as a fresh spawn places one.
+When this home projects, it gets its own presentation workspace, as [`docs/herdr-backend.md`](herdr-backend.md) "Presentation spaces" describes.
+Otherwise it is a flat `fm-<id>` tab.
+Before projecting, the reclaim retires a presentation journal left by the gone endpoint when that journal is bound to exactly that endpoint, or is unbound and its workspace is gone.
+Any other journal keeps the reclaim on the flat layout rather than guess.
+The endpoint is opened in the herdr session the record names, never in whichever session the recovering seat happens to sit in.
+Relocating a task onto another herdr server would be an identity change published as a self-consistent but wrong record.
 A seat that *claims* a herdr launcher pane belonging to a different session is refused rather than allowed to place the endpoint somewhere else, so reclaim such a task from a seat in the recorded session.
-A seat with no herdr launcher pane at all - a plain ssh or cron shell, which is the ordinary way an operator reclaims - is not refused: placement falls back to the recorded session's labeled container, so the tab still lands in the session the record names.
-The reclaim pins the recorded **session** but not the **workspace**: the container follows the reclaiming seat, so a reclaim run from a seat inside the recorded session places the new tab in *that seat's* workspace rather than the recorded `herdr_workspace_id`, even when the recorded workspace still exists and only the pane was destroyed.
+A seat with no herdr launcher pane at all is not refused.
+That is a plain ssh or cron shell, which is the ordinary way an operator reclaims.
+Placement then falls back to the recorded session's labeled home workspace, so the endpoint still lands in the session the record names.
+The reclaim pins the recorded **session** but not the **workspace**.
+Placement follows the reclaiming seat exactly as a fresh spawn's does, so the new endpoint is projected beneath, or placed flat inside, *that seat's* workspace rather than the recorded `herdr_workspace_id`.
 The record is republished consistently and no work is lost, but the task's `herdr_workspace_id` moves with it.
-The pane id necessarily changes (the pane did not survive), and the record follows it.
-A Herdr reclaim deliberately uses the flat container shape rather than presentation projection: projection is a presentation-only layout that is never endpoint or ownership authority, and flat is already the documented fallback for every recovery it cannot bind exactly ([`docs/herdr-backend.md`](herdr-backend.md)).
+The pane id necessarily changes because the pane did not survive, and the record follows it.
 
-**Known limitation - a refusal before the record is republished leaves a stray husk pane** (follow-up bead `fm-herdr-rebind-leak-20260913`).
-The rebind registers no abort cleanup, so a refusal in the window between the new tab being created and the record being republished leaves that pane behind while the record still names the old, gone one.
+**Known limitation: a flat refusal before the record is republished leaves a stray husk pane.**
+The follow-up is bead `fm-herdr-rebind-leak-20260913`.
+A projected rebind registers the same abort cleanup as a fresh projected spawn.
+A flat rebind registers none, so a refusal in the window between the new tab being created and the record being republished leaves that pane behind while the record still names the old, gone one.
 The stray pane holds a bare shell - the harness is not delivered until after publication - so the next reclaim cleans up after it: the re-created tab carries the same `fm-<id>` label, `tab create` finds it, classifies it a husk, and closes and replaces it.
 That self-heals only when the retry resolves the *same* workspace, which the placement rule above does not guarantee.
 The worktree and the task's records are unaffected either way.

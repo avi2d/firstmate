@@ -97,7 +97,8 @@ fm_test_fake_gh_axi() {
 # set, each send-keys -l payload is appended one per line. When FM_FAKE_PANE_LOG
 # is set, each send-keys TEXT-LINE payload (the pre-launch pane exports, which
 # carry no -l) is appended there instead, one per line in send order. Optional
-# FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
+# FM_FAKE_DUPLICATE_WINDOW is printed from list-windows. With
+# FM_FAKE_PANE_PATH_ROOT set, window <session>:<name> reports <root>/<name>.
 #
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
@@ -108,7 +109,19 @@ fm_test_fake_tmux_spawn() {
 #!/usr/bin/env bash
 set -u
 case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{pane_current_path}"*)
+    if [ -z "${FM_FAKE_PANE_PATH_ROOT:-}" ]; then
+      printf '%s\n' "${FM_FAKE_PANE_PATH:-}"
+      exit 0
+    fi
+    target= prev=
+    for a in "$@"; do
+      [ "$prev" != -t ] || target=$a
+      prev=$a
+    done
+    printf '%s/%s\n' "$FM_FAKE_PANE_PATH_ROOT" "${target##*:}"
+    exit 0
+    ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
