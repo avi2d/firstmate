@@ -66,7 +66,21 @@ case "$*" in
     exit 0
     ;;
 esac
-case "${1:-}" in display-message) printf 'firstmate\n' ;; esac
+window_file="$(dirname "$0")/.spawn-window"
+case "${1:-}" in
+  display-message) printf 'firstmate\n' ;;
+  new-window)
+    name= previous=
+    for arg in "$@"; do
+      [ "$previous" = -n ] && name=$arg
+      previous=$arg
+    done
+    printf '%s\n' "$name" > "$window_file"
+    ;;
+  list-windows)
+    [ ! -s "$window_file" ] || cat "$window_file"
+    ;;
+esac
 exit 0
 SH
   cat > "$fakebin/treehouse" <<'SH'
