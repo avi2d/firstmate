@@ -20,7 +20,8 @@ SH
 printf '{ 3.79 9.14 26.84 }\n'
 SH
   chmod +x "$fakebin/uname" "$fakebin/sysctl"
-  got=$(env -u FM_MAC_LOAD_MOCK_5MIN PATH="$fakebin:$PATH" bash -c '. "$0" && fm_mac_loadavg_5min' "$ROOT/bin/fm-mac-load-lib.sh")
+  lib="$ROOT/bin/fm-mac-load-lib.sh"
+  got=$(env -u FM_MAC_LOAD_MOCK_5MIN PATH="$fakebin:$PATH" bash -c ". \"$lib\" && fm_mac_loadavg_5min")
   assert_equals "9.14" "$got" "the macOS reader did not return the middle vm.loadavg field"
   pass "a sysctl stub printing the 1, 5 and 15 minute averages yields the five-minute value"
 }
