@@ -1,0 +1,8 @@
+2026-10-18 22:41:23 +0300 Assertions          	PID 545(powerd) Summary PreventUserIdleSystemSleep "Powerd - Prevent sleep while display is on" 02:14:05  id:0x0x10000a72c [System: PrevIdle DeclUser kDisp]
+2026-10-18 23:01:00 +0300 Assertions          	PID 545(powerd) Released PreventUserIdleSystemSleep "Powerd - Prevent sleep while display is on" 03:09:44  id:0x0x10000a72c [System: No Assertions]
+2026-10-18 23:01:00 +0300 Assertions          	PID 545(powerd) Created InternalPreventSleep "com.apple.powermanagement.darkwakelinger" 00:00:00  id:0x0xd000086da [System: SRPrevSleep kCPU]
+2026-10-18 23:01:05 +0300 Assertions          	PID 545(powerd) TimedOut InternalPreventSleep "com.apple.powermanagement.darkwakelinger" 00:00:05  id:0x0xd000086da [System: SRPrevSleep kCPU]
+Sleep/Wakes since boot:1446   Dark Wake Count in this sleep cycle:0
+2026-10-18 23:01:05 +0300 Sleep               	Entering Sleep state due to 'Idle Sleep':TCPKeepAlive=active Using Batt (Charge:82%) 816 secs
+2026-10-18 23:01:06 +0300 PM Client Acks      	Delays to Sleep notifications: [com.apple.bluetooth.sleep is slow(1556 ms)]
+2026-10-18 23:16:12 +0300 Wake                	Wake from Deep Idle [CDNVA] : due to smc.sysState.Wake(0x70070000) trackpadkeyboard Using BATT (Charge:82%)
