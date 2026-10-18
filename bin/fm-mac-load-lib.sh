@@ -69,7 +69,7 @@ fm_mac_loadavg_5min() {
   case "$(uname -s)" in
     Darwin)
       raw=$(sysctl -n vm.loadavg 2>/dev/null) || return 1
-      printf '%s\n' "$raw" | awk '{gsub(/[{}]/, ""); print $3}'
+      printf '%s\n' "$raw" | awk '{gsub(/[{}]/, ""); print $2}'
       ;;
     Linux)
       awk '{print $2}' /proc/loadavg 2>/dev/null || return 1
