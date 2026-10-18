@@ -155,7 +155,8 @@ a { color: inherit; text-decoration: none; }
 .bb-stat__label { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
 
 .bb-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.bb-section__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.bb-section__head { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; }
+#bb-call-sub { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .bb-cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 22px; }
 
 /* ---- Captain's Call: one card at a time, dealt off a visible stack ---- */
@@ -478,7 +479,7 @@ __FM_BEARINGS_BOARD_DATA__
     strip.appendChild(t);
   });
   document.getElementById("bb-call-sub").textContent =
-    callTotal ? callTotal + " item" + (callTotal === 1 ? "" : "s") + " wait on you, captain" : "nothing needs you, captain";
+    callTotal ? callTotal + " item" + (callTotal === 1 ? " waits on you, captain" : "s wait on you, captain") : "nothing needs you, captain";
 
   /* Captain's Call deck: every item renders as the same full card */
   var deck = document.getElementById("bb-call");
