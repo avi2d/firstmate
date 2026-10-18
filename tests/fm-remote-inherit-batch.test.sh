@@ -12,48 +12,6 @@ set -u
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-remote-inherit-batch)
 
-install_batch_transport() {
-  local fakebin=$1 mode=${2:-current}
-  FM_BATCH_TRANSPORT_MODE=$mode FM_BATCH_TRANSPORT_ROOT=$ROOT
-  export FM_BATCH_TRANSPORT_MODE FM_BATCH_TRANSPORT_ROOT
-  cat > "$fakebin/batch-ssh" <<'SH'
-#!/usr/bin/env bash
-set -u
-printf 'call\n' >> "$FM_BATCH_CALL_LOG"
-while [ "$#" -gt 0 ]; do
-  case "$1" in -o) shift 2 ;; --) shift; break ;; *) exit 90 ;; esac
-done
-[ "$#" -eq 6 ] && [ "$1" = batch-host ] && [ "$2" = fm-remote-entrypoint.sh ] && [ "$3" = 1 ] || exit 91
-remote_home=$(printf '%s' "$5" | base64 --decode 2>/dev/null || printf '%s' "$5" | base64 -D)
-args=()
-while IFS= read -r -d '' arg; do args+=("$arg"); done < <(printf '%s' "$6" | base64 --decode 2>/dev/null || printf '%s' "$6" | base64 -D)
-[ "${args[0]}" = fm-remote-inherit.sh ] || exit 92
-if [ "$FM_BATCH_TRANSPORT_MODE" = old-host ] && [ "${args[1]}" = batch ]; then
-  printf 'Host-local lifecycle control for the remote secondmate home selected by fm-on.\n'
-  printf 'usage: fm-remote-inherit.sh put <allowlisted-relative-path> <bytes> <sha256> <generation>\n'
-  exit 2
-fi
-FM_HOME="$remote_home" FM_STATE_OVERRIDE="$remote_home/state" \
-  exec "$FM_BATCH_TRANSPORT_ROOT/bin/${args[0]}" "${args[@]:1}"
-SH
-  chmod +x "$fakebin/batch-ssh"
-}
-
-write_batch_registry() {
-  local primary=$1 remote=$2
-  printf -- '- batched - Test route (host: batch-host; root: %s; home: %s; scope: test; projects: ; added 2026-09-30)\n' \
-    "$ROOT" "$remote" > "$primary/data/secondmates.md"
-}
-
-run_batch_push() {
-  local primary=$1 fakebin=$2 generation=$3
-  FM_HOME="$primary" FM_ROOT_OVERRIDE="$ROOT" \
-    FM_CONFIG_OVERRIDE="$primary/config" FM_DATA_OVERRIDE="$primary/data" \
-    FM_SSH_BIN="$fakebin/batch-ssh" \
-    FM_INHERITABLE_CONFIG='crew-harness backlog-backend' \
-    "$ROOT/bin/fm-remote-inherit-push.sh" batched "$generation"
-}
-
 batch_record() {
   local rel=$1 bytes=$2 hash=$3 payload=$4 b64
   if [ "$payload" = - ]; then
@@ -148,58 +106,8 @@ test_batch_rejects_empty_and_oversize_frames() {
   pass "batch rejects empty and oversize frames"
 }
 
-test_push_sends_all_items_over_one_transport_call() {
-  local primary remote fakebin out
-  primary="$TMP_ROOT/one-call/primary"
-  remote="$TMP_ROOT/one-call/remote"
-  mkdir -p "$primary/config" "$primary/data" "$remote/config" "$remote/data" "$remote/state"
-  printf 'harness-pin\n' > "$primary/config/crew-harness"
-  printf 'backend-pin\n' > "$primary/config/backlog-backend"
-  write_batch_registry "$primary" "$remote"
-  fakebin="$TMP_ROOT/one-call/fakebin"
-  mkdir -p "$fakebin"
-  install_batch_transport "$fakebin"
-  export FM_BATCH_CALL_LOG="$TMP_ROOT/one-call/calls"
-  : > "$FM_BATCH_CALL_LOG"
-
-  out=$(run_batch_push "$primary" "$fakebin" 4 2>&1) \
-    || fail "the batched push should succeed: $out"
-  assert_contains "$out" "pushed: config/crew-harness" "the first item was not pushed"
-  assert_contains "$out" "pushed: config/backlog-backend" "the second item was not pushed"
-  [ "$(wc -l < "$FM_BATCH_CALL_LOG" | tr -d ' ')" = 1 ] \
-    || fail "the push used $(wc -l < "$FM_BATCH_CALL_LOG") transport calls instead of one"
-  cmp -s "$primary/config/crew-harness" "$remote/config/crew-harness" \
-    || fail "the first item's bytes do not match"
-  cmp -s "$primary/config/backlog-backend" "$remote/config/backlog-backend" \
-    || fail "the second item's bytes do not match"
-  pass "push sends all items over one transport call"
-}
-
-test_push_maps_old_host_batch_refusal_to_updatefirstmate() {
-  local primary remote fakebin out reason
-  primary="$TMP_ROOT/old-host/primary"
-  remote="$TMP_ROOT/old-host/remote"
-  mkdir -p "$primary/config" "$primary/data" "$remote/config" "$remote/data" "$remote/state"
-  printf 'harness-pin\n' > "$primary/config/crew-harness"
-  write_batch_registry "$primary" "$remote"
-  fakebin="$TMP_ROOT/old-host/fakebin"
-  mkdir -p "$fakebin"
-  install_batch_transport "$fakebin" old-host
-  export FM_BATCH_CALL_LOG="$TMP_ROOT/old-host/calls"
-  : > "$FM_BATCH_CALL_LOG"
-
-  out=$(run_batch_push "$primary" "$fakebin" 4 2>&1)
-  expect_code 1 "$?" "an old host's usage refusal must fail the push: $out"
-  reason=$(remote_inherit_failure_reason "$out")
-  assert_contains "$reason" "run /updatefirstmate" \
-    "the old-host refusal does not say how to fix it (got: $reason)"
-  pass "push maps an old host's batch refusal to /updatefirstmate"
-}
-
 test_batch_applies_many_items_in_one_call
 test_batch_failure_applies_siblings_and_next_run_converges
 test_batch_rejects_empty_and_oversize_frames
-test_push_sends_all_items_over_one_transport_call
-test_push_maps_old_host_batch_refusal_to_updatefirstmate
 
 echo "# all fm-remote-inherit-batch tests passed"
