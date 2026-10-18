@@ -1,0 +1,4 @@
+2026-10-18 22:41:23 +0300 Assertions          	PID 545(powerd) Summary PreventUserIdleSystemSleep "Powerd - Prevent sleep while display is on" 02:14:05  id:0x0x10000a72c [System: PrevIdle DeclUser kDisp]
+2026-10-18 23:01:00 +0300 Assertions          	PID 7632(PowerUIAgent) Created MaintenanceWake "com.apple.obc" 00:00:00  id:0x0xd00008522 [System: PrevIdle PrevDisp DeclUser SRPrevSleep IntPrevDisp kCPU kDisp]
+2026-10-18 23:01:00 +0300 Assertions          	PID 7632(PowerUIAgent) Released MaintenanceWake "com.apple.obc" 00:00:00  id:0x0xd00008522 [System: PrevIdle PrevDisp DeclUser IntPrevDisp kDisp]
+2026-10-18 23:16:12 +0300 Assertions          	PID 545(powerd) Summary PreventUserIdleSystemSleep "Powerd - Prevent sleep while display is on" 00:14:52  id:0x0x1000086e7 [System: PrevIdle DeclUser IntPrevDisp kDisp]

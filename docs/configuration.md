@@ -2302,6 +2302,7 @@ An already-armed Lavish source keeps its registered listener command until it is
 **Arm and confirm a listener**
 
 A live task that hosts a Lavish board owns its listener, so firstmate must never arm that board.
+A board a sandboxed worker declared with `needs-decision [key=board-handoff]` but never opened has no listener yet, so firstmate opens and arms it with `bin/fm-lavish-board-handoff.sh <board> --for <task-id>` instead of widening the sandbox.
 After opening the artifact as required above, the worker arms it with `bin/fm-procevent-lavish.sh arm <artifact.html> --for <task-id>` and never runs `lavish-axi poll` itself.
 
 `arm` prints `armed` only after the process-event owner confirms this registration generation's listener is running, and otherwise returns nonzero without that line.

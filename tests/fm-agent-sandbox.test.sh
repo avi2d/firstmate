@@ -108,6 +108,14 @@ assert wt_common in fs["read"], fs["read"]
 assert wt_common not in fs["allow"]
 EOF
 pass "scout profile carries the hardened shape and no daemon socket"
+export FM_TEST_ROOT="$ROOT"
+python3 - "$profile" <<'EOF' || fail "rendered profile never offers the save-profile review"
+import json, os, sys
+fs = json.load(open(sys.argv[1]))["filesystem"]
+assert "/" in fs.get("suppress_save_prompt", []), fs.get("suppress_save_prompt")
+assert os.environ["FM_TEST_ROOT"] + "/.pi/extensions/lib" in fs["read"], fs["read"]
+EOF
+pass "rendered profile mutes the save-profile review and grants the -e extension dir"
 
 render_ship=$("$SB" render "$state" t1 "$wt" "$tmp" "$data_id" "$TMP_ROOT/home/hooks" "$ROOT" ship no-mistakes) || fail "render ship profile"
 profile_ship=$(printf '%s\n' "$render_ship" | sed -n 's/^profile=//p')

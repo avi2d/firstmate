@@ -99,6 +99,9 @@ TOML
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Banner sleep evidence must not depend on the machine's own sleep history.
+export FM_PMSET_LOG_FILE="${FM_PMSET_LOG_FILE:-$ROOT/tests/fixtures/fm-mac-keepawake-pmset-awake.log}"
+
 # --- reporters --------------------------------------------------------------
 
 fail() {

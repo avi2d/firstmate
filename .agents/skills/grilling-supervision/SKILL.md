@@ -26,12 +26,13 @@ The captain owns every answer, the worker researches and proposes, and firstmate
 - Follow the installed `grilling` skill as the method, and leave the project work itself unbuilt.
 - Report only to firstmate: every question reaches the captain on a round board firstmate approved, and a board reply only acknowledges.
 - Keep one board page for the whole interview at an untracked path in the isolated copy, opened with `lavish-axi` before the first round, and draft each round or recap at a separate untracked path, so the live board changes only on firstmate's go.
+- A worker inside the task sandbox never opens or arms a board: copy the draft over the board page, declare `needs-decision [key=grill-round-<N>]` naming the draft path and the board page path, and declare `paused:` while the captain answers; firstmate opens, checks, binds, and arms it with `bin/fm-lavish-board-handoff.sh`, and the captain's answers still arrive through the steering inbox.
 - Key round N's card to the held task `<interview-id>-r<N>` and the recap's card to `<interview-id>-confirm`.
 - Build each round as one form whose one submit calls `window.lavish.queuePrompt` once, tagged `choice`, with data `{schema: "fm-bearings-answer.v1", question: "<interview-id>-r<N>", selection: "", note: <round note>, answers: [{question, selection, note}, ...]}` covering every question of the round, a skipped question sent with an empty selection and note, and no option preselected.
   The header of `bin/fm-procevent-lavish.sh` owns that round format and its limits.
 - Build the recap as a single card with data `{schema: "fm-bearings-answer.v1", question: "<interview-id>-confirm", selection: "confirmed" or "corrections", note}`.
-- Report each draft with `needs-decision [key=grill-round-<N>]`, or `[key=grill-recap]`, naming the draft path, the board path, and the board URL, then wait for firstmate's go.
-- On the go, copy the draft over the board page, arm the board with `FM_HOME=<home> <root>/bin/fm-procevent-lavish.sh arm <board> --for <interview-id>` before the first round, and declare `paused:` while the captain answers.
+- Report each draft with `needs-decision [key=grill-round-<N>]`, or `[key=grill-recap]`, naming the draft path, the board path, and the board URL, then wait for firstmate's go. A sandboxed declaration names the draft path and the board page path and carries no URL.
+- On the go, copy the draft over the board page, arm the board with `FM_HOME=<home> <root>/bin/fm-procevent-lavish.sh arm <board> --for <interview-id>` before the first round, and declare `paused:` while the captain answers. A sandboxed worker already placed the page before declaring, so it skips the open and arm steps entirely.
 - When a round's result reaches the inbox, read the captain's answers with `<root>/bin/fm-procevent-lavish.sh answers <result>`, which prints the line the held task recorded, and any freeform message with `read`.
   When that prints no line for the round's key, the answers were not recorded: report `blocked` naming the result.
   Otherwise re-arm at once with a one-line acknowledgement through `--agent-reply-file`, put the actual answers in the Q&A draft, and recompute the frontier from them.
@@ -52,8 +53,8 @@ When the worker reports a round or recap draft:
 2. Hold the round: `bin/fm-captain-hold.sh hold <interview-id>-r<N> --title <title> --repo <project> --origin <interview-id> --reason "<numbered questions, each with its recommendation>"`, or `<interview-id>-confirm` carrying the recap for the final confirmation.
    One held task and one card carry the whole round.
 3. Run `bin/fm-captain-hold.sh complete <interview-id>` with every round and recap task held so far; it records the inventory and transfers the worker's open round decision to the held task.
-4. Before the first round only, bind the board with `bin/fm-captain-hold.sh bind "$(bin/fm-procevent-lavish.sh source-id <board>)"`; every later round on the same board uses that binding.
-5. Tell the worker to publish with a plain `bin/fm-send.sh` steer, and keep the round's task id out of `--resolve-key`, which would record the steer as the captain's answer.
+4. Before the first round only, bind the board with `bin/fm-captain-hold.sh bind "$(bin/fm-procevent-lavish.sh source-id <board>)"`; every later round on the same board uses that binding. When the round arrived as a sandboxed declaration naming paths and no URL, run `bin/fm-lavish-board-handoff.sh <board> --for <interview-id>` instead: it opens the page, refuses a page without queuePrompt, binds, and arms. Spot-check the board at 1200 and 390 wide and under dark emulation before presenting it.
+5. Tell an unsandboxed worker to publish with a plain `bin/fm-send.sh` steer, and keep the round's task id out of `--resolve-key`, which would record the steer as the captain's answer. A sandboxed worker already placed the page, so the handoff run above is its go and no publish steer is needed.
 6. Present the round to the captain as one decision with the board URL under `AGENTS.md` section 9.
 
 The listener feeds the captain's one submission to the keyed-answer intake, which records every selection and note on the round's held task and closes it, then delivers the capture to the worker without waking firstmate.

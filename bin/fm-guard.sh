@@ -189,6 +189,9 @@ if [ "$needed" = false ]; then
   # work or X-mode need + stale combination is a fresh episode even if the
   # beacon is still absent with the same key string.
   [ "$READ_ONLY" -eq 1 ] || fm_guard_clear_stale_banner
+  if [ "$READ_ONLY" -eq 0 ] && [ -z "${FM_MAC_KEEPAWAKE_DISABLE:-}" ]; then
+    "$SCRIPT_DIR/fm-mac-keepawake.sh" sync >/dev/null 2>&1 || true
+  fi
   exit 0
 fi
 
@@ -212,7 +215,10 @@ fi
 if [ "$GUARD_ACTOR" = branch ]; then
   :
 elif [ "$watcher_healthy" = false ]; then
+  mac_slept=0
+  "$SCRIPT_DIR/fm-mac-keepawake.sh" slept --state "$STATE" >/dev/null 2>&1 && mac_slept=1
   episode_key=$(fm_guard_stale_episode_key "$watcher_down_reason")
+  [ "$mac_slept" = 1 ] && episode_key="$episode_key:slept"
   episode_key=${episode_key%$'\n'}
   print_full_banner=0
   if [ "$READ_ONLY" -eq 1 ]; then
@@ -238,7 +244,9 @@ elif [ "$watcher_healthy" = false ]; then
     {
       printf '●%s\n' "$rule"
       printf '●  WATCHER DOWN - SUPERVISION IS OFF\n'
-      if [ "$watcher_down_reason" = no-watcher ]; then
+      if [ "$mac_slept" = 1 ]; then
+        watcher_cause=$(printf 'this Mac went to sleep (last beat: %s)' "$beacon_desc")
+      elif [ "$watcher_down_reason" = no-watcher ]; then
         watcher_cause=$(printf 'no live watcher process holds this home lock (last beat: %s)' "$beacon_desc")
       else
         watcher_cause=$(printf 'no watcher has a fresh beacon (last beat: %s, grace %ss)' "$beacon_desc" "$GRACE")
@@ -251,6 +259,9 @@ elif [ "$watcher_healthy" = false ]; then
         printf '●  %s registered custom check(s), but %s.\n' "$checks" "$watcher_cause"
       else
         printf '●  X-mode relay polling needs supervision, but %s.\n' "$watcher_cause"
+      fi
+      if [ "$mac_slept" = 1 ]; then
+        printf '●  Idle sleep freezes every worker and the watcher with it, so this reads as a slept Mac rather than a wedged watcher.\n'
       fi
       if [ "$READ_ONLY" -eq 1 ]; then
         printf '●  This read-only session should report the lapse, not repair it.\n'
@@ -288,5 +299,8 @@ if "$queue_pending"; then
   fi
 elif "$queue_branch_held"; then
   echo "NOTICE: wake rows held by the live supervision branch - it presents and acknowledges them; do not drain them from here." >&2
+fi
+if [ "$READ_ONLY" -eq 0 ] && [ "$GUARD_ACTOR" != branch ] && [ -z "${FM_MAC_KEEPAWAKE_DISABLE:-}" ]; then
+  "$SCRIPT_DIR/fm-mac-keepawake.sh" sync >/dev/null 2>&1 || true
 fi
 exit 0
