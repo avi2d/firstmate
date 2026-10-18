@@ -1591,8 +1591,9 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
 # this task's or has since been handed to another one. Firstmate therefore keeps
 # its own claim on top: one file naming the task that took the slot, written by
 # bin/fm-spawn.sh under the same project lock that allocates the slot and
-# released by bin/fm-teardown.sh when the slot goes back to the pool. Moving
-# crewmate spawns onto the durable lease is separate follow-up work.
+# released by bin/fm-teardown.sh when the slot goes back to the pool. The lease
+# below keeps a recorded slot out of later gets only once its spawn has
+# committed, so it cannot stand in for the claim.
 #
 # The claim lives at <pool>/<slot>/.fm-slot-owner - a sibling of the repo
 # checkout rather than a file inside it - so claiming a slot can never dirty the
@@ -1672,6 +1673,105 @@ fm_treehouse_slot_owner_release() {  # <worktree> <task-id>
   [ "$FM_TREEHOUSE_SLOT_OWNER" = mine ] || return 0
   marker=$(fm_treehouse_slot_owner_marker "$worktree") || return 0
   rm -f "$marker" 2>/dev/null || true
+}
+
+# The first task record other than <own-meta> that names <worktree> in its
+# worktree= or home=, across every local Firstmate home reachable from
+# <first-state>; <own-meta> need not exist. Sets FM_WORKTREE_OTHER_ID,
+# FM_WORKTREE_OTHER_META and FM_WORKTREE_OTHER_FIELD. Returns 0 when one is
+# found, 1 when none is, and 2 with FM_LOCAL_FIRSTMATE_ERROR when the homes
+# cannot be enumerated. Requires bin/fm-secondmate-registry-lib.sh and
+# bin/fm-backend.sh to be sourced first.
+fm_worktree_other_record() {  # <first-state> <own-meta> <worktree>
+  local first=$1 own=$2 worktree=$3 slot state_dir other field other_path other_slot
+  FM_WORKTREE_OTHER_ID=
+  FM_WORKTREE_OTHER_META=
+  FM_WORKTREE_OTHER_FIELD=
+  slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
+  fm_local_firstmate_state_dirs "$first" || return 2
+  for state_dir in "${FM_LOCAL_FIRSTMATE_STATES[@]}"; do
+    for other in "$state_dir"/*.meta; do
+      [ -f "$other" ] && [ ! -L "$other" ] || continue
+      # Identity, not spelling: the same record reached through a differently
+      # resolved state dir is still <own-meta>, while a differently named
+      # hardlink is another task's record.
+      [ "${other##*/}" = "${own##*/}" ] && [ "$other" -ef "$own" ] && continue
+      for field in worktree home; do
+        other_path=$(fm_meta_get "$other" "$field")
+        [ -n "$other_path" ] || continue
+        other_slot=$(CDPATH='' cd -- "$other_path" 2>/dev/null && pwd -P) || continue
+        [ "$other_slot" = "$slot" ] || continue
+        # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+        FM_WORKTREE_OTHER_ID=$(basename "$other" .meta)
+        # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+        FM_WORKTREE_OTHER_META=$other
+        # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
+        FM_WORKTREE_OTHER_FIELD=$field
+        return 0
+      done
+    done
+  done
+  return 1
+}
+
+# Treehouse lease: an interactive `treehouse get` holds its slot only while a
+# process runs inside it, so a task whose agent firstmate stopped would have its
+# recorded copy handed to the next get. A durable lease keeps the slot out of
+# every later get until `treehouse return` - which teardown already runs -
+# releases it, and leasing never touches the copy itself.
+fm_treehouse_supports_slot_lease() {
+  command -v jq >/dev/null 2>&1 || return 1
+  treehouse lease --help 2>&1 | grep -Eq '^[[:space:]]*treehouse lease <name>'
+}
+
+# Lease the pool slot holding <worktree> for <task-id>, leaving a slot that is
+# already leased as it is. Returns 0 when the slot is leased, 1 when it could
+# not be, and 2 when this Treehouse or host cannot lease at all.
+fm_treehouse_slot_lease() {  # <project-dir> <worktree> <task-id>
+  local project=$1 worktree=$2 id=$3 slot listing name path lease_id path_real
+  [ -n "$id" ] || return 1
+  slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
+  fm_treehouse_supports_slot_lease || return 2
+  listing=$(cd "$project" 2>/dev/null && treehouse status --json 2>/dev/null |
+    jq -r '.[]? | [.name // "", .path // "", .lease_id // ""] | @tsv' 2>/dev/null) || return 1
+  while IFS=$'\t' read -r name path lease_id; do
+    [ -n "$name" ] && [ -n "$path" ] || continue
+    path_real=$(CDPATH='' cd -- "$path" 2>/dev/null && pwd -P) || continue
+    [ "$path_real" = "$slot" ] || continue
+    [ -z "$lease_id" ] || return 0
+    (cd "$project" && treehouse lease "$name" --lease-holder "$id" >/dev/null 2>&1) || return 1
+    return 0
+  done <<EOF
+$listing
+EOF
+  return 1
+}
+
+# Lease every pool slot of <project-dir> that a local task record names in its
+# worktree=, so the `treehouse get` about to run cannot hand any of them out.
+# Leasing is the pool-side half of the reservation; the record check after the
+# get is what refuses a reserved copy, so a slot that cannot be leased is only
+# warned about here. Run under the project's Treehouse lock.
+fm_treehouse_reserve_recorded_slots() {  # <project-dir> <first-state>
+  local project=$1 first=$2 state_dir meta id wt rc
+  fm_local_firstmate_state_dirs "$first" || return 0
+  for state_dir in "${FM_LOCAL_FIRSTMATE_STATES[@]}"; do
+    for meta in "$state_dir"/*.meta; do
+      [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+      wt=$(fm_meta_get "$meta" worktree)
+      [ -n "$wt" ] || continue
+      fm_treehouse_pool_slot "$project" "$wt" || continue
+      id=$(basename "$meta" .meta)
+      rc=0
+      fm_treehouse_slot_lease "$project" "$wt" "$id" || rc=$?
+      case "$rc" in
+        0) ;;
+        2) return 0 ;;
+        *) echo "warning: could not lease Treehouse slot $wt for task $id; a later spawn handed that copy will refuse it" >&2 ;;
+      esac
+    done
+  done
+  return 0
 }
 
 fm_failure_episode_reset() {

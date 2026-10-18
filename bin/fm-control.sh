@@ -186,6 +186,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-secondmate-registry-lib.sh
+. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # shellcheck source=bin/fm-exclude-tools-lib.sh
@@ -1029,10 +1031,16 @@ resolve_relaunch_profile() {
 # refuses outright when any of it cannot be established.
 CHECKPOINT_LINES=()
 safe_checkpoint() {
-  local wt_real wt_top wt_top_real head head_ref head_ref_status status_output dirty children marker child_meta
+  local wt_real wt_top wt_top_real head head_ref head_ref_status status_output dirty children marker child_meta other_rc=0
   CHECKPOINT_LINES=()
   [ -n "$WT" ] || die "task $ID has no recorded worktree; refusing to relaunch without a recorded local copy to preserve"
   [ -d "$WT" ] || die "task $ID's recorded worktree $WT is missing; refusing to relaunch and lose track of its work"
+  fm_worktree_other_record "$STATE" "$META" "$WT" || other_rc=$?
+  case "$other_rc" in
+    0) die "task $ID's recorded worktree $WT is also task $FM_WORKTREE_OTHER_ID's recorded $FM_WORKTREE_OTHER_FIELD ($FM_WORKTREE_OTHER_META), so it may now hold $FM_WORKTREE_OTHER_ID's work rather than $ID's; refusing to relaunch $ID into it. Reconcile whichever record is wrong (bin/fm-crew-state.sh $ID; bin/fm-crew-state.sh $FM_WORKTREE_OTHER_ID), then relaunch" ;;
+    1) ;;
+    *) die "could not prove no other task records task $ID's worktree $WT ($FM_LOCAL_FIRSTMATE_ERROR); refusing to relaunch" ;;
+  esac
   wt_real=$(cd "$WT" 2>/dev/null && pwd -P) || die "task $ID's recorded worktree $WT cannot be resolved"
   wt_top=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null) \
     || die "task $ID's recorded worktree $WT is not a git worktree; refusing to relaunch without a checkout whose unlanded work can be accounted for"

@@ -325,7 +325,7 @@ fm_backend_herdr_presentation_default_supported() {  # <state-dir> [<session>]
   return 1
 }
 
-# fm_backend_herdr_presentation_enabled <config-dir> [<state-dir>]: the one gate
+# fm_backend_herdr_presentation_enabled <config-dir> [<state-dir>] [<session>]: the one gate
 # bin/fm-spawn.sh consults before projecting this home's children into
 # disposable one-task workspaces (docs/herdr-backend.md "Presentation spaces"
 # owns the full contract). An explicit "off" or "on" is obeyed as written; a
@@ -333,8 +333,8 @@ fm_backend_herdr_presentation_default_supported() {  # <state-dir> [<session>]
 # and otherwise falls back to the flat layout with one warning. Sets
 # FM_BACKEND_HERDR_PRESENTATION_PREFERENCE for the new-projection boundary to
 # distinguish an unconfigured default from an explicit opt-in.
-fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>]
-  local config_dir=${1:-} state_dir=${2:-} preference
+fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>] [<session>]
+  local config_dir=${1:-} state_dir=${2:-} session=${3:-} preference
   preference=$(fm_backend_herdr_presentation_preference "$config_dir")
   # bin/fm-spawn.sh reads this out-parameter after sourcing this adapter.
   # shellcheck disable=SC2034
@@ -343,7 +343,7 @@ fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>]
     off) return 1 ;;
     on) return 0 ;;
   esac
-  fm_backend_herdr_presentation_default_supported "$state_dir"
+  fm_backend_herdr_presentation_default_supported "$state_dir" "$session"
 }
 
 # fm_backend_herdr_workspace_label: the per-firstmate-HOME herdr workspace
@@ -2642,7 +2642,7 @@ EOF
 
 # fm_backend_herdr_projection_create_task: create one disposable presentation
 # workspace and its normal fm-<id> task tab without looking up, adopting, or
-# reusing any existing workspace.
+# reusing any existing workspace, in <session> (default: the ambient one).
 # The caller must atomically publish the projection journal first.
 # This function sets exact response-derived globals and prints nothing:
 #   FM_BACKEND_HERDR_PROJECTION_SESSION
@@ -2655,8 +2655,8 @@ EOF
 # CLEANUP_SAFE becomes 1 only after both creates returned complete exact IDs.
 # A missing, failed, or malformed create response stays ambiguous and grants no
 # cleanup authority.
-fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-label>
-  local cwd=$1 workspace_label=$2 task_label=$3 session out tabs panes tab_count pane_count focus_before active_tab
+fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-label> [<session>]
+  local cwd=$1 workspace_label=$2 task_label=$3 session=${4:-} out tabs panes tab_count pane_count focus_before active_tab
   FM_BACKEND_HERDR_PROJECTION_SESSION=""
   FM_BACKEND_HERDR_PROJECTION_WORKSPACE_ID=""
   FM_BACKEND_HERDR_PROJECTION_SEEDED_TAB_ID=""
@@ -2666,7 +2666,7 @@ fm_backend_herdr_projection_create_task() {  # <cwd> <workspace-label> <task-lab
   FM_BACKEND_HERDR_PROJECTION_CLEANUP_SAFE=0
 
   fm_backend_herdr_version_check || return 1
-  session=$(fm_backend_herdr_session)
+  [ -n "$session" ] || session=$(fm_backend_herdr_session)
   fm_backend_herdr_server_ensure "$session" || return 1
   focus_before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
     echo "error: herdr presentation workspace create could not capture exact active workspace and tab; refusing a focus-unsafe projection" >&2
@@ -3115,6 +3115,22 @@ fm_backend_herdr_projection_token_workspace_gone() {  # <session> <journal> <tas
     else "gone"
     end' 2>/dev/null) || return 1
   [ "$verdict" = "gone" ]
+}
+
+# fm_backend_herdr_projection_journal_orphaned: true when a task's own journal
+# names nothing the session-start sweep could still close, once its recorded
+# endpoint <session>:<pane> is proven gone - a version 1 attempt whose
+# token-bearing workspace is confirmed gone, or a version 2 binding of exactly
+# that endpoint. Unreadable, malformed, or otherwise-bound journals, and a
+# version 1 workspace still present or unreadable, are not orphans.
+fm_backend_herdr_projection_journal_orphaned() {  # <journal> <task-id> <session> <gone-endpoint>
+  local journal=$1 id=$2 session=$3 endpoint=$4
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
+  if [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 1 ]; then
+    fm_backend_herdr_projection_token_workspace_gone "$session" "$journal" "$id"
+  else
+    [ "$FM_BACKEND_HERDR_JOURNAL_SESSION:$FM_BACKEND_HERDR_JOURNAL_PANE_ID" = "$endpoint" ]
+  fi
 }
 
 # fm_backend_herdr_parse_target: split "<session>:<pane_id>" (pane_id itself

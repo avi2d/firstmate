@@ -526,6 +526,10 @@ mkdir -p "$HOME_DIR/state" "$HOME_DIR/config" \
 mkdir -p "$HOME_DIR/data/active-seeded" "$HOME_DIR/data/abort-a" "$HOME_DIR/data/abort-b" \
   "$HOME_DIR/data/lock-contended" "$HOME_DIR/data/default-on"
 touch "$HOME_DIR/state/.last-watcher-beat"
+# This suite runs more live workers than the Mac load gate admits, and that gate
+# is not under test here.
+export FM_MAC_LOAD_MOCK_5MIN=1.0
+printf '@heavy-limit 64\n' > "$HOME_DIR/config/project-capacity"
 # Presentation spaces are on by default, so the flat baseline below opts out
 # explicitly; the projected cases each restate the setting they exercise.
 printf 'off\n' > "$HOME_DIR/config/herdr-presentation-spaces"

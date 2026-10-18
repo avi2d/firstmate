@@ -1347,6 +1347,32 @@ test_missing_worktree_refuses_before_stopping_anything() {
   pass "fm-control relaunch: an unaccountable local copy refuses before the agent is touched"
 }
 
+test_relaunch_refuses_a_worktree_another_task_records() {
+  local dir out rc
+  # The incident's doubled record: two live tasks name one copy, so relaunching
+  # either could start an agent on the other's work. Oracle: the task's ask that
+  # a relaunch refuses here and names both tasks. Rejects a relaunch that stops
+  # the agent first or names only one of them.
+  dir=$(new_case shared-wt rl90)
+  add_ship_task "$dir" rl90 claude
+  sed 's/rl90/rl91/g' "$dir/home/state/rl90.meta" > "$dir/home/state/rl91.meta"
+  printf 'worktree=%s\n' "$dir/wt" >> "$dir/home/state/rl91.meta"
+  out=$(run_control "$dir" rl90 relaunch --note "x"); rc=$?
+  expect_code 1 "$rc" "a worktree another live task records should refuse"$'\n'"$out"
+  assert_contains "$out" "task rl90's recorded worktree" "the refusal should name the task being relaunched"
+  assert_contains "$out" "task rl91's recorded worktree" "the refusal should name the other task recording that copy"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "a refused relaunch must not stop the agent"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch must send nothing"
+
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" rl90 --relaunch --harness claude); rc=$?
+  expect_code 1 "$rc" "a direct --relaunch into a doubly recorded worktree should refuse"$'\n'"$out"
+  assert_contains "$out" "task rl90's recorded worktree" "the spawn refusal should name the task being relaunched"
+  assert_contains "$out" "task rl91's recorded worktree" "the spawn refusal should name the other task"
+  [ ! -s "$dir/fake/keys" ] || fail "a refused direct relaunch must send nothing to the pane"
+  pass "fm-control relaunch: a worktree another live task records refuses, naming both tasks"
+}
+
 test_missing_instructions_refuse_before_stopping_anything() {
   local dir out rc
   dir=$(new_case nobrief rl11)
@@ -2641,6 +2667,7 @@ test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
 test_cursor_session_binding_is_retired_on_a_harness_switch
 test_missing_worktree_refuses_before_stopping_anything
+test_relaunch_refuses_a_worktree_another_task_records
 test_missing_instructions_refuse_before_stopping_anything
 test_checkpoint_refusal_leaves_the_record_byte_identical
 test_checkpoint_refuses_uninspectable_head_and_status
