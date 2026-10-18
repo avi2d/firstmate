@@ -102,7 +102,8 @@ route = os.environ.get("FM_SANDBOX_ROUTE", "proxy")
 claude = (route == "claude")
 allow = [worktree, task_tmp, task_tmp + "/pi-agent", data_id, state + "/" + task + ".inbox"]
 read = [os.path.expanduser("~/.local/share/mise"), os.path.expanduser("~/.config/git"), root + "/bin"]
-for candidate in (os.path.expanduser("~/Projects/dotfiles/home/.config/git"), os.path.expanduser("~/Projects/skills"), root + "/.agents/skills"):
+# The generated -e extension imports this directory at startup.
+for candidate in (os.path.expanduser("~/Projects/dotfiles/home/.config/git"), os.path.expanduser("~/Projects/skills"), root + "/.agents/skills", root + "/.pi/extensions/lib"):
     if os.path.exists(candidate):
         read.append(candidate)
 if common and os.path.isdir(common):
@@ -125,6 +126,8 @@ filesystem = {
     "read_file": [state + "/" + task + ".pi-ext.ts"],
     "write_file": [state + "/" + task + ".turn-ended", state + "/" + task + ".busy-state", state + "/" + task + ".busy-gen"],
     "write": ["/dev"],
+    # No nono flag disables the save-profile review; "/" only mutes the offer, never grants.
+    "suppress_save_prompt": ["/"],
 }
 if common and os.path.isfile(common + "/packed-refs"):
     filesystem["allow_file"].append(common + "/packed-refs")
@@ -135,10 +138,10 @@ if kind == "ship" and mode == "no-mistakes":
         filesystem["allow"] = sorted(set(allow))
     if sock and os.path.exists(sock):
         filesystem["unix_socket"] = [sock]
+# A user profile named default shadows the built-in one, and its grants merge in with no removal.
 profile = {
-    "extends": "default",
     "meta": {"name": "fm-pi-worker-" + task, "version": "1", "description": "Firstmate per-task pi worker profile"},
-    "groups": {"include": ["node_runtime", {"name": "user_caches_macos", "when": "macos"}, "nix_runtime", "git_config", "unlink_protection"], "exclude": ["system_write_macos"]},
+    "groups": {"include": ["deny_credentials", "deny_keychains_macos", "deny_keychains_linux", "deny_browser_data_macos", "deny_browser_data_linux", "deny_macos_private", "deny_shell_history", "deny_shell_configs", "system_read_macos", "system_read_linux_core", "system_write_macos", "system_write_linux", "user_tools", "homebrew_macos", "homebrew_linux", "dangerous_commands", "dangerous_commands_macos", "dangerous_commands_linux", "node_runtime", {"name": "user_caches_macos", "when": "macos"}, "nix_runtime", "git_config", "unlink_protection"], "exclude": ["system_write_macos"]},
     "security": {"signal_mode": "isolated", "capability_elevation": False},
     "filesystem": filesystem,
     "network": {
