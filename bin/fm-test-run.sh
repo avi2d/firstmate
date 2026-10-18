@@ -787,6 +787,7 @@ tests/fm-mail-check.test.sh 7524
 tests/fm-mail.test.sh 9684
 tests/fm-muse-harness.test.sh 46548
 tests/fm-muse-signals-live-e2e.test.sh 52
+tests/fm-nm-parked-worker-wake.test.sh 4749
 tests/fm-nm-test-contract.test.sh 853
 tests/fm-omp-harness.test.sh 63796
 tests/fm-omp-primary-live-e2e.test.sh 74
