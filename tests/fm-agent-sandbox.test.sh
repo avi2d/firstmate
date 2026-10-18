@@ -92,8 +92,10 @@ python3 - "$profile" <<'EOF' || fail "rendered profile content"
 import json, os, subprocess, sys
 wt_dir = os.environ["FM_TEST_WT"]
 profile = json.load(open(sys.argv[1]))
-assert profile["extends"] == "default"
+assert "extends" not in profile
 includes = [g if isinstance(g, str) else g["name"] for g in profile["groups"]["include"]]
+for group in ("deny_credentials", "deny_keychains_macos", "deny_keychains_linux", "deny_browser_data_macos", "deny_browser_data_linux", "deny_macos_private", "deny_shell_history", "deny_shell_configs", "system_read_macos", "system_read_linux_core", "system_write_macos", "system_write_linux", "user_tools", "homebrew_macos", "homebrew_linux", "dangerous_commands", "dangerous_commands_macos", "dangerous_commands_linux"):
+    assert group in includes, group
 assert "node_runtime" in includes
 assert "system_write_macos" in profile["groups"]["exclude"]
 fs = profile["filesystem"]
