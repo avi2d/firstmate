@@ -276,6 +276,37 @@ test_check_fork_lineage_reaches_the_gate() {
   pass "fm-role.sh check: repository lineage, not remotes, identifies firstmate across forks"
 }
 
+# gh repo set-default outranks the upstream remote, as it does for gh itself,
+# in both recorded forms: base, and an explicit owner/repo.
+test_check_gh_default_outranks_upstream() {
+  local root proj user_home fork_home out rc
+  root=$(make_lineage_root ghdef-root https://github.com/someone/firstmate-fork)
+  proj=$(clone_with_origin "$root" ghdef-clone https://github.com/someone/firstmate-fork)
+  git -C "$proj" remote add upstream https://github.com/kunchenguid/firstmate
+  user_home=$(make_role_home ghdef-user)
+  fork_home=$(make_role_home ghdef-maint 'maintainer github.com/someone/firstmate-fork')
+
+  out=$(check_as "$root" "$fork_home" "$proj"); rc=$?
+  expect_code 1 "$rc" "with no recorded default the upstream remote must be the target (got: $out)"
+  assert_contains "$out" "no publication authority for github.com/kunchenguid/firstmate" \
+    "with no recorded default the refusal must name the upstream target"
+
+  git -C "$proj" config remote.origin.gh-resolved base
+  out=$(check_as "$root" "$user_home" "$proj"); rc=$?
+  expect_code 1 "$rc" "a recorded default must not authorize a user home (got: $out)"
+  assert_contains "$out" "no publication authority for github.com/someone/firstmate-fork" \
+    "a base default must make the fork the target"
+  out=$(check_as "$root" "$fork_home" "$proj"); rc=$?
+  expect_code 0 "$rc" "the fork maintainer scope must cover a fork chosen as gh default (got: $out)"
+
+  git -C "$proj" config remote.origin.gh-resolved kunchenguid/firstmate
+  out=$(check_as "$root" "$fork_home" "$proj"); rc=$?
+  expect_code 1 "$rc" "an owner/repo default naming the parent must not be covered by the fork scope (got: $out)"
+  assert_contains "$out" "no publication authority for github.com/kunchenguid/firstmate" \
+    "an owner/repo default must name that repository as the target"
+  pass "fm-role.sh check: the gh repo set-default choice is the publication target"
+}
+
 # Lineage that cannot be determined refuses, and a firstmate-lineage project
 # with no determinable publication target is refused even under consent.
 test_check_undeterminable_lineage_and_target_refuse() {
@@ -680,6 +711,7 @@ test_check_maintainer_scope_authorizes
 test_check_wrong_scope_and_remote_presence_do_not_authorize
 test_check_equivalent_remote_spellings_are_one_repo
 test_check_fork_lineage_reaches_the_gate
+test_check_gh_default_outranks_upstream
 test_check_undeterminable_lineage_and_target_refuse
 test_check_task_consent_authorizes_one_task
 test_secondmate_cannot_self_grant

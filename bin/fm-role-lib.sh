@@ -37,9 +37,10 @@
 # of the code root's history covers any fork, the parent, and any clone of
 # either. Lineage that cannot be determined (no code root history, or a shallow
 # side sharing no root) refuses rather than permits. The publication target is
-# compared only against a maintainer scope or task consent: the first remote
-# named upstream, github, or origin (the order gh prefers when resolving a
-# default repository), reduced to lowercase host/owner/repo; a local-path remote
+# compared only against a maintainer scope or task consent: the repository
+# gh repo set-default recorded, else the first remote named upstream, github,
+# or origin (the order gh prefers when resolving a default repository),
+# reduced to lowercase host/owner/repo; a local-path remote
 # is resolved one hop through that repository's own origin, and left as
 # path:<abs> when unreadable. An unknown target never permits.
 #
@@ -221,12 +222,41 @@ fm_role_git_common_dir() {
   (CDPATH='' cd -- "$common" 2>/dev/null && pwd -P) || printf '%s\n' "$common"
 }
 
+# fm_role_gh_default_url <git-dir> - URL of the repository gh repo set-default
+# recorded as remote.<name>.gh-resolved: base names that remote's repository,
+# anything else is owner/repo on that remote's host. Empty when none recorded.
+fm_role_gh_default_url() {
+  local dir=$1 line key value remote url id
+  line=$(git -C "$dir" config --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null | head -n 1)
+  [ -n "$line" ] || return 0
+  key=${line%% *}
+  value=${line#* }
+  remote=${key#remote.}
+  remote=${remote%.gh-resolved}
+  url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || return 0
+  if [ "$value" = base ]; then
+    printf '%s\n' "$url"
+    return 0
+  fi
+  id=$(fm_role_remote_identity "$url" "$dir")
+  case $id in
+    ''|path:*) return 0 ;;
+  esac
+  printf 'https://%s/%s\n' "${id%%/*}" "$value"
+}
+
 # fm_role_publication_target <git-dir> - the repository a default publication
-# (gh pr/issue, a no-mistakes PR) would reach: the first of upstream, github,
-# origin that is configured, in the order gh prefers, normalized to
-# host/owner/repo or path:<abs>. Empty when the repo has no such remote.
+# (gh pr/issue, a no-mistakes PR) would reach: the gh repo set-default choice,
+# else the first of upstream, github, origin that is configured, in the order
+# gh prefers, normalized to host/owner/repo or path:<abs>. Empty when the repo
+# has no such remote.
 fm_role_publication_target() {
-  local dir=$1 remote url=
+  local dir=$1 remote url
+  url=$(fm_role_gh_default_url "$dir")
+  if [ -n "$url" ]; then
+    fm_role_remote_identity "$url" "$dir"
+    return 0
+  fi
   for remote in upstream github origin; do
     if url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) && [ -n "$url" ]; then
       break
