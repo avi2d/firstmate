@@ -222,6 +222,8 @@ WATCH_HOME_EXISTED=0
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-check-lib.sh
 . "$SCRIPT_DIR/fm-check-lib.sh"
+# shellcheck source=bin/fm-nm-run-lib.sh
+. "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # Parent-owned secondmate missed-report guards: durable pending-reply
 # expectations created by fm-send on marked secondmate requests. The tick is
 # cheap when no records exist and never scrapes secondmate conversation.
@@ -1725,6 +1727,55 @@ busy_turn_over_age() {  # <task>
   [ "$(age_of "$f")" -ge "$BUSY_TURN_MAX_SECS" ]
 }
 
+FM_NM_PARKED_CHECK_SECS=${FM_NM_PARKED_CHECK_SECS:-120}
+case "$FM_NM_PARKED_CHECK_SECS" in ''|*[!0-9]*) FM_NM_PARKED_CHECK_SECS=120 ;; esac
+
+# Ring a paused worker whose declared wait names its no-mistakes run while that
+# run sits parked at a gate waiting on the worker itself. A still-executing run
+# stays quiet, and so does a gate owed a human answer. The steer is an ordinary
+# ladder-managed record, so the re-ring ladder repeats the doorbell and escalates
+# to a stale wake after its bounded budget when nothing reattaches; an
+# acknowledged note is reattach evidence and rings no further.
+# The run read is one bounded call per window per FM_NM_PARKED_CHECK_SECS.
+nm_parked_agent_ring() {  # <window> <task>
+  local win=$1 task=$2 key statusf last meta kind wt branch toon run_branch id gate msg rec backend
+  key=$(window_key "$win")
+  statusf="$STATE/$task.status"
+  last=$(status_declared_wait_line "$statusf")
+  status_is_paused "$last" || return 1
+  meta="$STATE/$task.meta"
+  kind=$(fm_meta_get "$meta" kind)
+  [ "${kind:-ship}" = ship ] || return 1
+  [ "$(age_of "$STATE/.nm-parked-check-$key")" -ge "$FM_NM_PARKED_CHECK_SECS" ] || return 1
+  wt=$(fm_meta_get "$meta" worktree)
+  [ -n "$wt" ] && [ -d "$wt" ] || return 1
+  branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+  [ -n "$branch" ] || return 1
+  toon=$(fm_nm_run_checked "$wt" 10 axi status)
+  date +%s > "$STATE/.nm-parked-check-$key"
+  [ -n "$toon" ] || return 1
+  run_branch=$(fm_nm_strip_quotes "$(fm_nm_field "$toon" branch)")
+  [ -n "$run_branch" ] && [ "$run_branch" = "$branch" ] || return 1
+  id=$(fm_nm_strip_quotes "$(fm_nm_field "$toon" id)")
+  case "$id" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  case "$last" in *"$id"*) ;; *) return 1 ;; esac
+  fm_nm_run_parked_awaiting_agent "$toon" || return 1
+  gate=$(printf '%s\n' "$toon" | sed -n 's/^[[:space:]]*gate:[[:space:]]*//p' | head -1)
+  gate=$(fm_nm_trim "$gate")
+  [ -n "$gate" ] || gate=$(printf '%s\n' "$toon" | grep -Eo 'awaiting_approval|fix_review' | head -1)
+  [ -n "$gate" ] || gate=$(fm_nm_strip_quotes "$(fm_nm_field "$toon" status)")
+  [ -n "$gate" ] || gate=gate
+  msg="no-mistakes run $id is parked at $gate waiting on you. Answer it with axi respond, then resume; if it already cleared, resume and this note needs no reply."
+  rec=$(fm_task_inbox_write_idempotent "$STATE" "$task" "$msg") || return 1
+  case "$rec" in */handled/*) ;; *)
+    backend=$(window_backend "$win")
+    fm_task_inbox_ring "$backend" "$win" "$rec" "$(window_label "$win")" || true
+    ;;
+  esac
+  triage_log "parked-gate ring: $task run $id at $gate"
+  return 0
+}
+
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
 # dead-agent captain-held transfer, and re-surface it once every
 # PAUSE_RESURFACE_SECS for a recheck so it cannot rot invisibly. Called on any
@@ -1744,6 +1795,7 @@ busy_turn_over_age() {  # <task>
 handle_paused_stale() {  # <window> <task> <hash>
   local win=$1 task=$2 h=$3 key statusf mtime age detail reason declaration last until now min_age
   key=$(window_key "$win")
+  nm_parked_agent_ring "$win" "$task" || true
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
@@ -2100,6 +2152,7 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   last=$(status_declared_wait_line "$STATE/$task.status")
   STALE_WAIT_DECLARATION=
   if status_is_paused "$last"; then
+    nm_parked_agent_ring "$win" "$task" || true
     declared=0
     bounded=0
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
