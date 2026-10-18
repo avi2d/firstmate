@@ -279,7 +279,8 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
       for arg in "$@"; do
         case "$arg" in
-          ". '"*"'") staged=${arg#". '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || cat "$staged" >> "$FM_FAKE_LAUNCH_LOG" ;;
+          # The spawn history-guards every typed line with one leading space.
+          ". '"*"'"|" . '"*"'") staged=${arg#". '"}; staged=${staged#" . '"}; staged=${staged%"'"}; [ ! -f "$staged" ] || cat "$staged" >> "$FM_FAKE_LAUNCH_LOG" ;;
           *'encode launch-brief'*|*'Firstmate operational input waiting: read'*) printf '%s\n' "$arg" >> "$FM_FAKE_LAUNCH_LOG" ;;
         esac
       done

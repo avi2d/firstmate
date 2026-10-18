@@ -846,8 +846,10 @@ case "${1:-}" in
         # daemon's hook would, and logs its own argv and environment for the
         # launch-content assertions. The pane shell is seeded with inherited
         # foreign markers so the launch boundary's clearing is observable.
-        ". '"*)
+        # The spawn history-guards every typed line with one leading space.
+        ". '"*|" . '"*)
           launch=${literal#". '"}
+          launch=${launch#" . '"}
           launch=${launch%"'"}
           [ -f "$launch" ] || exit 0
           cat "$launch" >>"${PTFAKE_LAUNCH_LINE_LOG:?}"

@@ -260,7 +260,7 @@ fm_busy_source_trusted() {  # <harness> <source>
 }
 
 # fm_busy_record_read: parse and validate state/<id>.busy-state against the
-# armed gen. Prints "<state> <source> <event> <seq>" for a valid record.
+# armed gen. Prints "<state> <source> <event> <seq> <reset> <ts>" for a valid record.
 # Non-zero returns name the reason on stdout instead:
 #   missing      no record file (or no armed gen and no record)
 #   malformed    unparseable line, bad tokens, or a missing armed gen for an

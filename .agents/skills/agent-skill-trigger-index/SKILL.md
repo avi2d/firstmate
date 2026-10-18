@@ -33,6 +33,8 @@ After changing a skill description, run `bin/fm-skill-trigger-index.sh --write`.
   Covers the knowledge-placement decision tree, the one-owner rule for contracts, the inline-stub pattern for content moved into a skill, AGENTS.md size discipline, trigger hygiene for new skills, and repo style rules (one sentence per line, plain dash, no agent co-author, shellcheck-clean bin scripts, colocated tests, and maintainer-verification evidence).
 - `firstmate-orca` - Agent-only operator checklist for Firstmate's Orca runtime backend.
   Use when switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
+- `firstmate-self-repo` - The firstmate-repository publication boundary.
+  Load before dispatching, promoting, relaunching, or delivering any task whose project is the firstmate repository itself, when a firstmate bug or improvement idea surfaces in ordinary use, before granting or revoking upstream publication authority, and before deciding whether any push, pull request, issue, comment, or fork may reach firstmate's own upstream.
 - `fmx-respond` - Agent-only playbook for handling Relay mentions and follow-ups.
   Use on an "x-mention <request_id>" check wake to read the stashed mention, classify it, act autonomously on eligible requests, reply or dismiss, and link spawned work.
   Also use on an "x-mode-error ..." check wake to report the Relay configuration blocker instead of answering a mention.
@@ -46,7 +48,7 @@ After changing a skill description, run `bin/fm-skill-trigger-index.sh --write`.
   Load before dispatching an interview when the captain asks to grill or interview a project's goal or design, and whenever that interview's worker reports a round or recap ready.
 - `harness-adapters` - Agent-only reference for firstmate harness operations.
   Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
-  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, agy, and devin.
+  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, agy, devin, commandcode, and polytoken.
 - `operational-home-layout` - Load when locating, interpreting, or changing Firstmate home, config, data, state, project, or generated runtime paths.
 - `process-event-sources` - Agent-only procedure for registered process-to-event sources and their wakes.
   Use before arming a long-polling source firstmate owns, before registering a deterministic condition->action watch, on any `procevent <adapter> <source-id> <sequence>` check wake, and on any `process-event source stranded` or `process-event source failed to start` check wake.

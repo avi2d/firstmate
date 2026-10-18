@@ -492,9 +492,9 @@ fm_polytoken_interrupt_task() {  # <bin-dir> <state-dir> <id> <port> <credential
   cancel=$(fm_polytoken_interrupt "$port" "$token" "$wait") || return 1
   printf '%s' "$cancel"
   gen=$(fm_busy_current_gen "$state" "$id" 2>/dev/null) || return 0
-  read -r _s _src _s before_seq <<<"$before"
+  read -r _s _src _s before_seq _ _ <<<"$before"
   now=$(fm_busy_record_read "$state" "$id" 2>/dev/null) || now=
-  read -r _s _src now_event now_seq <<<"$now"
+  read -r _s _src now_event now_seq _ _ <<<"$now"
   case "$before_seq" in ''|*[!0-9]*) before_seq=0 ;; esac
   case "$now_seq" in ''|*[!0-9]*) now_seq=0 ;; esac
   if [ "$now_event" = pre-user-prompt ] && [ "$now_seq" -gt "$before_seq" ]; then

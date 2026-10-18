@@ -171,10 +171,17 @@ assert_contains "$launch" 'encode launch-brief' 'typed launch envelope lost'
 mkdir -p "$wt/.commandcode/taste" && : > "$wt/.commandcode/taste/taste.md"
 [ -z "$(git -C "$wt" status --porcelain -- .commandcode)" ] || fail 'Command Code taste state is visible to git'
 rm -rf "$wt/.commandcode"
+# A live record reserves its copy, so each scout spawns into its own worktree.
+wt="$case_dir/wt-xhigh"
+git -C "$proj" worktree add --quiet -b commandcode-test-xhigh "$wt"
 out=$(spawn_case cc-xhigh deepseek/deepseek-v4.1-flash xhigh) || fail "spawn failed: $out"
 case "$(cat "$case_dir/cc-xhigh.launch")" in *--effort*) fail 'an unaccepted effort reached argv' ;; esac
 assert_grep 'effort=xhigh' "$home/state/cc-xhigh.meta" 'effort not recorded'
+wt="$case_dir/wt-other"
+git -C "$proj" worktree add --quiet -b commandcode-test-other "$wt"
 out=$(spawn_case cc-other moonshotai/kimi-k3 low) || fail "spawn failed: $out"
+wt="$case_dir/wt-sm"
+git -C "$proj" worktree add --quiet -b commandcode-test-sm "$wt"
 case "$(cat "$case_dir/cc-other.launch")" in *--effort*) fail 'an unverified model received an effort flag' ;; esac
 if out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" cc-sm "$proj" --secondmate --harness commandcode 2>&1)
 then fail 'Command Code secondmate launch accepted'; fi

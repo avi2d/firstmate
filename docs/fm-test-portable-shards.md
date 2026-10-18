@@ -27,6 +27,7 @@ The first holds the directly parked cases and the second holds the cases parked 
 Each weight is the slower of runs 38171532973 and 38181491961.
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
 The 2026-10-07 polytoken adapter tests carry provisional local measurements instead - 21090 ms for `tests/fm-polytoken-harness.test.sh` and the 103 ms live-guard skip for `tests/fm-polytoken-signals-live-e2e.test.sh`, both measured on the adapter-verification macOS host - until the next CI refresh replaces them with Ubuntu measurements, because they postdate the 2026-09-30 baseline.
+The 27 fork-only serial tests carry provisional local measurements from the 2026-10-18 merge verification on macOS, until CI timing artifacts replace them with Ubuntu measurements, because the fork files never appear in upstream runs.
 The session-start hint retains its pre-optimization maximum until CI measures the shorter fixture-only home-summary bound; do not discount a local speedup from CI packing weights.
 
 ## Parallel lanes
