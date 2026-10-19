@@ -2395,6 +2395,19 @@ A repo update that fast-forwards an in-repo action's bytes in place would otherw
 Every failure path - a mutated spec or action executable, a condition error past its budget, an expired deadline, a failed action, or an earlier fire whose outcome was never captured - produces a terminal captured outcome that wakes firstmate rather than a silent retry, and a durable single-fire marker claimed before the action makes restarts and re-polls unable to fire it twice.
 The adapter automates only the exact deterministic subset: anything needing judgment, and anything destructive, irreversible, or security-sensitive, keeps the ordinary check-fires-then-firstmate-decides flow, and the adapter's header and `--help` own its commands, flags, and outcome document.
 
+**Wake on tui-dash alert events**
+
+The `tui-dash` adapter, `bin/fm-procevent-tui-dash.sh`, turns each line `tui-dash alerts --json` prints into its own durable `check` wake, whose captured result is that alert event unchanged.
+A home arms it once with the configured tui-dash command, which defaults to `tui-dash` and is stored in the registration.
+The stream runs in a detached tap that outlives each runner, so tui-dash keeps its episodes and quiet clocks between alerts instead of refiring them.
+The tap stops when no runner has polled it for `FM_TUI_DASH_TAP_IDLE_SECONDS`, 1800 by default, or when its registration is gone.
+A poll window that sees no alert lasts `FM_TUI_DASH_POLL_WINDOW_SECONDS`, 300 by default, and the runner then polls again under the same claim.
+Alert events never end the source.
+A stream command that exits by itself produces one terminal stopped result carrying its exit code and stderr tail.
+Firstmate records its judgment of an alert with the adapter's `verdict` command, which appends to the tui-dash verdict record the dashboard panel reads and then acknowledges the result.
+That record and every alert rule belong to tui-dash, which knows nothing of firstmate, and the adapter's `--help` owns the record's path and line shape.
+A runner killed after an event left the spool and before its durable capture loses that one event, and a tap restarted after it stopped starts every tui-dash rule fresh.
+
 **Capture and publish results**
 
 This section is the single owner of the runner's operating contract.
