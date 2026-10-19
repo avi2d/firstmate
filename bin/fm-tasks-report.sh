@@ -97,13 +97,25 @@ if command -v no-mistakes >/dev/null 2>&1; then
     home=${row%%$'\t'*}
     rest=${row#*$'\t'}
     id=${rest%%$'\t'*}
+    rest=${rest#*$'\t'}
+    branch=${rest%%$'\t'*}
     worktree=${rest#*$'\t'}
     [ -d "$worktree" ] || continue
-    runs=$(cd "$worktree" 2>/dev/null && no-mistakes axi status 2>/dev/null | grep -E '^\s*"[A-Z0-9]+",[^,]+,(running|fixing),' || true)
+    nm_out=$(cd "$worktree" 2>/dev/null && no-mistakes axi status 2>/dev/null || true)
+    [ -n "$nm_out" ] || continue
+    block_id=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*id: "([A-Z0-9]+)".*/\1/p' | head -1)
+    block_status=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*status: ([A-Za-z]+).*/\1/p' | head -1)
+    block_branch=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*branch: ([^[:space:]]+).*/\1/p' | head -1)
+    runs=$(printf '%s' "$nm_out" | grep -E '^\s*"[A-Z0-9]+",[^,]+,(running|fixing),' || true)
+    if [ -n "$block_id" ] && { [ "$block_status" = running ] || [ "$block_status" = fixing ]; }; then
+      runs=$(printf '  "%s",%s,%s,\n%s' "$block_id" "$block_branch" "$block_status" "$runs")
+    fi
     [ -n "$runs" ] || continue
     while IFS= read -r line; do
       run=$(printf '%s' "$line" | sed -E 's/^\s*"([A-Z0-9]+)".*/\1/')
+      run_branch=$(printf '%s' "$line" | sed -E 's/^\s*"[A-Z0-9]+",([^,]+),.*/\1/')
       [ -n "$run" ] || continue
+      [ "$run_branch" = "$branch" ] || continue
       for folder in "$HOME"/.no-mistakes/worktrees/*/"$run"; do
         [ -d "$folder" ] || continue
         key="$home"$'\x1f'"$id"
@@ -111,7 +123,7 @@ if command -v no-mistakes >/dev/null 2>&1; then
         mv "$PIPES.new" "$PIPES"
       done
     done <<<"$runs"
-  done < <(jq -n -r '[inputs | .fm_home as $h | .tasks[]? | select(.paths.worktree.present == true) | "\($h)\t\(.id)\t\(.paths.worktree.path)" ] | .[]' "$SNAPS_DIR"/*.json)
+  done < <(jq -n -r '[inputs | .fm_home as $h | .tasks[]? | select(.paths.worktree.present == true) | (.branch // "") as $b | "\($h)\t\(.id)\t\($b)\t\(.paths.worktree.path)" ] | .[]' "$SNAPS_DIR"/*.json)
 fi
 
 jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
@@ -125,7 +137,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
         | select((.spawn_gen // "") | test("^s[0-9]+"))
         | . as $t
         | ($t.spawn_gen | capture("^s(?<e>[0-9]+)") | .e | tonumber | strftime("%Y-%m-%dT%H:%M:%SZ")) as $started
-        | (if ($t.backlog.since // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") then $t.backlog.since + "T00:00:00Z" else null end) as $since
+        | (if (($t.first_spawn_gen // "") | test("^s[0-9]+")) then ($t.first_spawn_gen | capture("^s(?<e>[0-9]+)") | .e | tonumber | strftime("%Y-%m-%dT%H:%M:%SZ")) else null end) as $first
         | (($t.current_state.state // "") as $raw
           | ($t.hints // {}) as $h
           | (if $raw == "working" then "working"
@@ -143,10 +155,8 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           state: $st,
           detail: ((($t.current_state.detail // "") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           startedAt: $started,
-          firstStartedAt: ([$started, $since] | map(select(. != null)) | min),
-          endedAt: (if $st == "done"
-            then (if ($t.backlog.completion.date // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") then $t.backlog.completion.date + "T23:59:59Z" else $generated_at end)
-            else null end),
+          firstStartedAt: ($first // $started),
+          endedAt: (if $st == "done" then $generated_at else null end),
           folders: ([($t.paths.worktree.path // null) | select(. != null and . != "")] + $extra | unique),
           branches: ([($t.branch // "") | select(. != "")])
         }],
@@ -155,9 +165,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
         | select((.id as $id | $live | index($id) | not))
         | select((.completion.date // "") >= $yesterday)
         | . as $r
-        | (if ($r.completion.date // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") then $r.completion.date else null end) as $cdate
-        | (if ($r.since // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$") then $r.since + "T00:00:00Z" else null end) as $since
-        | (if $cdate == null then $generated_at else $cdate + "T23:59:59Z" end) as $ended
+        | $generated_at as $ended
         | {
           id: $r.id,
           title: ((($r.title // $r.id) | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
@@ -165,8 +173,8 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           kind: (($r.kind // "") | tostring),
           state: "done",
           detail: ((($r.completion.verb // "done") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
-          startedAt: ($since // $ended),
-          firstStartedAt: ($since // $ended),
+          startedAt: $ended,
+          firstStartedAt: $ended,
           endedAt: $ended,
           folders: [],
           branches: ["fm/" + $r.id]

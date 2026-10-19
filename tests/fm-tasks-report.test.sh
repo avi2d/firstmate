@@ -21,21 +21,35 @@ unset FM_TASKS_HOMES
 TODAY=$(date -u +%F)
 PLUS7=$(jq -n --arg d "$TODAY" '$d | strptime("%Y-%m-%d") | mktime + 7*86400 | strftime("%Y-%m-%d")' -r)
 MINUS3=$(jq -n --arg d "$TODAY" '$d | strptime("%Y-%m-%d") | mktime - 3*86400 | strftime("%Y-%m-%d")' -r)
-NOON=$(jq -n --arg d "$TODAY" '$d + "T12:00:00Z" | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime')
+NOW_EPOCH=$(date -u +%s)
+SPAWN_E=$((NOW_EPOCH - 3600))
+FIRST_E=$((NOW_EPOCH - 7200))
+SPAWN_T=$(date -u -d "@$SPAWN_E" +%Y-%m-%dT%H:%M:%SZ)
+FIRST_T=$(date -u -d "@$FIRST_E" +%Y-%m-%dT%H:%M:%SZ)
 
 WT_A="$TMP_ROOT/wt-a"
+WT_B="$TMP_ROOT/wt-b"
 WT_C="$TMP_ROOT/wt-c"
-mkdir -p "$WT_A" "$WT_C"
-RUN_LIVE="01K7LIVE000000000000000001"
-RUN_DONE="01K7DONE000000000000000002"
-mkdir -p "$HOME_FIX/.no-mistakes/worktrees/deadbee/$RUN_LIVE"
-mkdir -p "$HOME_FIX/.no-mistakes/worktrees/deadbee/$RUN_DONE"
+mkdir -p "$WT_A" "$WT_B" "$WT_C"
+BLOCK_LIVE="01M59YM5QJX75TTNNAW2ZQ0AKH"
+BLOCK_DONE="01M59OLD0000000000000000000"
+CSV_LIVE="9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z"
+CSV_OTHER="8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y8Y"
+mkdir -p "$HOME_FIX/.no-mistakes/worktrees/deadbee/$BLOCK_LIVE"
+mkdir -p "$HOME_FIX/.no-mistakes/worktrees/deadbee/$BLOCK_DONE"
+mkdir -p "$HOME_FIX/.no-mistakes/worktrees/deadbee/$CSV_LIVE"
+mkdir -p "$HOME_FIX/.no-mistakes/worktrees/deadbee/$CSV_OTHER"
 
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 cat > "$FAKEBIN/no-mistakes" <<SH
 #!/usr/bin/env bash
-if [ "\${1:-}" = "axi" ]; then
-  printf '%s\n' 'current_branch: main' 'runs_on_current_branch: 2' 'runs[2]{id,branch,status,head,pr}:' '  "$RUN_LIVE",fm/alpha-ship,running,aaaa1111,""' '  "$RUN_DONE",fm/alpha-ship,completed,bbbb2222,""'
+if [ "\${1:-}" = "axi" ] && [ "\$PWD" = "$WT_A" ]; then
+  printf '%s\n' 'run:' '  id: "$BLOCK_LIVE"' '  branch: fm/alpha-ship' '  status: running' '  head: abc123'
+  printf '%s\n' 'run:' '  id: "$BLOCK_DONE"' '  branch: fm/alpha-ship' '  status: completed' '  head: def456'
+  exit 0
+fi
+if [ "\${1:-}" = "axi" ] && [ "\$PWD" = "$WT_B" ]; then
+  printf '%s\n' 'runs[2]{id,branch,status,head}:' '  "$CSV_LIVE",fm/beta-wait,running,aaaa1111' '  "$CSV_OTHER",fm/beta-other,running,bbbb2222'
   exit 0
 fi
 exit 1
@@ -69,7 +83,7 @@ cat > "$ALPHA_SNAP" <<JSON
   "tasks": [
     {
       "id": "alpha-ship", "kind": "ship", "branch": "fm/alpha-ship",
-      "project": "/w/checks", "spawn_gen": "s${NOON}.1.1",
+      "project": "/w/checks", "spawn_gen": "s${SPAWN_E}.1.1", "first_spawn_gen": "s${FIRST_E}.9.9",
       "paths": {"worktree": {"present": true, "path": "$WT_A"}},
       "current_state": {"state": "working", "detail": "validating"},
       "hints": {"blocked_event": false, "pending_decision": false},
@@ -77,7 +91,7 @@ cat > "$ALPHA_SNAP" <<JSON
     },
     {
       "id": "alpha-parked", "kind": "scout", "branch": "fm/alpha-parked",
-      "project": "/w/tui-dash", "spawn_gen": "s${NOON}.2.2",
+      "project": "/w/tui-dash", "spawn_gen": "s${SPAWN_E}.2.2",
       "paths": {"worktree": {"present": false}},
       "current_state": {"state": "parked", "detail": ""},
       "hints": {"blocked_event": false, "pending_decision": false},
@@ -85,7 +99,7 @@ cat > "$ALPHA_SNAP" <<JSON
     },
     {
       "id": "alpha-paused", "kind": "ship", "branch": "fm/alpha-paused",
-      "project": "/w/checks", "spawn_gen": "s${NOON}.3.3",
+      "project": "/w/checks", "spawn_gen": "s${SPAWN_E}.3.3",
       "paths": {"worktree": {"present": true, "path": "$WT_C"}},
       "current_state": {"state": "paused", "detail": "waiting on load"},
       "hints": {"blocked_event": false, "pending_decision": true},
@@ -106,15 +120,15 @@ cat > "$BETA_SNAP" <<JSON
   "tasks": [
     {
       "id": "beta-wait", "kind": "ship", "branch": "fm/beta-wait",
-      "project": "/w/website", "spawn_gen": "s${NOON}.4.4",
-      "paths": {"worktree": {"present": false}},
+      "project": "/w/website", "spawn_gen": "s${SPAWN_E}.4.4",
+      "paths": {"worktree": {"present": true, "path": "$WT_B"}},
       "current_state": {"state": "unknown", "detail": ""},
       "hints": {"blocked_event": false, "pending_decision": false},
       "backlog": {"title": "Beta wait", "since": null, "completion": {"date": null, "verb": null}}
     },
     {
       "id": "beta-blocked", "kind": "ship", "branch": "fm/beta-blocked",
-      "project": "/w/website", "spawn_gen": "s${NOON}.5.5",
+      "project": "/w/website", "spawn_gen": "s${SPAWN_E}.5.5",
       "paths": {"worktree": {"present": false}},
       "current_state": {"state": "working", "detail": "stuck"},
       "hints": {"blocked_event": true, "pending_decision": false},
@@ -122,7 +136,7 @@ cat > "$BETA_SNAP" <<JSON
     },
     {
       "id": "beta-livedone", "kind": "ship", "branch": "fm/beta-livedone",
-      "project": "/w/skills", "spawn_gen": "s${NOON}.6.6",
+      "project": "/w/skills", "spawn_gen": "s${SPAWN_E}.6.6",
       "paths": {"worktree": {"present": false}},
       "current_state": {"state": "done", "detail": "landed"},
       "hints": {"blocked_event": false, "pending_decision": false},
@@ -149,17 +163,23 @@ jq -e '[.tasks[].state] | inside(["working","waiting","parked","blocked","done"]
 jq -e '[.tasks[] | select(.state == "done") | .endedAt != null] | all' "$OUT" >/dev/null || fail "done tasks carry endedAt"
 jq -e '[.tasks[] | select(.state != "done") | .endedAt == null] | all' "$OUT" >/dev/null || fail "live tasks carry null endedAt"
 jq -e '[.tasks[] | ((.startedAt | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) as $s | (.firstStartedAt | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) as $f | $f <= $s)] | all' "$OUT" >/dev/null || fail "firstStartedAt precedes startedAt"
+jq -e '[.tasks[].firstStartedAt | test("T00:00:00Z$")] | any | not' "$OUT" >/dev/null || fail "no task starts at midnight"
+jq -e --arg now "$(date -u +%s)" '[.tasks[] | select(.state == "done") | ((.endedAt | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) | . <= ($now | tonumber))] | all' "$OUT" >/dev/null || fail "done tasks end no later than the read"
 jq -e '[.tasks[].id] | contains(["alpha-ship","alpha-parked","alpha-paused","beta-wait","beta-blocked","beta-livedone","alpha-done-recent"])' "$OUT" >/dev/null || fail "live and recent-done tasks listed"
 jq -e '[.tasks[].id] | index("alpha-done-old") | not' "$OUT" >/dev/null || fail "done tasks older than a day dropped"
 jq -e '.tasks[] | select(.id == "alpha-ship") | .state == "working" and .branches == ["fm/alpha-ship"] and .project == "checks"' "$OUT" >/dev/null || fail "alpha-ship identity"
-jq -e --arg wt "$WT_A" --arg run "$HOME_FIX/.no-mistakes/worktrees/deadbee/$RUN_LIVE" '.tasks[] | select(.id == "alpha-ship") | .folders | contains([$wt, $run])' "$OUT" >/dev/null || fail "alpha-ship folders hold worktree and live pipeline folder"
-jq -e --arg dead "$HOME_FIX/.no-mistakes/worktrees/deadbee/$RUN_DONE" '.tasks[] | select(.id == "alpha-ship") | .folders | index($dead) | not' "$OUT" >/dev/null || fail "completed pipeline folder excluded"
-jq -e --arg since "${MINUS3}T00:00:00Z" '.tasks[] | select(.id == "alpha-ship") | .firstStartedAt == $since' "$OUT" >/dev/null || fail "relaunch-proof firstStartedAt from since"
+jq -e --arg wt "$WT_A" --arg run "$HOME_FIX/.no-mistakes/worktrees/deadbee/$BLOCK_LIVE" '.tasks[] | select(.id == "alpha-ship") | .folders | contains([$wt, $run])' "$OUT" >/dev/null || fail "alpha-ship folders hold worktree and running run-block folder"
+jq -e --arg dead "$HOME_FIX/.no-mistakes/worktrees/deadbee/$BLOCK_DONE" '.tasks[] | select(.id == "alpha-ship") | .folders | index($dead) | not' "$OUT" >/dev/null || fail "completed run-block folder excluded"
+jq -e --arg first "${FIRST_T}" --arg start "${SPAWN_T}" '.tasks[] | select(.id == "alpha-ship") | .firstStartedAt == $first and .startedAt == $start' "$OUT" >/dev/null || fail "firstStartedAt reads the earliest recorded launch, startedAt the latest spawn"
+jq -e --arg wt "$WT_B" --arg run "$HOME_FIX/.no-mistakes/worktrees/deadbee/$CSV_LIVE" '.tasks[] | select(.id == "beta-wait") | .folders | contains([$wt, $run])' "$OUT" >/dev/null || fail "beta-wait folders hold worktree and running list folder"
+jq -e --arg other "$HOME_FIX/.no-mistakes/worktrees/deadbee/$CSV_OTHER" '.tasks[] | select(.id == "beta-wait") | .folders | index($other) | not' "$OUT" >/dev/null || fail "other-branch pipeline folder excluded"
+jq -e --arg start "${SPAWN_T}" '.tasks[] | select(.id == "alpha-parked") | .firstStartedAt == $start and .startedAt == $start' "$OUT" >/dev/null || fail "missing first launch falls back to the latest spawn"
 jq -e '.tasks[] | select(.id == "alpha-parked") | .state == "parked" and .folders == []' "$OUT" >/dev/null || fail "parked task without worktree"
 jq -e '.tasks[] | select(.id == "alpha-paused") | .state == "waiting"' "$OUT" >/dev/null || fail "paused maps to waiting"
 jq -e '.tasks[] | select(.id == "beta-wait") | .state == "waiting"' "$OUT" >/dev/null || fail "unknown maps to waiting"
 jq -e '.tasks[] | select(.id == "beta-blocked") | .state == "blocked"' "$OUT" >/dev/null || fail "blocked event escalates to blocked"
-jq -e --arg end "${TODAY}T23:59:59Z" '.tasks[] | select(.id == "beta-livedone") | .state == "done" and .endedAt == $end' "$OUT" >/dev/null || fail "live done task ends on completion date"
+jq -e --arg start "${SPAWN_T}" '.tasks[] | select(.id == "beta-livedone") | .state == "done" and .startedAt == $start and .firstStartedAt == $start and .startedAt < .endedAt' "$OUT" >/dev/null || fail "live done task starts at spawn and ends at the read"
+jq -e '.tasks[] | select(.id == "alpha-done-recent") | .startedAt == .endedAt and .firstStartedAt == .endedAt' "$OUT" >/dev/null || fail "finished record without launch instants reads start as end"
 jq -e '.tasks[] | select(.id == "alpha-done-recent") | .state == "done" and .branches == ["fm/alpha-done-recent"] and .folders == []' "$OUT" >/dev/null || fail "recent done keeps branch, drops folders"
 jq -e --arg at "${PLUS7}T00:00:00Z" '.schedules == [{name: "alpha-hold", at: $at, detail: "revisit"}]' "$OUT" >/dev/null || fail "dated hold listed as schedule"
 jq -e --arg a "$ALPHA" --arg b "$BETA" '(.overhead | sort_by(.name)) == [{name: "fm-alpha", folders: [$a]}, {name: "fm-beta", folders: [$b]}]' "$OUT" >/dev/null || fail "overhead names each home"
