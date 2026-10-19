@@ -13,6 +13,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
+| Merging green yolo pull requests without a turn | [Merge on green](#merge-on-green) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -575,6 +576,37 @@ See [`trace-context.md`](trace-context.md) for carrier semantics, supported rout
 ## Fleet activity ledger (config/fleet-ledger)
 
 See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, and limits.
+
+## Merge on green
+
+A task pull request on a `+yolo` project merges itself once it is green, with no supervision turn, in a main home and in every secondmate home alike.
+`bin/fm-merge-on-green.sh` decides and acts, and `bin/fm-procevent-merge-on-green.sh` runs it every 20 seconds as this home's process-event source, so it keeps running between supervision turns and stops when the home goes still.
+`bin/fm-pr-check.sh` arms that source when it records a pull request for a yolo task, and an existing home arms it once with `bin/fm-procevent-merge-on-green.sh arm`.
+Each home sweeps only the tasks in its own `state/`, and the source id carries a hash of that state directory because process-event claims are machine-wide.
+
+A pull request merges only when every one of these holds, each read by the program rather than judged by an agent:
+
+- The task is a ship task recording `yolo=on`, and the project's registry entry still carries `+yolo`.
+- The pull request is on GitHub, open, and not a draft.
+- At least one check has reported, none is still running, and every one passed.
+- The task is not held for the captain and has no open `needs-decision` or `blocked` key.
+- The worker's latest `done:` line names this pull request, and no `working`, `paused`, or `failed` report follows it.
+- The worker's latest `done:` line does not flag a credential, token, secret, auth, permission, sandbox, or isolation change.
+  A mention counts as a flag unless its clause negates it.
+- The diff touches no path naming a credential, auth, token, secret, sandbox, runner isolation, key, or `.env` file, and changes no `permissions:` line or scope inside a workflow.
+- The branch does not conflict with its base.
+- The same head read green on two sweeps at least `FM_MERGE_ON_GREEN_SETTLE_SECS` apart, so a check that registers late cannot be raced.
+  The default is 10 seconds.
+
+Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the away record, and every check before the forge call.
+A head that is behind its base is first brought up to date with `gh pr update-branch`, which merges the base into the branch and never rebases, and merges once its new head is green.
+A refused merge or a failed update is retried at the same head only after `FM_MERGE_ON_GREEN_RETRY_SECS`, 300 seconds by default.
+Every other pull request, including a red, pending, draft, conflicting, held, or boundary-touching one, stays open on the supervised path.
+
+The merge outcome reaches supervision exactly as a merge firstmate runs by hand: a main home gets its `check: merge landed:` wake, and a secondmate home reports upward and also wakes itself so its own cleanup and fleet sync run.
+Each task's latest verdict is kept in `state/<task-id>.merge-on-green`, and every verdict change, merge, refusal, and update is appended to `state/merge-on-green.log`.
+`bin/fm-merge-on-green.sh assess <task-id>` prints one task's verdict without acting.
+GitLab, Forgejo, and Gerrit pull requests are not merged on green.
 
 ## Firstmate role (config/firstmate-role)
 
