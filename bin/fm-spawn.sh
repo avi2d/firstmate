@@ -6905,4 +6905,10 @@ SPAWN_ACCOUNT=
 # Opt-in Herdr project groups (docs/herdr-backend.md "Project groups") tag the
 # new endpoint now rather than at the next watcher poll; off costs one file test.
 [ ! -e "$CONFIG/herdr-project-groups" ] || [ "$BACKEND" != herdr ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-herdr-groups.sh" sync "$ID" || true
+# A yolo ship's green pull request merges with no supervision turn, so its
+# merge watch starts with the task rather than with the later recording turn,
+# which a missed wake can skip until the pull request sits green and unmerged.
+if [ "$KIND" = ship ] && [ "$YOLO" = on ] && [ "$MODE" != local-only ] && [ "$EXTERNAL_REVIEW" = 0 ]; then
+  FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-procevent-merge-on-green.sh" arm >/dev/null 2>&1 || true
+fi
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT$SPAWN_ACCOUNT"
