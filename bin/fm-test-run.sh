@@ -1633,6 +1633,7 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-extension-binding.test.sh
       printf '%s\n' __script__:fm-procevent.test.sh
       printf '%s\n' __script__:fm-procevent-when.test.sh
+      printf '%s\n' __script__:fm-procevent-tui-dash.test.sh
       printf '%s\n' __script__:fm-remote-reply.test.sh
       ;;
     bin/fm-timeout-lib.sh)

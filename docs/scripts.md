@@ -90,6 +90,7 @@ The shared no-mistakes gate lifecycle boundary is summarized in [architecture.md
 | `fm-procevent.sh`        | Register, supervise, capture, classify, acknowledge, and safely retire built-in or explicitly bound process-event sources |
 | `fm-procevent-remote-reply.sh` | Relay the remote-secondmate status stream through non-destructive process-event deltas |
 | `fm-procevent-quota.sh`  | Wake Firstmate when tracked quota drops below a threshold, is exhausted, or cannot be polled |
+| `fm-procevent-tui-dash.sh` | Wake Firstmate on each tui-dash alert event and record its verdict where the tui-dash panel reads it |
 | `fm-procevent-when.sh`   | Fire a trust-bound deterministic action at most once when its registered condition holds, then wake with the outcome |
 | `fm-procevent-merge-on-green.sh` | Keep this home's merge-on-green sweep running between supervision turns |
 | `fm-merge-on-green.sh`   | Merge a green `+yolo` task pull request through `fm-pr-merge.sh`, or update a behind head by merging its base |
