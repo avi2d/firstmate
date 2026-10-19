@@ -15,7 +15,12 @@ write_view() {  # <case> <head> <rollup-json> [draft] [mergeable]
     "${4:-false}" "${5:-MERGEABLE}" "$2" "$3" > "$1/view.json"
 }
 
-green_rollup='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-19T10:00:00Z"}]'
+green_rollup='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-19T10:00:00Z","completedAt":"2026-10-19T10:01:00Z"},{"__typename":"StatusContext","context":"commitlint","state":"SUCCESS","startedAt":"2026-10-19T10:00:30Z"}]'
+
+green_rollup_finished_at() {  # <epoch>
+  printf '[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-19T10:00:00Z","completedAt":"%s"}]' \
+    "$(date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ)"
+}
 red_rollup='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-19T10:00:00Z"}]'
 pending_rollup='[{"__typename":"CheckRun","name":"ci","status":"IN_PROGRESS","conclusion":null,"startedAt":"2026-10-19T10:00:00Z"}]'
 
@@ -111,25 +116,35 @@ expect_stays_open() {  # <case> <verdict> <reason-fragment> <label>
   expect_verdict "$1" "$2" "$3" "$4"
 }
 
-test_green_pull_request_merges_on_the_second_green_sweep() {
+test_settled_green_pull_request_merges_on_its_first_sweep() {
   local c
   c=$(make_case green)
   sweep "$c"
-  [ "$(merge_calls "$c")" -eq 0 ] || fail "green: merged on the first sighting, before the green state settled"
-  sweep "$c"
-  [ "$(merge_calls "$c")" -eq 1 ] || fail "green: expected one merge, got: $(cat "$c/gh.log")"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "green: expected one merge on the first sweep, got: $(cat "$c/gh.log")"
   grep -qxF "pr merge 9 --repo example/repo --match-head-commit $HEAD_A --squash" "$c/gh.log" \
     || fail "green: the merge was not the guarded bin/fm-pr-merge.sh call: $(grep '^pr merge' "$c/gh.log")"
   assert_grep "merge landed: task-x1 $URL" "$c/state/.wake-queue" "green: the main home got no merge outcome"
   assert_grep " task-x1 merged $URL" "$c/state/merge-on-green.log" "green: the merge was not logged"
   sweep "$c"
   [ "$(merge_calls "$c")" -eq 1 ] || fail "green: an already merged pull request was merged again"
-  pass "a green +yolo pull request merges through fm-pr-merge.sh on the second green sweep"
+  pass "a green +yolo pull request whose last check finished past the settle window merges through fm-pr-merge.sh on its first sweep"
+}
+
+test_green_without_a_settled_finish_merges_on_the_second_sighting() {
+  local c
+  c=$(make_case unfinished-at)
+  write_view "$c" "$HEAD_A" "$(green_rollup_finished_at $(($(date +%s) + 3600)))"
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 0 ] || fail "unfinished-at: merged on the first sighting of a check that had not settled"
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "unfinished-at: a head green on two sweeps did not merge: $(cat "$c/gh.log")"
+  pass "a green head whose last finish is not yet settled merges on its second green sighting"
 }
 
 test_unsettled_green_waits() {
   local c
   c=$(make_case unsettled)
+  write_view "$c" "$HEAD_A" "$(green_rollup_finished_at "$(date +%s)")"
   SETTLE=3600 sweep "$c"
   SETTLE=3600 sweep "$c"
   [ "$(merge_calls "$c")" -eq 0 ] || fail "unsettled: merged before the settle window elapsed"
@@ -141,7 +156,11 @@ test_red_pull_request_stays_open() {
   c=$(make_case red)
   write_view "$c" "$HEAD_A" "$red_rollup"
   expect_stays_open "$c" skip "checks are not green: ci" red
-  pass "a red pull request stays open"
+  [ "$(grep -c '^pr view ' "$c/gh.log")" -eq 2 ] \
+    || fail "red: a red pull request was read again inside the recheck window: $(cat "$c/gh.log")"
+  FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS=0 sweep "$c"
+  [ "$(grep -c '^pr view ' "$c/gh.log")" -eq 3 ] || fail "red: the recheck window never reopened"
+  pass "a red pull request stays open and is read again only on the slower recheck cadence"
 }
 
 test_pending_and_unreported_checks_wait() {
@@ -282,11 +301,9 @@ test_adapter_polls_silently_while_work_remains() {
   other_id=$(run_in "$other" "$ROOT/bin/fm-procevent-merge-on-green.sh" source-id)
   case "$id" in merge-on-green-????????????????) ;; *) fail "adapter: unexpected source id $id" ;; esac
   [ "$id" != "$other_id" ] || fail "adapter: two homes share one machine-wide source id"
-  SETTLE=3600
-  export SETTLE
+  write_view "$c" "$HEAD_A" "$pending_rollup"
   rc=0
   out=$(run_in "$c" "$ROOT/bin/fm-procevent-merge-on-green.sh" poll --home "$c/home" --state "$c/state" --interval 1 --lifetime 1) || rc=$?
-  unset SETTLE
   expect_code 75 "$rc" "adapter: an ended poll window must exit empty for the runner to relisten"
   [ -z "$out" ] || fail "adapter: poll printed a result while a pull request was left to merge: $out"
   [ -f "$c/state/task-x1.merge-on-green" ] || fail "adapter: poll did not sweep the home"
@@ -327,7 +344,8 @@ test_pr_check_arms_the_source_for_a_yolo_pull_request() {
   pass "fm-pr-check.sh arms merge on green only for a yolo task"
 }
 
-test_green_pull_request_merges_on_the_second_green_sweep
+test_settled_green_pull_request_merges_on_its_first_sweep
+test_green_without_a_settled_finish_merges_on_the_second_sighting
 test_unsettled_green_waits
 test_red_pull_request_stays_open
 test_pending_and_unreported_checks_wait

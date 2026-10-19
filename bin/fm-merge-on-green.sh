@@ -27,11 +27,15 @@ Usage:
   fm-merge-on-green.sh pending
 
 sweep   Assess every task in this home that recorded a GitHub pr= and act:
-        merge a pull request seen green at the same head on two sweeps at
-        least FM_MERGE_ON_GREEN_SETTLE_SECS apart (default 10) through
-        bin/fm-pr-merge.sh, or bring a head that is behind its base up to date
-        with gh pr update-branch, which merges the base in and never rebases.
+        merge a green pull request through bin/fm-pr-merge.sh once it is
+        settled, or bring a head that is behind its base up to date with
+        gh pr update-branch, which merges the base in and never rebases.
+        Green is settled when its last check finished at least
+        FM_MERGE_ON_GREEN_SETTLE_SECS ago (default 10), or when the same head
+        read green on two sweeps that far apart.
         Every other verdict leaves the pull request on the supervised path.
+        A pull request skipped for what the forge reported is read again only
+        after FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS (default 60).
         A failed merge or update is retried at the same head only after
         FM_MERGE_ON_GREEN_RETRY_SECS (default 300).
         Verdict changes are appended to state/merge-on-green.log.
@@ -49,6 +53,7 @@ EOF
 
 SETTLE_SECS=${FM_MERGE_ON_GREEN_SETTLE_SECS:-10}
 RETRY_SECS=${FM_MERGE_ON_GREEN_RETRY_SECS:-300}
+SKIP_RECHECK_SECS=${FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS:-60}
 FORGE_TIMEOUT=${FM_MERGE_ON_GREEN_FORGE_TIMEOUT:-20}
 LOG_MAX_BYTES=262144
 LOG="$STATE/merge-on-green.log"
@@ -59,6 +64,7 @@ URL=
 HEAD=
 DIFF_HEAD=
 DIFF_RESULT=
+CHECKS_DONE_AT=0
 
 meta_value() {  # <meta> <key>
   local line value=''
@@ -148,7 +154,9 @@ diff_touches_boundary() {
   '
 }
 
-# pending, red:<names>, none, or green for one live pull-request view.
+# pending, red:<names>, none, or green for one live pull-request view, then a
+# tab and the epoch the last check finished, or 0 when a check run's finish is
+# unreported.
 checks_state() {  # <pull-request-json>
   printf '%s' "$1" | jq -r '
     if (.statusCheckRollup | type) != "array" then error("no check rollup") else . end
@@ -156,17 +164,21 @@ checks_state() {  # <pull-request-json>
         | if .__typename == "CheckRun" then
             {name: (.name // ""),
              pending: (.status != "COMPLETED"),
-             ok: (.status == "COMPLETED" and (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED"))}
+             ok: (.status == "COMPLETED" and (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED")),
+             at: (.completedAt // "")}
           else
             {name: (.context // ""),
              pending: (.state == "PENDING" or .state == "EXPECTED"),
-             ok: (.state == "SUCCESS")}
-          end ]
-    | if length == 0 then "none"
-      elif any(.[]; .pending) then "pending"
-      elif all(.[]; .ok) then "green"
-      else "red:" + ([.[] | select(.ok | not) | .name] | unique | join(", "))
-      end
+             ok: (.state == "SUCCESS"),
+             at: (.startedAt // .createdAt // "")}
+          end
+        | .at |= (if test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}(\\.[0-9]+)?Z$") and (startswith("0001") | not)
+                  then (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) else 0 end) ]
+    | (if length == 0 then "none"
+       elif any(.[]; .pending) then "pending"
+       elif all(.[]; .ok) then "green"
+       else "red:" + ([.[] | select(.ok | not) | .name] | unique | join(", "))
+       end) + "\t" + (if length > 0 and all(.[]; .at > 0) then (map(.at) | max | tostring) else "0" end)
   ' 2>/dev/null
 }
 
@@ -185,9 +197,10 @@ REC_DIFF_RESULT=
 REC_ATTEMPT_KIND=
 REC_ATTEMPT_HEAD=
 REC_ATTEMPT_AT=
+REC_CHECKED_AT=
 record_load() {  # <task-id>
   local file key value
-  REC_VERDICT='' REC_HEAD='' REC_SINCE='' REC_REASON='' REC_DIFF_HEAD='' REC_DIFF_RESULT=''
+  REC_VERDICT='' REC_HEAD='' REC_SINCE='' REC_REASON='' REC_DIFF_HEAD='' REC_DIFF_RESULT='' REC_CHECKED_AT=''
   REC_ATTEMPT_KIND='' REC_ATTEMPT_HEAD='' REC_ATTEMPT_AT=''
   file=$(record_path "$1")
   [ -f "$file" ] && [ ! -L "$file" ] || return 0
@@ -202,10 +215,12 @@ record_load() {  # <task-id>
       attempt_kind) REC_ATTEMPT_KIND=$value ;;
       attempt_head) REC_ATTEMPT_HEAD=$value ;;
       attempt_at) REC_ATTEMPT_AT=$value ;;
+      checked_at) REC_CHECKED_AT=$value ;;
     esac
   done < "$file"
   case "$REC_SINCE" in ''|*[!0-9]*) REC_SINCE=0 ;; esac
   case "$REC_ATTEMPT_AT" in ''|*[!0-9]*) REC_ATTEMPT_AT=0 ;; esac
+  case "$REC_CHECKED_AT" in ''|*[!0-9]*) REC_CHECKED_AT=0 ;; esac
 }
 
 record_save() {  # <task-id>
@@ -222,6 +237,7 @@ record_save() {  # <task-id>
     printf 'attempt_kind=%s\n' "$REC_ATTEMPT_KIND"
     printf 'attempt_head=%s\n' "$REC_ATTEMPT_HEAD"
     printf 'attempt_at=%s\n' "$REC_ATTEMPT_AT"
+    printf 'checked_at=%s\n' "$REC_CHECKED_AT"
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; return 1; }
 }
@@ -241,7 +257,7 @@ log_line() {  # <task-id> <event> <detail>
 assess() {  # <task-id>
   local id=$1 meta kind yolo project posture hold_rc open json fields
   local state draft mergeable merge_state base checks diff behind base_enc
-  VERDICT='' REASON='' URL='' HEAD='' DIFF_HEAD='' DIFF_RESULT=''
+  VERDICT='' REASON='' URL='' HEAD='' DIFF_HEAD='' DIFF_RESULT='' CHECKS_DONE_AT=0
   meta="$STATE/$id.meta"
   [ -f "$meta" ] && [ ! -L "$meta" ] || { verdict skip "no task record"; return; }
   URL=$(meta_value "$meta" pr)
@@ -305,6 +321,9 @@ EOF
   [ "$draft" = false ] || { verdict skip "the pull request is a draft or its draft state is unreadable"; return; }
   fm_pr_head_valid "$HEAD" || { verdict wait "the head commit could not be read"; return; }
   checks=$(checks_state "$json") || checks=
+  CHECKS_DONE_AT=${checks##*$'\t'}
+  checks=${checks%$'\t'*}
+  case "$CHECKS_DONE_AT" in ''|*[!0-9]*) CHECKS_DONE_AT=0 ;; esac
   case "$checks" in
     green) ;;
     none) verdict wait "no check has reported yet"; return ;;
@@ -373,23 +392,32 @@ update_task() {  # <task-id> <now>
 
 sweep_task() {  # <task-id>
   local id=$1 now prev_verdict prev_reason prev_head
+  now=$(date +%s)
+  record_load "$id"
+  # A skip with a recorded head came from a forge read, so it is read again on
+  # the slower cadence.
+  if [ "$REC_VERDICT" = skip ] && [ -n "$REC_HEAD" ] \
+    && [ $((now - REC_CHECKED_AT)) -lt "$SKIP_RECHECK_SECS" ]; then
+    return 0
+  fi
   assess "$id"
   record_load "$id"
-  now=$(date +%s)
   prev_verdict=$REC_VERDICT prev_reason=$REC_REASON prev_head=$REC_HEAD
   if [ "$VERDICT" != "$prev_verdict" ] || [ "$HEAD" != "$prev_head" ] || [ "$REASON" != "$prev_reason" ]; then
     REC_SINCE=$now
     log_line "$id" "$VERDICT" "$REASON"
   fi
-  REC_VERDICT=$VERDICT REC_HEAD=$HEAD REC_REASON=$REASON
+  REC_VERDICT=$VERDICT REC_HEAD=$HEAD REC_REASON=$REASON REC_CHECKED_AT=$now
   if [ -n "$DIFF_HEAD" ]; then
     REC_DIFF_HEAD=$DIFF_HEAD REC_DIFF_RESULT=$DIFF_RESULT
   fi
   record_save "$id" || true
   case "$VERDICT" in
     green)
-      [ "$prev_verdict" = green ] && [ "$prev_head" = "$HEAD" ] || return 0
-      [ $((now - REC_SINCE)) -ge "$SETTLE_SECS" ] || return 0
+      if ! { [ "$CHECKS_DONE_AT" -gt 0 ] && [ $((now - CHECKS_DONE_AT)) -ge "$SETTLE_SECS" ]; }; then
+        [ "$prev_verdict" = green ] && [ "$prev_head" = "$HEAD" ] || return 0
+        [ $((now - REC_SINCE)) -ge "$SETTLE_SECS" ] || return 0
+      fi
       attempted_recently merge "$now" && return 0
       merge_task "$id" "$now"
       ;;
