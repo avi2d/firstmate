@@ -423,9 +423,81 @@ test_changed_dependency_selection_and_unmapped_failure() {
 
   rm -f "$repo/src/unmapped.ts"
   listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD)
-  [ -z "$listed" ] || fail "a retired unmapped source without consumers selected tests: $listed"
+  expected_core=$(printf 'tests/fm-test-run.test.sh\ntests/fm-test-fixtures.test.sh')
+  [ "$listed" = "$expected_core" ] \
+    || fail "a retired unmapped source without consumers must select only the selector contract core, got: $listed"
   rm -rf "$tmp"
-  pass "changed selection covers dependents, fails closed for live unmapped source, and accepts retired unconsumed source"
+  pass "changed selection covers dependents, fails closed for live unmapped source, and selects only the selector core for retired unconsumed source"
+}
+
+test_changed_refuses_without_merge_base() {
+  local tmp repo base out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-changed-merge-base.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  base=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q --orphan unrelated
+  git -C "$repo" rm -q -rf .
+  : >"$repo/unrelated.txt"
+  git -C "$repo" add unrelated.txt
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm unrelated-root
+  git -C "$repo" checkout -q "$base"
+  set +e
+  out=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base unrelated 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || { rm -rf "$tmp"; fail "a changed run without a merge base must fail with exit 2, got $rc: $out"; }
+  case "$out" in
+    *"no merge base between unrelated and HEAD"*) ;;
+    *) rm -rf "$tmp"; fail "the merge-base refusal did not name the base and the fix: $out" ;;
+  esac
+  rm -rf "$tmp"
+  pass "a changed run without a merge base fails closed instead of running the working tree alone"
+}
+
+test_explicit_jobs_clamps_to_machine_cores() {
+  local tmp repo fakebin script out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-jobs-clamp.XXXXXX")
+  repo="$tmp/repo"
+  fakebin="$tmp/fakebin"
+  init_changed_fixture_repo "$repo"
+  mkdir -p "$fakebin"
+  cat >"$fakebin/getconf" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = _NPROCESSORS_ONLN ]; then
+  printf '2\n'
+  exit 0
+fi
+PATH=${PATH#"$FAKEBIN:"}
+exec getconf "$@"
+SH
+  chmod +x "$fakebin/getconf"
+  for script in fm-brief.test.sh fm-ask-user-authority.test.sh; do
+    cat >"$repo/tests/$script" <<'SH'
+#!/usr/bin/env bash
+sleep 1
+echo "ok - jobs clamp fixture"
+SH
+    chmod +x "$repo/tests/$script"
+  done
+  printf '\n' >>"$repo/tests/fm-brief.test.sh"
+  set +e
+  out=$(cd "$repo" && FAKEBIN="$fakebin" PATH="$fakebin:$PATH" \
+    bin/fm-test-run.sh tests/fm-brief.test.sh tests/fm-ask-user-authority.test.sh \
+    --jobs 4 --json "$tmp/clamped.json" 2>"$tmp/clamped.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "a clamped explicit run must still pass, got $rc: $(cat "$tmp/clamped.err")"; }
+  grep -Fq -- "--jobs 4 clamped to 2 machine cores" "$tmp/clamped.err" \
+    || { rm -rf "$tmp"; fail "the clamp did not say what it did: $(cat "$tmp/clamped.err")"; }
+  python3 - "$tmp/clamped.json" <<'PY' \
+    || fail "the timing artifact did not record the clamped worker count"
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+assert doc["selection"].split(";")[-1] == "jobs=2", doc["selection"]
+PY
+  rm -rf "$tmp"
+  pass "an explicit --jobs above the machine core count is clamped to it after admission"
 }
 
 # A direct test reference is per-script evidence. Widening it to the referencing
@@ -482,9 +554,9 @@ SH
   (cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --json "$tmp/parallel.json") \
     >"$tmp/parallel.out" 2>"$tmp/parallel.err" \
     || fail "default changed fixture run failed: $(cat "$tmp/parallel.err")"
-  parallel_shape=$(grep -E '^FM_TEST_(BEGIN|END)' "$tmp/parallel.out" | head -n 2 | awk '{print $1}' | paste -sd, -)
-  [ "$parallel_shape" = FM_TEST_BEGIN,FM_TEST_BEGIN ] \
-    || fail "plain --changed did not use bounded concurrent scheduling: $parallel_shape"
+  grep -E '^FM_TEST_(BEGIN|END)' "$tmp/parallel.out" | awk '{print $1}' | paste -sd, - \
+    | grep -q FM_TEST_BEGIN,FM_TEST_BEGIN \
+    || fail "plain --changed never ran two scripts at once: $(grep -E '^FM_TEST_(BEGIN|END)' "$tmp/parallel.out" | head -n 4 | tr '\n' ' ')"
 
   (cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --jobs 1 --json "$tmp/serial.json") \
     >"$tmp/serial.out" 2>"$tmp/serial.err" \
@@ -710,28 +782,31 @@ PY
   pass "family proofs run concurrently only within separate family phases"
 }
 
-test_empty_selection_emits_summary() {
+test_unmapped_change_runs_only_selector_core() {
   local tmp repo out json rc fake_bin real_git
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-empty.XXXXXX")
   repo="$tmp/repo"
   init_changed_fixture_repo "$repo"
+  cp "$ROOT/bin/fm-timeout-lib.sh" "$repo/bin/fm-timeout-lib.sh"
+  git -C "$repo" add bin/fm-timeout-lib.sh
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm timeout-helper
   printf 'documentation only\n' >"$repo/README.md"
   out=$(cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --json "$tmp/artifacts/timing.json" 2>"$tmp/err") \
-    || fail "empty valid changed selection must pass"
+    || fail "a core-only changed selection must pass"
   printf '%s\n' "$out" | grep -Eq \
-    '^FM_TEST_SUMMARY total=0 failed=0 skipped_gate=0 duration_ms=[0-9]+$' \
-    || fail "empty selection summary is missing or malformed: $out"
+    '^FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=[0-9]+$' \
+    || fail "core-only selection summary is missing or malformed: $out"
   json="$tmp/artifacts/timing.json"
   python3 -c '
 import json, sys
 doc = json.load(open(sys.argv[1]))
-assert doc["summary"]["total"] == 0
+assert doc["summary"]["total"] == 2
 assert doc["summary"]["failed"] == 0
 assert doc["summary"]["skipped_gate"] == 0
 assert doc["summary"]["duration_ms"] >= 0
-assert doc["scripts"] == []
-assert doc["families"] == []
-' "$json" || { rm -rf "$tmp"; fail "empty selection JSON summary is wrong"; }
+assert sorted(s["path"] for s in doc["scripts"]) == ["tests/fm-test-fixtures.test.sh", "tests/fm-test-run.test.sh"]
+assert sorted(f["name"] for f in doc["families"]) == ["pure-contract-unit", "standalone"]
+' "$json" || { rm -rf "$tmp"; fail "core-only selection JSON summary is wrong"; }
   fake_bin="$tmp/fake-bin"
   real_git=$(command -v git)
   mkdir -p "$fake_bin"
@@ -750,26 +825,26 @@ SH
     >"$tmp/slow-selection.out" 2>"$tmp/slow-selection.err"
   rc=$?
   set -e
-  [ "$rc" -eq 1 ] || fail "an empty run past its budget must fail normally, got $rc"
-  grep -Eq '^FM_TEST_SUMMARY total=0 failed=0 skipped_gate=0 duration_ms=[0-9]+$' "$tmp/slow-selection.out" \
-    || fail "over-budget empty selection omitted its summary"
+  [ "$rc" -eq 1 ] || fail "a core-only run past its budget must fail normally, got $rc"
+  grep -Eq '^FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=[0-9]+$' "$tmp/slow-selection.out" \
+    || fail "over-budget core-only selection omitted its summary"
   grep -Eq '^FM_TEST_BUDGET max_wall_ms=100 duration_ms=[0-9]+$' "$tmp/slow-selection.out" \
-    || fail "over-budget empty selection omitted its budget result"
+    || fail "over-budget core-only selection omitted its budget result"
   [ -e "$tmp/slow-git" ] || fail "the slow selection fixture did not run"
   set +e
   (cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --max-wall-ms nope) \
     >"$tmp/bad-budget.out" 2>"$tmp/bad-budget.err"
   rc=$?
   set -e
-  [ "$rc" -eq 2 ] || fail "malformed budget on an empty selection must be refused, got $rc"
+  [ "$rc" -eq 2 ] || fail "malformed budget on a core-only selection must be refused, got $rc"
   set +e
   (cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --per-script-timeout-secs nope) \
     >"$tmp/bad-timeout.out" 2>"$tmp/bad-timeout.err"
   rc=$?
   set -e
-  [ "$rc" -eq 2 ] || fail "malformed timeout on an empty selection must be refused, got $rc"
+  [ "$rc" -eq 2 ] || fail "malformed timeout on a core-only selection must be refused, got $rc"
   rm -rf "$tmp"
-  pass "empty changed selection emits deterministic text and JSON summaries"
+  pass "a change that maps to nothing runs only the selector core with deterministic summaries"
 }
 
 test_timing_markers_and_json() {
@@ -1839,7 +1914,7 @@ test_changed_uses_bounded_automatic_concurrency
 test_windows_posix_mode_emulation_does_not_fail_parallel_runs
 test_script_list_uses_bounded_automatic_concurrency
 test_family_proofs_run_in_separate_concurrent_phases
-test_empty_selection_emits_summary
+test_unmapped_change_runs_only_selector_core
 test_timing_markers_and_json
 test_aggregate_exit_behavior
 test_gate_skip_accounting

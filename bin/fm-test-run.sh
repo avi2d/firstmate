@@ -1785,9 +1785,15 @@ select_changed() {
   local base=$1 path entry fam script_name s
   local -a wanted_families=()
   local -a wanted_scripts=()
+  for s in fm-test-run.test.sh fm-test-fixtures.test.sh; do
+    [ -f "$ROOT/tests/$s" ] && wanted_scripts+=("$s")
+  done
 
   if ! git -C "$ROOT" rev-parse --verify "$base" >/dev/null 2>&1; then
     die "changed-file base ref not found: $base (pass --base <ref>)"
+  fi
+  if ! git -C "$ROOT" merge-base "$base" HEAD >/dev/null 2>&1; then
+    die "no merge base between $base and HEAD (fetch $base or pass --base <ref>)"
   fi
 
   while IFS= read -r path; do
@@ -2349,6 +2355,16 @@ if [ "$JOBS" -gt 1 ] && [ "$AUTO_CONCURRENCY" -eq 0 ]; then
         || die "--jobs $JOBS refused: family $family is proven only up to $family_jobs_max concurrent workers"
     fi
   done
+fi
+if [ "$JOBS" -gt 1 ]; then
+  clamped_cores=$(cpu_count)
+  if [ "$JOBS" -gt "$clamped_cores" ]; then
+    log "--jobs $JOBS clamped to $clamped_cores machine cores"
+    JOBS=$clamped_cores
+    case "$SELECTION_DESC" in
+      *";jobs="*) SELECTION_DESC="${SELECTION_DESC%;jobs=*};jobs=$JOBS" ;;
+    esac
+  fi
 fi
 
 # Split the run into proven concurrent phases and an unproven remainder.
