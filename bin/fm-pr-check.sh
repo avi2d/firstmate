@@ -271,4 +271,8 @@ case "$READY_RC" in
   0|1) ;;
   *) printf 'actionable: PR %s is registered but its ready line did not reach the parent channel (rc=%s)\n' "$URL" "$READY_RC" >&2 ;;
 esac
+if [ "$PROVIDER" = github ] && [ "$PR_YOLO" = on ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ]; then
+  "$SCRIPT_DIR/fm-procevent-merge-on-green.sh" arm >/dev/null \
+    || printf 'merge-on-green: not armed, so %s merges on the supervised path\n' "$URL" >&2
+fi
 printf 'armed: state/%s.check.sh\n' "$ID"
