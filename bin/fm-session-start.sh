@@ -377,6 +377,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
 # shellcheck source=bin/fm-hold-reason-lib.sh
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-project-tiers-lib.sh
+. "$SCRIPT_DIR/fm-project-tiers-lib.sh"
 
 # One tasks-axi compatibility verdict per session start. The probe costs three
 # tasks-axi subprocesses and this digest needs the same answer twice - here for
@@ -534,6 +536,10 @@ print_backlog_tasks_axi_compact() {
     printf '\nblocked queued:\n'
     printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
     printf '\nready queued (dispatchable now):\n'
+    if fm_project_tiers_read "$CONFIG" 2>&1 && [ -n "$FM_PROJECT_TIERS" ]; then
+      printf '(higher project tier first, per %s)\n' "$FM_PROJECT_TIERS_FILE"
+      ready=$(printf '%s\n' "$ready" | fm_project_tiers_order_ready)
+    fi
     print_ready_queued_bounded "$ready"
     return 0
   fi

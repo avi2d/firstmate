@@ -239,6 +239,57 @@ test_wrapper_single_home() {
   pass "fm-tasks-axi.sh keeps the single-home layout addressing its own code-root backlog"
 }
 
+# The captain's tier pick for this home's projects.
+write_captain_tiers() {  # <config-dir>
+  printf '%s\n' '# fleet speed tiers' 'website P0' 'ru-compliance P1' 'checks P1' \
+    'tui-dash P2' 'orc P2' 'skills P2' 'dotfiles P2' 'firstmate P2' \
+    'no-mistakes P2' 'pi-claude-bridge P2' 'home-vpn P2' \
+    'career P3' 'learning P3' 'socials P3' 'decisions P3' 'clauth P3' \
+    > "$1/project-tiers"
+}
+
+ready_ids() {  # reads tasks-axi ready output on stdin
+  awk '/^ready\[/ { rows = 1; next } rows && /^[[:space:]]/ { sub(/^[[:space:]]+/, ""); sub(/,.*/, ""); print; next } { rows = 0 }' \
+    | paste -sd' ' -
+}
+
+test_wrapper_ready_orders_by_project_tier() {
+  local dir out status
+  dir=$(make_split ready-tiers)
+  wrapper_from_code "$dir" add career-1 "career" --repo career >/dev/null
+  wrapper_from_code "$dir" add mystery-1 "untiered" --repo mystery >/dev/null
+  wrapper_from_code "$dir" add tui-1 "first tui" --repo tui-dash >/dev/null
+  wrapper_from_code "$dir" add checks-1 "checks" --repo checks >/dev/null
+  wrapper_from_code "$dir" add web-1 "website" --repo website >/dev/null
+  wrapper_from_code "$dir" add tui-2 "second tui" --repo tui-dash >/dev/null
+  wrapper_from_code "$dir" add ru-1 "ru" --repo ru-compliance >/dev/null
+  wrapper_from_code "$dir" add none-1 "no project" >/dev/null
+
+  out=$(wrapper_from_code "$dir" ready | ready_ids)
+  assert_equals "career-1 mystery-1 tui-1 checks-1 web-1 tui-2 ru-1 none-1" "$out" \
+    "with no tier file ready must keep tasks-axi's own order"
+
+  write_captain_tiers "$dir/home/config"
+  out=$(wrapper_from_code "$dir" ready | ready_ids)
+  assert_equals "web-1 checks-1 ru-1 tui-1 tui-2 career-1 mystery-1 none-1" "$out" \
+    "ready did not list P0, P1, P2, P3, then untiered work, in tasks-axi order within a tier"
+
+  printf 'website P0\nskills p2\n' > "$dir/home/config/project-tiers"
+  status=0
+  out=$(wrapper_from_code "$dir" ready 2>&1) || status=$?
+  expect_code 2 "$status" "ready ran over a malformed tier file"
+  assert_contains "$out" "project tiers not applied: $dir/home/config/project-tiers line 2 is not '<project-name> P0|P1|P2|P3'" \
+    "the malformed tier line was not named"
+  assert_contains "$out" "fm-tasks-axi: fix or remove $dir/home/config/project-tiers to list ready work" \
+    "the refusal did not say how to recover"
+  assert_not_contains "$out" "web-1" "ready listed work in an order the tier file did not give"
+
+  printf 'website P0\nwebsite P1\n' > "$dir/home/config/project-tiers"
+  out=$(wrapper_from_code "$dir" ready 2>&1) || true
+  assert_contains "$out" "line 2 names website a second time" "a project tiered twice was not refused"
+  pass "fm-tasks-axi.sh ready lists higher project tiers first and refuses a malformed tier file"
+}
+
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home
@@ -249,6 +300,7 @@ if [ "$HAVE_TASKS_AXI" = 1 ]; then
   test_wrapper_refusals
   test_wrapper_refuses_add_start
   test_wrapper_single_home
+  test_wrapper_ready_orders_by_project_tier
 else
   echo "skip: tasks-axi not found; home-addressing cases not run"
 fi
