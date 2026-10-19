@@ -3748,7 +3748,7 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
   fi
 fi
 # The Mac load gate extends the capacity path above: a heavy start waits while
-# the five-minute average is high or four heavy workers already run.
+# the five-minute average is high or the standing heavy cap for the hour is full.
 if [ "$KIND" != secondmate ] && fm_mac_load_gate_active; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
@@ -3780,7 +3780,7 @@ fi
 # The winbox load gate extends the capacity path above on a Linux host that two
 # Firstmate homes share without a common local root. Each home lists the other
 # in config/winbox-load-siblings, so a heavy start waits while the five-minute
-# average is high or six heavy workers already run across both homes.
+# average is high or the standing heavy cap for the hour is full across both homes.
 if [ "$KIND" != secondmate ] && fm_winbox_load_gate_active "${SPAWN_CAPACITY_CONFIG:-}"; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {

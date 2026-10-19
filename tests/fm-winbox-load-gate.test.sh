@@ -8,10 +8,6 @@ set -u
 
 unset TASKS_AXI_BACKEND || :
 
-# The standing heavy cap follows the UTC hour, so pin night for these assertions.
-FM_MAC_LOAD_MOCK_NOW=1792375200
-export FM_MAC_LOAD_MOCK_NOW
-
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-winbox-load-gate)
 DEFER_EXIT=75

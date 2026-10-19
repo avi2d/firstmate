@@ -56,6 +56,9 @@ export FM_TEST_SEAM=1
 # otherwise defer spawns mid-test through the real gate, so no case can observe
 # admission deterministically. Cases that verify the gate set FM_MAC_LOAD_MOCK_5MIN themselves.
 export FM_MAC_LOAD_MOCK_5MIN="${FM_MAC_LOAD_MOCK_5MIN:-1.0}"
+# Pin the UTC hour to night for every suite, so the hour-following heavy cap
+# stays at its historic standing value unless a case sets its own hour.
+export FM_MAC_LOAD_MOCK_NOW="${FM_MAC_LOAD_MOCK_NOW:-1792375200}"
 # Arm the Mac load gate on every platform. The gate judges a Mac-only resource
 # and stays off elsewhere, so without this a Linux runner never reaches the
 # verdict the gate cases assert. The pinned read above keeps ordinary spawns
