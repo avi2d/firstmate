@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for the winbox load gate: a heavy start waits while the
+# Behavior tests for the winbox load gate at night: a heavy start waits while the
 # average is high or six heavy workers already run across both homes.
 set -u
 

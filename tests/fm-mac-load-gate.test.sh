@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for the Mac load gate: a heavy start waits while the
+# Behavior tests for the Mac load gate at night: a heavy start waits while the
 # five-minute average is high or four heavy workers already run.
 set -u
 
