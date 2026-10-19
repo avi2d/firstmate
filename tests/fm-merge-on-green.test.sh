@@ -10,9 +10,9 @@ URL=https://github.com/example/repo/pull/9
 HEAD_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 HEAD_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
-write_view() {  # <case> <head> <rollup-json> [draft] [mergeable]
-  printf '{"state":"OPEN","isDraft":%s,"mergeable":"%s","mergeStateStatus":"CLEAN","headRefOid":"%s","baseRefName":"main","statusCheckRollup":%s}\n' \
-    "${4:-false}" "${5:-MERGEABLE}" "$2" "$3" > "$1/view.json"
+write_view() {  # <case> <head> <rollup-json> [draft] [mergeable] [head-branch]
+  printf '{"state":"OPEN","isDraft":%s,"mergeable":"%s","mergeStateStatus":"CLEAN","headRefOid":"%s","headRefName":"%s","baseRefName":"main","statusCheckRollup":%s}\n' \
+    "${4:-false}" "${5:-MERGEABLE}" "$2" "${6:-fm/task-x1}" "$3" > "$1/view.json"
 }
 
 green_rollup='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-19T10:00:00Z","completedAt":"2026-10-19T10:01:00Z"},{"__typename":"StatusContext","context":"commitlint","state":"SUCCESS","startedAt":"2026-10-19T10:00:30Z"}]'
@@ -313,7 +313,7 @@ test_adapter_polls_silently_while_work_remains() {
 
 test_idle_source_retires_through_the_runner_without_a_wake() {
   local c id
-  c=$(make_case idle)
+  c=$(make_case idle "direct-PR +yolo" off)
   fm_test_track_procevent_home "$c/home" "$c/claims"
   sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
   run_in "$c" "$ROOT/bin/fm-procevent-merge-on-green.sh" arm >/dev/null || fail "idle: arm failed"
@@ -344,6 +344,37 @@ test_pr_check_arms_the_source_for_a_yolo_pull_request() {
   pass "fm-pr-check.sh arms merge on green only for a yolo task"
 }
 
+test_unrecorded_direct_pr_done_line_is_adopted_once_green() {
+  local c
+  c=$(make_case unrecorded-direct)
+  sed -i.bak 's/^mode=no-mistakes$/mode=direct-PR/' "$c/state/task-x1.meta"
+  sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
+  printf 'done [at=1792400000]: PR %s\n' "$URL" > "$c/state/task-x1.status"
+  write_view "$c" "$HEAD_A" "$green_rollup" false MERGEABLE fm/task-x1
+  expect_verdict "$c" green "every check is green" unrecorded-direct
+  pass "a direct-PR done line naming the pull request with no recorded pr= is adopted as a merge candidate once checks are green"
+}
+
+test_done_line_pull_request_from_another_branch_is_never_adopted() {
+  local c
+  c=$(make_case unrecorded-foreign)
+  sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
+  write_view "$c" "$HEAD_A" "$green_rollup" false MERGEABLE fm/someone-else
+  expect_stays_open "$c" skip "does not own" unrecorded-foreign
+  pass "a done line naming a pull request from another branch is never adopted"
+}
+
+test_unrecorded_pull_request_merges_through_the_sweep() {
+  local c
+  c=$(make_case unrecorded-merge)
+  sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
+  write_view "$c" "$HEAD_A" "$green_rollup" false MERGEABLE fm/task-x1
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "unrecorded-merge: a green pull request with no recorded pr= was not merged: $(cat "$c/gh.log")"
+  grep -qxF "pr=$URL" "$c/state/task-x1.meta" || fail "unrecorded-merge: the merge did not record pr="
+  pass "a green pull request with no recorded pr= merges through the sweep and ends recorded"
+}
+
 test_settled_green_pull_request_merges_on_its_first_sweep
 test_green_without_a_settled_finish_merges_on_the_second_sighting
 test_unsettled_green_waits
@@ -360,3 +391,6 @@ test_secondmate_home_wakes_itself_after_its_own_merge
 test_adapter_polls_silently_while_work_remains
 test_idle_source_retires_through_the_runner_without_a_wake
 test_pr_check_arms_the_source_for_a_yolo_pull_request
+test_unrecorded_direct_pr_done_line_is_adopted_once_green
+test_done_line_pull_request_from_another_branch_is_never_adopted
+test_unrecorded_pull_request_merges_through_the_sweep
