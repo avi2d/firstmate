@@ -58,12 +58,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-hold-reason-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
+# shellcheck source=bin/fm-project-tiers-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-project-tiers-lib.sh"
 
 usage() {
   awk '
@@ -129,6 +132,11 @@ done
 
 command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is not on PATH; run bin/fm-bootstrap.sh for the install command"
 
+FM_PROJECT_TIERS=
+if [ "${1:-}" = ready ] && ! fm_project_tiers_read "$CONFIG"; then
+  fail "fix or remove $FM_PROJECT_TIERS_FILE to list ready work"
+fi
+
 FM_BACKLOG_TRANSITION_ERROR=
 if ! fm_backlog_tasks_axi_addressing "$DATA"; then
   fail "${FM_BACKLOG_TRANSITION_ERROR:-data directory cannot be resolved: $DATA}"
@@ -149,6 +157,13 @@ case "${1:-}" in
     set -o pipefail
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
     exit $?
+    ;;
+  ready)
+    if [ -n "$FM_PROJECT_TIERS" ]; then
+      set -o pipefail
+      tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_project_tiers_order_ready
+      exit $?
+    fi
     ;;
 esac
 exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}

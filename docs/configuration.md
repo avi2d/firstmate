@@ -1321,6 +1321,28 @@ A malformed or unreadable file refuses every fresh ship or scout spawn until it 
 Firstmate cannot see which part of a worker's life uses the resource, so the number bounds whole workers from launch to handoff, and the tightest resource every worker needs should decide it.
 [`bin/fm-project-capacity-lib.sh`](../bin/fm-project-capacity-lib.sh) owns the file format, what holds a place, and why concurrent spawns cannot both take the last one.
 
+## Project tiers
+
+The optional local, gitignored `config/project-tiers` ranks this home's projects so that, when several queued items are ready at once, Firstmate dispatches the higher tier's items first.
+Without it, ready work keeps the backlog's own order.
+The file is this home's own choice, so a secondmate home reads only its own `config/project-tiers`, and it holds one line per project:
+
+```text
+# fleet speed tiers
+website P0
+ru-compliance P1
+career P3
+```
+
+The name is the project's registered name, which may contain spaces, and the tier, the last field on the line, is `P0`, `P1`, `P2`, or `P3`.
+Blank lines and lines beginning with `#` are ignored.
+The ready listings in the session-start digest and in `bin/fm-tasks-axi.sh ready` put P0 items first, then P1, P2, and P3, then items whose project has no tier or no project at all, keeping the backlog's order within each group.
+The digest orders the listing before it bounds it, so a bound never cuts a higher-tier item in favor of a lower one.
+Any other line shape, a tier outside `P0` to `P3`, a project named twice, or an unreadable file is an error.
+`bin/fm-tasks-axi.sh ready` then refuses and names the line, while the digest prints the error under its ready heading and keeps the backlog's order.
+A tier orders dispatch only, and dependencies, holds, time gates, and [project capacity](#project-capacity-configproject-capacity) still decide whether an item can be dispatched.
+[`bin/fm-project-tiers-lib.sh`](../bin/fm-project-tiers-lib.sh) owns the parse and the order.
+
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.

@@ -154,13 +154,19 @@ case "${1:-}" in
     ;;
   ready)
     require_file "$@"
+    rows=${FM_FAKE_TASKS_AXI_READY_ROWS:-}
+    [ -z "$rows" ] || ready_count=$(printf '%s\n' "$rows" | wc -l | tr -d ' ')
     printf 'count: %s\n' "$ready_count"
     printf 'ready[%s]{id,state,kind,repo,title}:\n' "$ready_count"
-    i=1
-    while [ "$i" -le "$ready_count" ]; do
-      printf '  ready-%s,queued,ship,firstmate,Ready item %s\n' "$i" "$i"
-      i=$((i + 1))
-    done
+    if [ -n "$rows" ]; then
+      printf '%s\n' "$rows" | sed 's/^/  /'
+    else
+      i=1
+      while [ "$i" -le "$ready_count" ]; do
+        printf '  ready-%s,queued,ship,firstmate,Ready item %s\n' "$i" "$i"
+        i=$((i + 1))
+      done
+    fi
     printf 'ready_public_followups: 0 delivery-ready obligations\n'
     printf 'help[1]:\n'
     printf '%s\n' '  - Run `tasks-axi start <id>` to dispatch one of these'
@@ -2159,6 +2165,66 @@ EOF
   pass "the startup backlog bound cuts only dispatchable queued rows and discloses the remainder exactly"
 }
 
+# The captain's tier pick: P0 website; P1 ru-compliance and checks; P2 tui-dash
+# and the other tools; P3 career and the other personal projects; anything
+# unnamed after P3. Ordering must happen before the bound, or the bound cuts the
+# P0 row tasks-axi happened to list last.
+ready_ids() {  # reads a digest on stdin
+  awk '/^ready\[/ { rows = 1; next } rows && /^[[:space:]]/ { sub(/^[[:space:]]+/, ""); sub(/,.*/, ""); print; next } { rows = 0 }' \
+    | paste -sd' ' -
+}
+
+test_backlog_ready_queued_orders_by_project_tier() {
+  local rec root home fakebin out rows ready
+  rec=$(new_world backlog-ready-tiers)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  write_long_body_backlog "$home/data/backlog.md"
+  rows=$(printf '%s\n' 'career-1,queued,ship,career,Career' 'mystery-1,queued,ship,mystery,Untiered' \
+    'tui-1,queued,ship,tui-dash,First tui' 'checks-1,queued,ship,checks,Checks' \
+    'tui-2,queued,ship,tui-dash,Second tui' 'ru-1,queued,ship,ru-compliance,Ru' \
+    'none-1,queued,ship,"-",No project' 'web-1,queued,ship,website,Website')
+  printf '%s\n' '# fleet speed tiers' 'website P0' 'ru-compliance P1' 'checks P1' \
+    'tui-dash P2' 'orc P2' 'skills P2' 'dotfiles P2' 'firstmate P2' \
+    'no-mistakes P2' 'pi-claude-bridge P2' 'home-vpn P2' \
+    'career P3' 'learning P3' 'socials P3' 'decisions P3' 'clauth P3' \
+    > "$home/config/project-tiers"
+
+  out=$(FM_FAKE_TASKS_AXI_READY_ROWS=$rows FM_SESSION_START_QUEUED_LIMIT=5 \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  ready=$(printf '%s\n' "$out" | ready_ids)
+  assert_equals "web-1 checks-1 ru-1 tui-1 tui-2" "$ready" \
+    "the digest did not list ready work P0, P1, P2 first in tasks-axi order within a tier, before its bound"
+  assert_contains "$out" "(higher project tier first, per $home/config/project-tiers)" \
+    "the digest did not say its ready listing follows the tier file"
+  assert_contains "$out" "(shown 5 of 8 ready queued item(s))" "the tier order changed the bound's count"
+
+  out=$(FM_FAKE_TASKS_AXI_READY_ROWS=$rows \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  ready=$(printf '%s\n' "$out" | ready_ids)
+  assert_equals "web-1 checks-1 ru-1 tui-1 tui-2 career-1 mystery-1 none-1" "$ready" \
+    "untiered ready work did not sort after P3"
+
+  printf 'website P0\nwebsite\n' > "$home/config/project-tiers"
+  out=$(FM_FAKE_TASKS_AXI_READY_ROWS=$rows \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "project tiers not applied: $home/config/project-tiers line 2 is not '<project-name> P0|P1|P2|P3'" \
+    "the digest did not report the malformed tier line"
+  ready=$(printf '%s\n' "$out" | ready_ids)
+  assert_equals "career-1 mystery-1 tui-1 checks-1 tui-2 ru-1 none-1 web-1" "$ready" \
+    "a malformed tier file still reordered the ready listing"
+
+  rm "$home/config/project-tiers"
+  out=$(FM_FAKE_TASKS_AXI_READY_ROWS=$rows \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_not_contains "$out" "higher project tier first" "with no tier file the digest still claimed a tier order"
+  pass "the startup ready listing puts higher project tiers first before its bound and reports a malformed tier file"
+}
+
 test_backlog_compact_manual_backend_skips_indented_bodies() {
   local rec root home fakebin out
   rec=$(new_world backlog-compact-manual)
@@ -3132,6 +3198,7 @@ test_non_pi_session_start_leaves_branch_state_untouched
 test_session_start_seeds_the_outcome_display_tail_while_away
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_queued_bound_discloses_its_remainder
+test_backlog_ready_queued_orders_by_project_tier
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
 test_fleet_digest_empty_fleet
