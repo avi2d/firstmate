@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for the Mac load gate: a heavy start waits while the
+# Behavior tests for the Mac load gate at night: a heavy start waits while the
 # five-minute average is high or four heavy workers already run.
 set -u
 
@@ -7,6 +7,10 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 unset TASKS_AXI_BACKEND || :
+
+# The standing heavy cap follows the UTC hour, so pin night for these assertions.
+FM_MAC_LOAD_MOCK_NOW=1792375200
+export FM_MAC_LOAD_MOCK_NOW
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-mac-load-gate)
