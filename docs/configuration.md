@@ -581,7 +581,7 @@ See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, 
 
 A task pull request on a `+yolo` project merges itself once it is green, with no supervision turn, in a main home and in every secondmate home alike.
 `bin/fm-merge-on-green.sh` decides and acts, and `bin/fm-procevent-merge-on-green.sh` runs it every 20 seconds as this home's process-event source, so it keeps running between supervision turns and stops when the home goes still.
-`bin/fm-pr-check.sh` arms that source when it records a pull request for a yolo task, and an existing home arms it once with `bin/fm-procevent-merge-on-green.sh arm`.
+`bin/fm-pr-check.sh` arms that source when it records a pull request for a yolo task, a yolo ship arms it at spawn, and an existing home arms it once with `bin/fm-procevent-merge-on-green.sh arm`.
 Each home sweeps only the tasks in its own `state/`, and the source id carries a hash of that state directory because process-event claims are machine-wide.
 
 A pull request merges only when every one of these holds, each read by the program rather than judged by an agent:
@@ -590,6 +590,9 @@ A pull request merges only when every one of these holds, each read by the progr
 - The pull request is on GitHub, open, and not a draft.
 - At least one check has reported, none is still running, and every one passed.
 - The task is not held for the captain and has no open `needs-decision` or `blocked` key.
+- The pull request is the task's recorded `pr=`.
+- When no `pr=` was recorded, the GitHub pull request the worker's latest `done:` line names is adopted once the forge shows its head branch is the task's ship branch.
+- A URL the task does not own is never adopted.
 - The worker's latest `done:` line names this pull request, and no `working`, `paused`, or `failed` report follows it.
 - The worker's latest `done:` line does not flag a credential, token, secret, auth, permission, sandbox, or isolation change.
   A mention counts as a flag unless its clause negates it.

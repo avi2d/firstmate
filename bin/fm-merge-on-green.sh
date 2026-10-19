@@ -12,6 +12,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-dod-lib.sh
+. "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
@@ -26,7 +28,8 @@ Usage:
   fm-merge-on-green.sh assess <task-id>
   fm-merge-on-green.sh pending
 
-sweep   Assess every task in this home that recorded a GitHub pr= and act:
+sweep   Assess every task in this home that recorded a GitHub pr=, or whose
+        done line names one, and act:
         merge a green pull request through bin/fm-pr-merge.sh once it is
         settled, or bring a head that is behind its base up to date with
         gh pr update-branch, which merges the base in and never rebases.
@@ -42,6 +45,7 @@ sweep   Assess every task in this home that recorded a GitHub pr= and act:
 assess  Print one task's verdict without acting:
         <verdict><TAB><task><TAB><url><TAB><head><TAB><reason>
 pending Exit 0 while some yolo task's GitHub pull request is not yet merged,
+        or a yolo ship that can still open one is under way;
         1 when there is nothing left to merge.
 
 Verdicts: green (merge once settled), update (behind its base), wait (checks
@@ -257,16 +261,33 @@ log_line() {  # <task-id> <event> <detail>
 assess() {  # <task-id>
   local id=$1 meta kind yolo project posture hold_rc open json fields
   local state draft mergeable merge_state base checks diff behind base_enc
+  local adopted candidate head_branch expected_branch
   VERDICT='' REASON='' URL='' HEAD='' DIFF_HEAD='' DIFF_RESULT='' CHECKS_DONE_AT=0
   meta="$STATE/$id.meta"
   [ -f "$meta" ] && [ ! -L "$meta" ] || { verdict skip "no task record"; return; }
+  adopted=
   URL=$(meta_value "$meta" pr)
-  [ -n "$URL" ] || { verdict skip "no recorded pull request"; return; }
-  if ! fm_pr_url_parse "$URL" || [ "$FM_PR_PROVIDER" != github ]; then
-    verdict skip "not a GitHub pull request"
-    return
+  if [ -z "$URL" ]; then
+    # Recording is an agent step a missed turn can skip, while the done line
+    # still names the pull request, so the sweep adopts that URL instead of
+    # leaving a green pull request unmerged.
+    read_done_report "$STATE/$id.status"
+    if [ -n "$DONE_LINE" ]; then
+      candidate=$(fm_dod_pr_url_from_done_note "$(status_line_note "$DONE_LINE")" 2>/dev/null) || candidate=
+      if [ -n "$candidate" ] && fm_pr_url_parse "$candidate" 2>/dev/null && [ "$FM_PR_PROVIDER" = github ]; then
+        URL=$FM_PR_URL
+        adopted=1
+      fi
+    fi
   fi
-  URL=$FM_PR_URL
+  [ -n "$URL" ] || { verdict skip "no recorded pull request"; return; }
+  if [ -z "$adopted" ]; then
+    if ! fm_pr_url_parse "$URL" || [ "$FM_PR_PROVIDER" != github ]; then
+      verdict skip "not a GitHub pull request"
+      return
+    fi
+    URL=$FM_PR_URL
+  fi
   kind=$(meta_value "$meta" kind)
   [ "${kind:-ship}" = ship ] || { verdict skip "not a ship task"; return; }
   yolo=$(meta_value "$meta" yolo)
@@ -309,7 +330,7 @@ assess() {  # <task-id>
     return
   fi
 
-  json=$(forge gh pr view "$URL" --json state,isDraft,headRefOid,baseRefName,mergeable,mergeStateStatus,statusCheckRollup) \
+  json=$(forge gh pr view "$URL" --json state,isDraft,headRefOid,headRefName,baseRefName,mergeable,mergeStateStatus,statusCheckRollup) \
     || { verdict wait "the pull request could not be read"; return; }
   fields=$(printf '%s' "$json" | jq -r '[.state, .headRefOid, .baseRefName, .mergeable, .mergeStateStatus] | map(tostring) | join("\t")' 2>/dev/null) \
     || { verdict wait "the pull request could not be read"; return; }
@@ -319,6 +340,14 @@ EOF
   [ "$state" = OPEN ] || { verdict skip "the pull request is ${state:-unreadable}"; return; }
   draft=$(fm_pr_json_draft_state "$json")
   [ "$draft" = false ] || { verdict skip "the pull request is a draft or its draft state is unreadable"; return; }
+  if [ -n "$adopted" ]; then
+    # An adopted URL is merged only when the forge shows its head is this
+    # task's ship branch, so a URL the task does not own stays supervised.
+    head_branch=$(printf '%s' "$json" | jq -r '.headRefName // ""' 2>/dev/null) || head_branch=
+    expected_branch=$(meta_value "$meta" branch)
+    [ -n "$expected_branch" ] || expected_branch="fm/$id"
+    [ "$head_branch" = "$expected_branch" ] || { verdict skip "the done report names a pull request the task does not own"; return; }
+  fi
   fm_pr_head_valid "$HEAD" || { verdict wait "the head commit could not be read"; return; }
   checks=$(checks_state "$json") || checks=
   CHECKS_DONE_AT=${checks##*$'\t'}
@@ -439,7 +468,12 @@ cmd_sweep() {
     id=${meta##*/}
     id=${id%.meta}
     fm_pr_task_id_valid "$id" || continue
-    grep -q '^pr=https://github\.com/' "$meta" 2>/dev/null || continue
+    if ! grep -q '^pr=https://github\.com/' "$meta" 2>/dev/null; then
+      # No recorded pr= is not proof of no pull request: the recording turn
+      # can be missed while the done line still names it, and assess adopts
+      # it once the forge proves it is this task's.
+      grep -q 'PR https://github\.com/' "$STATE/$id.status" 2>/dev/null || continue
+    fi
     sweep_task "$id"
   done
   for meta in "$STATE"/*.merge-on-green; do
@@ -452,14 +486,29 @@ cmd_sweep() {
 }
 
 cmd_pending() {
-  local meta id
+  local meta id url
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] && [ ! -L "$meta" ] || continue
     id=${meta##*/}
     id=${id%.meta}
     fm_pr_task_id_valid "$id" || continue
     [ "$(meta_value "$meta" yolo)" = on ] || continue
-    fm_pr_url_parse "$(meta_value "$meta" pr)" 2>/dev/null || continue
+    url=$(meta_value "$meta" pr)
+    if [ -z "$url" ] && [ "$(meta_value "$meta" kind)" = ship ] \
+      && [ "$(meta_value "$meta" mode)" != local-only ] \
+      && [ "$(meta_value "$meta" forge)" != external ]; then
+      # A yolo ship with no recorded pull request can still open one: a done
+      # line naming it is adopted by the sweep, and a task with no done
+      # report at all keeps the watch alive until its ready report lands.
+      read_done_report "$STATE/$id.status"
+      if [ -n "$DONE_LINE" ]; then
+        url=$(fm_dod_pr_url_from_done_note "$(status_line_note "$DONE_LINE")" 2>/dev/null) || url=
+      else
+        return 0
+      fi
+    fi
+    [ -n "$url" ] || continue
+    fm_pr_url_parse "$url" 2>/dev/null || continue
     [ "$FM_PR_PROVIDER" = github ] || continue
     fm_pr_poll_merge_already_notified "$STATE" "$id" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" && continue
     return 0
