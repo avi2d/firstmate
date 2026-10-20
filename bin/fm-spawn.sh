@@ -5694,6 +5694,7 @@ EOF
 // "turn_end" fires at every inner turn boundary (one LLM response plus its
 // tool calls) and stays a wake NOTIFICATION touch for the watcher, never
 // current-state truth.
+// "session_shutdown" marks the session dead: a handler resumed after it records nothing.
 import { execFile } from "node:child_process";
 import { appendFileSync } from "node:fs";
 const notifyTurnEnd = $busy_notify_turnend;
@@ -5724,8 +5725,7 @@ const quotaResetEpoch = (provider: string): Promise<number> =>
       }
     });
   });
-const providerLimitReset = async (ctx: any): Promise<number | null> => {
-  const entries = ctx?.sessionManager?.getEntries?.() ?? [];
+const providerLimitReset = async (entries: any[], provider: string): Promise<number | null> => {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
@@ -5738,20 +5738,28 @@ const providerLimitReset = async (ctx: any): Promise<number | null> => {
       const epoch = Date.parse(match[1]);
       if (Number.isFinite(epoch)) return Math.floor(epoch / 1000);
     }
-    const provider = String(ctx?.model?.provider ?? "");
     return (await quotaResetEpoch(provider)) || 0;
   }
   return null;
 };
 export default async function (pi: any) {
   let checkedExclusions = false;
+  let shutDown = false;
+  // session_shutdown precedes invalidation, so a set flag means pi and ctx are dead and nothing may be recorded.
+  pi.on("session_shutdown", () => { shutDown = true; });
   pi.on("agent_start", async () => {
-    await busyEvent("busy", "agent-start");
-    // Verify only this worker's registry, never connect servers from Firstmate.
-    // Check before actions so the warning cannot supersede this turn's terminal status.
+    if (shutDown) return;
+    // Snapshot the registry before the await: pi getters throw once the session is replaced.
+    let unmatched: string[] | null = null;
     if (!checkedExclusions && excludeTools.length) {
       const loaded = new Set(pi.getAllTools().map((tool: any) => tool.name));
-      const unmatched = excludeTools.filter((name) => !loaded.has(name));
+      unmatched = excludeTools.filter((name) => !loaded.has(name));
+    }
+    await busyEvent("busy", "agent-start");
+    if (shutDown) return;
+    // Verify only this worker's registry, never connect servers from Firstmate.
+    // Check before actions so the warning cannot supersede this turn's terminal status.
+    if (unmatched) {
       if (unmatched.length) {
         appendFileSync(statusFile, "note [at=" + Math.floor(Date.now() / 1000) + "]: warning: " + excludeFile
           + " unmatched exclusion entries (unverified: absent from the worker's loaded-tool registry; excluded tools or unavailable servers cannot be verified): "
@@ -5761,8 +5769,14 @@ export default async function (pi: any) {
     }
   });
   pi.on("agent_settled", async (_event: any, ctx: any) => {
-    if (ctx && typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
-    const resetEpoch = await providerLimitReset(ctx);
+    if (shutDown) return;
+    // Snapshot ctx before the await: its getters throw once the session is replaced.
+    const idle = !ctx || typeof ctx.isIdle !== "function" || ctx.isIdle();
+    const entries = ctx?.sessionManager?.getEntries?.() ?? [];
+    const provider = String(ctx?.model?.provider ?? "");
+    if (!idle) return;
+    const resetEpoch = await providerLimitReset(entries, provider);
+    if (shutDown) return;
     if (resetEpoch !== null) return busyEvent("idle", "provider-limit", resetEpoch);
     return busyEvent("idle", "agent-settled");
   });

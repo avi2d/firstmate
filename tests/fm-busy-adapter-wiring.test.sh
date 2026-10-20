@@ -88,6 +88,99 @@ if (["turn-end", "progress"].includes(process.env.MODE)) {
 EOF
 }
 
+# drive_pi_ext_shutdown <ext-path> <scenario> [entries-json]: load the
+# generated Pi extension in a plain Node host behind a Pi-faithful runner:
+# every pi and ctx getter throws the installed Pi 1.2.0 stale-context error
+# once the runner is invalidated, and session_shutdown is delivered before
+# invalidation exactly as Pi's teardown does. Scenarios: live-start (no
+# shutdown), settle-quota (shutdown lands while the quota lookup is in
+# flight), start-exclusion (shutdown lands while agent_start is in flight).
+drive_pi_ext_shutdown() {
+  EXT_PATH="$1" SCENARIO="$2" ENTRIES_JSON="$3" node --input-type=module 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+const handlers = {};
+const runner = {
+  stale: null,
+  assertActive() {
+    if (this.stale) throw new Error(this.stale);
+  },
+};
+const entries = JSON.parse(process.env.ENTRIES_JSON || "[]");
+const ctx = {
+  isIdle() { runner.assertActive(); return true; },
+  get sessionManager() { runner.assertActive(); return { getEntries: () => entries }; },
+  get model() { runner.assertActive(); return { provider: "openrouter" }; },
+};
+const pi = {
+  on(name, fn) { handlers[name] = fn; },
+  getAllTools() { runner.assertActive(); return [{ name: "read" }, { name: "bash" }]; },
+  events: { on() {} },
+};
+const mod = await import(pathToFileURL(process.env.EXT_PATH).href);
+await mod.default(pi);
+const shutdown = async () => {
+  if (handlers["session_shutdown"]) {
+    await handlers["session_shutdown"]({ type: "session_shutdown", reason: "reload" }, ctx);
+  }
+  runner.stale = "This extension ctx is stale after session replacement or reload.";
+};
+switch (process.env.SCENARIO) {
+  case "live-start": await handlers["agent_start"]({ type: "agent_start" }, ctx); break;
+  case "settle-quota":
+  case "start-exclusion": {
+    const pending = process.env.SCENARIO === "settle-quota"
+      ? handlers["agent_settled"]({ type: "agent_settled", aborted: false }, ctx)
+      : handlers["agent_start"]({ type: "agent_start" }, ctx);
+    await shutdown();
+    await pending;
+    break;
+  }
+  default: throw new Error("unknown scenario " + process.env.SCENARIO);
+}
+EOF
+}
+
+test_pi_extension_session_shutdown_stops_stale_reads() {
+  local rec id=busy-pi-shutdown out state ext entries
+  rec=$(make_spawn_case pi-shutdown pi "$id")
+  read_case_record "$rec"
+  quota_stub="$HOME_DIR/quota-stub-bin"
+  quota_marker="$HOME_DIR/quota-called"
+  mkdir -p "$quota_stub"
+  rm -f "$quota_marker"
+  cat > "$quota_stub/quota-axi" <<SH
+#!/usr/bin/env bash
+echo called >> "$quota_marker"
+printf '%s' '{"providers":[]}'
+SH
+  chmod +x "$quota_stub/quota-axi"
+  echo some-missing-tool > "$HOME_DIR/config/crew-exclude-tools"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "pi spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  ext="$state/$id.pi-ext.ts"
+  assert_present "$ext" "pi spawn did not write the per-task extension"
+
+  out=$(drive_pi_ext_shutdown "$ext" live-start "[]") || fail "live agent_start drive failed: $out"
+  assert_not_contains "$out" "stale" "live agent_start raised a stale-context error"
+  out=$(classify pi "$id" "$state")
+  [ "$out" = "busy pi-ext" ] || fail "live agent_start must classify 'busy pi-ext', got '$out'"
+  assert_contains "$(cat "$state/$id.status")" "some-missing-tool" "the live exclusion check did not warn about the unmatched entry"
+
+  entries='[{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"OpenRouter daily usage limit reached"}}]'
+  out=$(PATH="$quota_stub:$PATH" drive_pi_ext_shutdown "$ext" settle-quota "$entries") || fail "shutdown settle drive failed: $out"
+  assert_not_contains "$out" "stale" "a settle resumed after session_shutdown touched the dead context"
+  out=$(classify pi "$id" "$state")
+  [ "$out" = "busy pi-ext" ] || fail "a settle resumed after session_shutdown must record nothing, got '$out'"
+  [ -f "$quota_marker" ] || fail "settle-quota never reached the quota lookup"
+
+  out=$(drive_pi_ext_shutdown "$ext" start-exclusion "[]") || fail "shutdown agent_start drive failed: $out"
+  assert_not_contains "$out" "stale" "an agent_start resumed after session_shutdown read the dead registry"
+  out=$(classify pi "$id" "$state")
+  [ "$out" = "busy pi-ext" ] || fail "an agent_start resumed after session_shutdown must record nothing new, got '$out'"
+  pass "pi extension snapshots pi and ctx before awaits and records nothing after session_shutdown"
+}
+
 test_pi_provider_limit_uses_session_reset_and_clears_on_work() {
   local rec id=busy-pi-provider-stop out state ext future reset expected
   rec=$(make_spawn_case pi-provider-limit pi "$id")
@@ -889,6 +982,7 @@ test_secondmate_omp_extension_reports_busy_without_a_parent_turnend
 test_secondmate_opencode_plugin_closes_without_a_parent_turnend
 test_secondmate_codex_and_grok_do_not_arm_a_parent_turnend
 test_pi_extension_semantic_lifecycle
+test_pi_extension_session_shutdown_stops_stale_reads
 test_pi_extension_serializes_settle_before_next_start
 test_pi_extension_stale_incarnation_rejected
 test_kimi_and_grok_install_no_unverified_wiring
