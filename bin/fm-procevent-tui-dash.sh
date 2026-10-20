@@ -12,6 +12,10 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-procevent-lib.sh
 . "$SCRIPT_DIR/fm-procevent-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-busy-lib.sh
+. "$SCRIPT_DIR/fm-busy-lib.sh"
 
 SOURCE_ID=tui-dash-alerts
 ADAPTER=tui-dash
@@ -37,6 +41,7 @@ Usage:
   fm-procevent-tui-dash.sh terminal <result-file>
   fm-procevent-tui-dash.sh relisten
   fm-procevent-tui-dash.sh verdict <sequence> <verdict>
+  fm-procevent-tui-dash.sh silent <result-file>
   fm-procevent-tui-dash.sh source-id
   fm-procevent-tui-dash.sh retire
 
@@ -72,6 +77,12 @@ verdict    Record firstmate's one-line judgment of the captured alert event at
            result through "fm-procevent.sh handled". A repeat call for an
            acknowledged sequence records nothing and prints already-handled.
            A stopped or unknown result takes the generic handled instead.
+silent     Judge a captured alert deterministically routine and record that
+           judgment in the verdict record, so the runner announces nothing.
+           A long task under the two-hour mark stays silent while its crew
+           reads working with a busy harness, or paused on a declared pause.
+           A heavy load carried by load alone stays silent while the capacity
+           limit holds new starts. Anything else returns nonzero and still wakes.
 source-id  Print the canonical source id.
 retire     Retire the registration, stop the tap, and discard its spool.
 
@@ -342,6 +353,79 @@ cmd_tap() {
   exit 0
 }
 
+task_live_state() {
+  local line rest
+  line=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-crew-state.sh" "$1" 2>/dev/null | head -1) || return 1
+  case "$line" in
+    'state: '*) rest=${line#state: }; printf '%s\n' "${rest%% *}" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Only an exact busy verdict silences: an idle or unknown harness keeps the
+# crew's long task a wake.
+harness_busy() {
+  local id=$1 meta verdict
+  meta="$STATE/$id.meta"
+  [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  verdict=$(fm_busy_classify_meta "$meta" "$id" "$STATE" 2>/dev/null) || return 1
+  [ "${verdict%% *}" = busy ]
+}
+
+heavy_load_routine_text() {
+  jq -e '.crossed == ["load"]' "$1" >/dev/null 2>&1 || return 1
+  printf 'routine: heavy load on load alone, new starts already held\n'
+}
+
+# The event's own reason is not enough, because tui-dash cannot see whether
+# the crew is still moving: a quiet long task under the two-hour mark reads
+# as routine only when the live crew agrees.
+long_task_routine_text() {
+  local id live
+  jq -e '(.reason == "quiet") and ((.totalMinutes | type) == "number") and (.totalMinutes < 120)' "$1" >/dev/null 2>&1 || return 1
+  id=$(jq -r '.task.id // empty' "$1" 2>/dev/null) || return 1
+  [ -n "$id" ] || return 1
+  live=$(task_live_state "$id") || return 1
+  case "$live" in
+    working)
+      harness_busy "$id" || return 1
+      printf 'routine: long task under 2h, still working with a busy harness\n'
+      ;;
+    paused)
+      printf 'routine: long task under 2h, waiting on a declared pause\n'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+append_verdict_record() {
+  local record
+  record=$(jq -c --arg verdict "$1" --arg at "$(now_iso)" \
+    '{schemaVersion: 1, event: ., verdict: $verdict, recordedAt: $at}' "$2") || return 1
+  append_line "$(verdict_file)" "$record"
+}
+
+# Silent records the routine judgment the same way but never acknowledges:
+# the runner holds its source lock while asking, and records the handled
+# marker itself once silent reports routine.
+cmd_silent() {
+  local file=${1-} class text seq
+  [ -n "$file" ] || usage
+  [ -f "$file" ] || die "result file does not exist: $file"
+  class=$(cmd_classify "$file")
+  case "$class" in
+    heavy-load) text=$(heavy_load_routine_text "$file") || return 1 ;;
+    long-task) text=$(long_task_routine_text "$file") || return 1 ;;
+    *) return 1 ;;
+  esac
+  seq=$(fm_procevent_result_sequence "$file")
+  case "$seq" in ''|*[!0-9]*) return 1 ;; esac
+  if fm_procevent_is_handled "$STATE" "$SOURCE_ID" "$seq"; then
+    return 0
+  fi
+  append_verdict_record "$text" "$file"
+}
+
 cmd_classify() {
   local file=${1-}
   [ -n "$file" ] || usage
@@ -363,7 +447,7 @@ cmd_terminal() {
 }
 
 cmd_verdict() {
-  local seq=${1-} text=${2-} result record
+  local seq=${1-} text=${2-} result
   [ "$#" -eq 2 ] || usage
   case "$seq" in ''|*[!0-9]*) die "sequence must be a whole number: $seq" ;; esac
   [ -n "$text" ] || die "the verdict needs text"
@@ -380,10 +464,7 @@ cmd_verdict() {
     quota-pace|heavy-load|long-task) ;;
     *) die "the result is not an alert event; acknowledge it with fm-procevent.sh handled $SOURCE_ID $seq" ;;
   esac
-  record=$(jq -c --arg verdict "$text" --arg at "$(now_iso)" \
-    '{schemaVersion: 1, event: ., verdict: $verdict, recordedAt: $at}' "$result") \
-    || die "cannot build the verdict record"
-  append_line "$(verdict_file)" "$record" || die "cannot append the verdict to $(verdict_file)"
+  append_verdict_record "$text" "$result" || die "cannot append the verdict to $(verdict_file)"
   "$SCRIPT_DIR/fm-procevent.sh" handled "$SOURCE_ID" "$seq"
 }
 
@@ -416,6 +497,7 @@ case "${1-}" in
   terminal)  shift; cmd_terminal "$@" ;;
   relisten)  shift; [ "$#" -eq 0 ] || usage; exit 0 ;;
   verdict)   shift; cmd_verdict "$@" ;;
+  silent)    shift; cmd_silent "$@" ;;
   source-id) shift; [ "$#" -eq 0 ] || usage; printf '%s\n' "$SOURCE_ID" ;;
   retire)    shift; cmd_retire "$@" ;;
   ''|-h|--help|help) usage ;;

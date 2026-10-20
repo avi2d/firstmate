@@ -19,8 +19,11 @@ cat > "$FAKE_BIN/tui-dash" <<'SH'
 while [ "$SECONDS" -lt 120 ]; do
   for f in "$FAKE_DIR"/emit/*; do
     [ -e "$f" ] || continue
-    printf '{"schemaVersion":1,"rule":"%s","at":"%s","machine":"winbox","stream":%s}\n' \
-      "$(cat "$f")" "$(basename "$f")" "$$"
+    content=$(cat "$f")
+    case "$content" in
+      '{'*) printf '%s\n' "$content" ;;
+      *) printf '{"schemaVersion":1,"rule":"%s","at":"%s","machine":"winbox","stream":%s}\n' "$content" "$(basename "$f")" "$$" ;;
+    esac
     rm -f "$f"
   done
   if [ -e "$FAKE_DIR/fail" ]; then
@@ -177,3 +180,167 @@ assert_contains "$out" "stream stopped: tui-dash-alerts" "retire reports the sto
 assert_absent "$H/state/tui-dash-alerts/spool.jsonl" "retire discarded the spool"
 assert_absent "$H/state/procevent/tui-dash-alerts.source" "retire dropped the registration"
 pass "adapter retire stops the stream at once"
+
+FAKE_TMUX_BIN="$TMP_ROOT/faketmux"
+mkdir -p "$FAKE_TMUX_BIN"
+cat > "$FAKE_TMUX_BIN/tmux" <<'TMUXSH'
+#!/usr/bin/env bash
+if [ "${1:-}" = "list-panes" ]; then
+  printf '%s\n' '%fixture-pane'
+  exit 0
+fi
+exit 1
+TMUXSH
+chmod +x "$FAKE_TMUX_BIN/tmux"
+export PATH="$FAKE_TMUX_BIN:$PATH"
+export FM_CREW_STATE_NO_FORGE=1
+
+write_task() {
+  local home=$1 id=$2 busy=$3 line=${4-}
+  local wt="$home/wt-$id"
+  mkdir -p "$wt"
+  cat > "$home/state/$id.meta" <<EOF
+worktree=$wt
+kind=ship
+harness=pi
+backend=tmux
+window=%fixture-pane
+branch=fm/fixture-$id
+project=fixture
+EOF
+  printf 'gentoken1\n' > "$home/state/$id.busy-gen"
+  printf 'v1 gen=gentoken1 seq=1 state=%s source=pi-ext event=agent_start ts=%s\n' "$busy" "$(date +%s)" > "$home/state/$id.busy-state"
+  if [ -n "$line" ]; then
+    printf '%s\n' "$line" > "$home/state/$id.status"
+  fi
+}
+
+write_alert_result() {
+  mkdir -p "$1/state/procevent-inbox"
+  cat > "$1/state/procevent-inbox/tui-dash-alerts.$2.result"
+  printf 'tui-dash\n' > "$1/state/procevent-inbox/tui-dash-alerts.$2.adapter"
+}
+
+emit_json() {
+  cat > "$1/fake/emit/$2"
+}
+
+last_verdict() {
+  tail -n 1 "$TUI_DASH_ALERTS_VERDICTS"
+}
+
+H=$(new_home routine-working)
+write_task "$H" alpha busy 'working: on the routine path'
+write_alert_result "$H" 4 <<'JSON'
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"alpha","title":"Alpha","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
+JSON
+before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")
+FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.4.result" || fail "a long task under 2h with a busy harness was not silent"
+assert_equals $((before + 1)) "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")" "a routine alert records one verdict"
+judged=$(last_verdict)
+assert_contains "$(printf '%s\n' "$judged" | jq -r .verdict)" "routine:" "a routine long task records a routine verdict"
+assert_contains "$(printf '%s\n' "$judged" | jq -r .verdict)" "busy harness" "the verdict names why the alert stayed quiet"
+assert_equals "$(jq -c . "$H/state/procevent-inbox/tui-dash-alerts.4.result")" "$(printf '%s\n' "$judged" | jq -c .event)" "the routine verdict carries the event verbatim"
+pass "a long task under 2h with a busy harness is recorded without a wake"
+
+H=$(new_home routine-paused)
+write_task "$H" beta idle 'paused: waiting on capacity'
+write_alert_result "$H" 5 <<'JSON'
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"beta","title":"Beta","project":"fixture","state":"waiting","detail":"paused","firstStartedAt":"2026-10-19T11:15:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":45}
+JSON
+FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.5.result" || fail "a long task under 2h on a declared pause was not silent"
+assert_contains "$(last_verdict | jq -r .verdict)" "declared pause" "the verdict names the declared pause"
+pass "a long task under 2h on a declared pause is recorded without a wake"
+
+H=$(new_home routine-load)
+write_alert_result "$H" 6 <<'JSON'
+{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T12:00:00Z","machine":"winbox","since":"2026-10-19T11:55:00Z","crossed":["load"],"limits":{"name":"winbox","loadAtLeast":16,"memory":{"availableUnderPercent":15}},"load":[19.41,8.86,8.09],"memory":null,"topProcesses":{"byCpu":[],"byMemory":[]}}
+JSON
+FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.6.result" || fail "a heavy load on load alone was not silent"
+assert_contains "$(last_verdict | jq -r .verdict)" "load alone" "the verdict names the load-only crossing"
+pass "a heavy load on load alone is recorded without a wake"
+
+H=$(new_home wake-two-hours)
+write_task "$H" gamma busy 'working: past the mark'
+write_alert_result "$H" 7 <<'JSON'
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T13:00:00Z","machine":"winbox","task":{"id":"gamma","title":"Gamma","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T12:45:00Z","quietMinutes":15,"totalMinutes":120}
+JSON
+before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")
+if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.7.result" 2>/dev/null; then
+  fail "a long task at exactly 2h stayed silent"
+fi
+assert_equals "$before" "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")" "a waking alert records no verdict"
+pass "a long task at exactly 2h still wakes"
+
+H=$(new_home wake-blocked)
+write_task "$H" delta idle 'blocked: waiting on review'
+write_alert_result "$H" 8 <<'JSON'
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"delta","title":"Delta","project":"fixture","state":"blocked","detail":"waiting on review","firstStartedAt":"2026-10-19T11:30:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":30}
+JSON
+if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.8.result" 2>/dev/null; then
+  fail "a blocked long task stayed silent"
+fi
+pass "a long task under 2h in another state still wakes"
+
+H=$(new_home wake-idle-harness)
+write_task "$H" epsilon idle 'working: between turns'
+write_alert_result "$H" 9 <<'JSON'
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"epsilon","title":"Epsilon","project":"fixture","state":"working","detail":"between turns","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
+JSON
+if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.9.result" 2>/dev/null; then
+  fail "a working task with an idle harness stayed silent"
+fi
+pass "a working task without a busy harness still wakes"
+
+H=$(new_home wake-quota)
+write_alert_result "$H" 10 <<'JSON'
+{"schemaVersion":1,"rule":"quota-pace","at":"2026-10-19T12:00:00Z","window":"five_hour","windowLabel":"session","leftPoints":46,"elapsedFraction":0.5,"resetsAt":"2026-10-19T17:00:00Z","flags":[]}
+JSON
+if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.10.result" 2>/dev/null; then
+  fail "a quota-pace alert stayed silent"
+fi
+pass "every quota-pace alert still wakes"
+
+H=$(new_home wake-memory)
+write_alert_result "$H" 11 <<'JSON'
+{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T12:00:00Z","machine":"winbox","since":"2026-10-19T11:55:00Z","crossed":["load","memory"],"limits":{"name":"winbox","loadAtLeast":16,"memory":{"availableUnderPercent":15}},"load":[19.41,8.86,8.09],"memory":{"usedBytes":46000000000,"totalBytes":50513698816,"usedPercent":91},"topProcesses":{"byCpu":[],"byMemory":[]}}
+JSON
+if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.11.result" 2>/dev/null; then
+  fail "a memory-pressure heavy load stayed silent"
+fi
+pass "a memory-pressure heavy load still wakes"
+
+H=$(new_home wake-stopped)
+mkdir -p "$H/state/procevent-inbox"
+printf '{"stopped":{"exitCode":3,"stderr":"the alert settings are not valid"}}\n' > "$H/state/procevent-inbox/tui-dash-alerts.12.result"
+printf 'tui-dash\n' > "$H/state/procevent-inbox/tui-dash-alerts.12.adapter"
+assert_present "$H/state/procevent-inbox/tui-dash-alerts.12.result" "the stopped fixture exists"
+if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.12.result" 2>/dev/null; then
+  fail "a stopped document stayed silent"
+fi
+printf 'not json\n' > "$TMP_ROOT/silence-garbage.result"
+if "$ADAPTER" silent "$TMP_ROOT/silence-garbage.result" 2>/dev/null; then
+  fail "an unknown document stayed silent"
+fi
+pass "stopped and unknown documents still wake"
+
+H=$(new_home routine-runner)
+write_task "$H" alpha busy 'working: on the routine path'
+FM_HOME="$H" "$ADAPTER" arm -- "$FAKE_BIN/tui-dash" >/dev/null || fail "arm failed"
+emit_json "$H" 2026-10-19T12:00:00Z <<'JSON'
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"alpha","title":"Alpha","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
+JSON
+start_once "$H" > "$TMP_ROOT/routine-run.out" 2>&1 || fail "the routine runner failed: $(cat "$TMP_ROOT/routine-run.out")"
+assert_not_contains "$(cat "$H/state/.wake-queue")" "procevent:tui-dash-alerts:1" "a routine alert queues no wake"
+assert_contains "$(last_verdict | jq -r .verdict)" "routine:" "the runner path records the routine verdict"
+assert_present "$H/state/procevent-inbox/tui-dash-alerts.1.handled" "a routine alert is acknowledged"
+pass "the runner records a routine alert with no wake"
+
+H=$(new_home wake-runner)
+FM_HOME="$H" "$ADAPTER" arm -- "$FAKE_BIN/tui-dash" >/dev/null || fail "arm failed"
+emit_json "$H" 2026-10-19T12:00:00Z <<'JSON'
+{"schemaVersion":1,"rule":"quota-pace","at":"2026-10-19T12:00:00Z","window":"five_hour","windowLabel":"session","leftPoints":46,"elapsedFraction":0.5,"resetsAt":"2026-10-19T17:00:00Z","flags":[]}
+JSON
+start_once "$H" > "$TMP_ROOT/wake-run.out" 2>&1 || fail "the waking runner failed: $(cat "$TMP_ROOT/wake-run.out")"
+assert_contains "$(cat "$H/state/.wake-queue")" "check: procevent tui-dash tui-dash-alerts 1" "a quota alert still queues its wake"
+pass "the runner still wakes for a quota alert"
