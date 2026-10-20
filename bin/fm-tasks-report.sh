@@ -17,9 +17,19 @@ fi
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 1; }
 
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
+
+CS_TIMEOUT="${FM_SNAPSHOT_CREW_STATE_TIMEOUT:-10}"
+READ_CONCURRENCY=8
+
 TMPDIR_WORK="${TMPDIR:-/tmp}/fm-tasks-report-$$"
 mkdir -p "$TMPDIR_WORK"
 trap 'rm -rf "$TMPDIR_WORK"' EXIT
+
+meta_last() {
+  grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
 
 discover_homes() {
   local dir resolved seen="$TMPDIR_WORK/seen"
@@ -40,6 +50,11 @@ discover_homes() {
       resolved=$(cd "$dir" 2>/dev/null && pwd -P) || continue
       grep -qxF "$resolved" "$seen" 2>/dev/null || echo "$resolved" >>"$seen"
     done
+    resolved=$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd -P) || resolved=""
+    # A bare checkout can carry an empty state dir without being a home; the backlog marks one that is lived in.
+    if [ -n "$resolved" ] && [ -d "$resolved/state" ] && [ -f "$resolved/data/backlog.md" ]; then
+      grep -qxF "$resolved" "$seen" 2>/dev/null || echo "$resolved" >>"$seen"
+    fi
     if [ -n "${FM_HOME:-}" ] && [ -d "${FM_HOME}/state" ]; then
       resolved=$(cd "$FM_HOME" 2>/dev/null && pwd -P) || true
       if [ -n "${resolved:-}" ]; then
@@ -49,6 +64,148 @@ discover_homes() {
   fi
   sort -u "$seen"
 }
+
+open_blocked() {
+  local status_file=$1 kind=$2 state=$3 source=$4
+  local open_tsv open_json
+  open_tsv=$(status_open_decisions "$status_file" "$kind")
+  if [ "$kind" != secondmate ] && \
+     { { { [ "$source" = run-step ] || [ "$source" = pane ]; } \
+         && [ "$state" != parked ] && [ "$state" != blocked ]; } \
+       || { [ "$state" = "done" ] || [ "$state" = "failed" ]; }; }; then
+    open_tsv=""
+  fi
+  open_json=$(printf '%s' "$open_tsv" | jq -R -s '
+      [ splits("\n") | select(length > 0)
+        | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<summary>.*)$")?)
+        | select(. != null) ]')
+  printf '%s' "$open_json" | jq 'if any(.[]; .verb == "blocked") then 1 else 0 end'
+}
+
+observe_task() {
+  local crew_state=$1 home=$2 id=$3 kind=$4 status_file=$5 out=$6
+  local raw rest state source detail blocked sep
+  raw=$(fm_run_timed "$CS_TIMEOUT" env FM_HOME="$home" "$crew_state" "$id" 2>/dev/null || true)
+  raw=$(printf '%s\n' "$raw" | head -1)
+  sep=' · '
+  state=unknown
+  source=none
+  detail=
+  case "$raw" in
+    state:\ *"$sep"source:\ *)
+      rest=${raw#state: }
+      state=${rest%%"$sep"source: *}
+      rest=${rest#*"$sep"source: }
+      case "$rest" in
+        *"$sep"*) source=${rest%%"$sep"*}; detail=${rest#*"$sep"} ;;
+        *) source=$rest ;;
+      esac
+      ;;
+  esac
+  blocked=$(open_blocked "$status_file" "$kind" "$state" "$source")
+  jq -n --arg id "$id" --arg state "$state" --arg detail "$detail" --argjson blocked "$blocked" \
+    '{id:$id,state:$state,detail:$detail,blocked:($blocked == 1)}' >>"$out"
+}
+
+observe_remote_stub() {
+  local id=$1 kind=$2 status_file=$3 out=$4
+  local blocked
+  blocked=$(open_blocked "$status_file" "$kind" unknown none)
+  jq -n --arg id "$id" --argjson blocked "$blocked" \
+    '{id:$id,state:"unknown",detail:"remote endpoint liveness not probed by this report",blocked:($blocked == 1)}' >>"$out"
+}
+
+collect_home_snapshot() {
+  local home=$1 snap_bin=$2 out=$3
+  local snap_dir crew_state work meta id kind branch project spawn_gen first_spawn_gen worktree present remote_host
+  local pids="" batch=0 rc=0 contrib_pid=""
+  snap_dir=$(dirname "$snap_bin")
+  crew_state="$snap_dir/fm-crew-state.sh"
+  [ -x "$crew_state" ] || crew_state="$SCRIPT_DIR/fm-crew-state.sh"
+  work="$TMPDIR_WORK/home-$4"
+  mkdir -p "$work"
+  : >"$work/base.jsonl"
+  : >"$work/obs.jsonl"
+  : >"$work/live.tsv"
+  if command -v timeout >/dev/null 2>&1; then
+    FM_HOME="$home" timeout 120 "$snap_bin" --contribution-input >"$work/contrib.json" 2>"$work/contrib.err" &
+  else
+    FM_HOME="$home" "$snap_bin" --contribution-input >"$work/contrib.json" 2>"$work/contrib.err" &
+  fi
+  contrib_pid=$!
+  for meta in "$home"/state/*.meta; do
+    [ -e "$meta" ] || continue
+    id=$(basename "$meta" .meta)
+    kind=$(meta_last "$meta" kind)
+    [ -n "$kind" ] || kind=ship
+    branch=$(meta_last "$meta" branch)
+    project=$(meta_last "$meta" project)
+    spawn_gen=$(meta_last "$meta" spawn_gen)
+    first_spawn_gen=$(meta_last "$meta" first_spawn_gen)
+    worktree=$(meta_last "$meta" worktree)
+    present=false
+    if [ -n "$worktree" ] && [ -e "$worktree" ]; then present=true; fi
+    jq -n --arg id "$id" --arg kind "$kind" --arg branch "$branch" --arg project "$project" \
+      --arg spawn_gen "$spawn_gen" --arg first_spawn_gen "$first_spawn_gen" \
+      --arg worktree "$worktree" --argjson worktree_present "$present" \
+      '{id:$id,kind:$kind,branch:$branch,project:$project,spawn_gen:$spawn_gen,first_spawn_gen:$first_spawn_gen,worktree:$worktree,worktree_present:$worktree_present}' >>"$work/base.jsonl"
+    remote_host=$(meta_last "$meta" remote_host)
+    if [ -n "$remote_host" ]; then
+      # An observation only surfaces for a live task, and reading a status
+      # file walks it line by line, which costs seconds on large secondmate logs.
+      case "${spawn_gen#s}" in [0-9]*) observe_remote_stub "$id" "$kind" "$home/state/$id.status" "$work/obs.jsonl" ;; esac
+      continue
+    fi
+    printf '%s\t%s\t%s\n' "$id" "$kind" "$home/state/$id.status" >>"$work/live.tsv"
+  done
+  while IFS="$TAB" read -r id kind status_path; do
+    [ -n "${id:-}" ] || continue
+    observe_task "$crew_state" "$home" "$id" "$kind" "$status_path" "$work/obs.jsonl" &
+    pids="$pids $!"
+    batch=$((batch + 1))
+    if [ "$batch" -ge "$READ_CONCURRENCY" ]; then
+      for p in $pids; do wait "$p" || rc=1; done
+      pids=""
+      batch=0
+    fi
+  done <"$work/live.tsv"
+  for p in $pids; do wait "$p" || rc=1; done
+  [ "$rc" -eq 0 ] || return 1
+  wait "$contrib_pid" || {
+    echo "error: fleet snapshot failed for $home: $(head -c 300 "$work/contrib.err")" >&2
+    return 1
+  }
+  jq -n --arg fm_home "$home" \
+    --slurpfile base "$work/base.jsonl" \
+    --slurpfile obs "$work/obs.jsonl" \
+    --slurpfile contrib "$work/contrib.json" '
+    ($contrib[0].backlog) as $backlog
+    | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
+      ($obs | map({key:.id, value:.}) | from_entries) as $o
+    | {
+      schema: "fm-fleet-snapshot.v1",
+      fm_home: $fm_home,
+      backlog: $backlog,
+      tasks: ([$base[]
+        | .id as $id
+        | ($o[$id] // {}) as $ob
+        | {
+          id: $id,
+          kind: .kind,
+          branch: (if .branch == "" then null else .branch end),
+          project: .project,
+          spawn_gen: (if .spawn_gen == "" then null else .spawn_gen end),
+          first_spawn_gen: (if .first_spawn_gen == "" then null else .first_spawn_gen end),
+          paths: {worktree: {path: (if .worktree == "" then null else .worktree end), present: .worktree_present}},
+          current_state: {state: ($ob.state // "unknown"), detail: ($ob.detail // "")},
+          hints: {blocked_event: ($ob.blocked // false)},
+          backlog: backlog_by_id($id)
+        }]
+        | sort_by(.id))
+    }' >"$out"
+}
+
+TAB=$(printf '\t')
 
 HOMES_FILE="$TMPDIR_WORK/homes"
 discover_homes >"$HOMES_FILE" || exit 1
@@ -73,17 +230,7 @@ while IFS= read -r home; do
   N=$((N + 1))
   snap="$home/bin/fm-fleet-snapshot.sh"
   [ -x "$snap" ] || snap="$SCRIPT_DIR/fm-fleet-snapshot.sh"
-  if command -v timeout >/dev/null 2>&1; then
-    FM_HOME="$home" timeout 120 "$snap" --json >"$SNAPS_DIR/$N.json" 2>"$SNAPS_DIR/$N.err" || {
-      echo "error: fleet snapshot failed for $home: $(head -c 300 "$SNAPS_DIR/$N.err")" >&2
-      exit 1
-    }
-  else
-    FM_HOME="$home" "$snap" --json >"$SNAPS_DIR/$N.json" 2>"$SNAPS_DIR/$N.err" || {
-      echo "error: fleet snapshot failed for $home: $(head -c 300 "$SNAPS_DIR/$N.err")" >&2
-      exit 1
-    }
-  fi
+  collect_home_snapshot "$home" "$snap" "$SNAPS_DIR/$N.json" "$N" || exit 1
   jq -e '.schema == "fm-fleet-snapshot.v1"' "$SNAPS_DIR/$N.json" >/dev/null || {
     echo "error: unexpected snapshot schema for $home" >&2
     exit 1
@@ -106,14 +253,14 @@ if command -v no-mistakes >/dev/null 2>&1; then
     block_id=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*id: "([A-Z0-9]+)".*/\1/p' | head -1)
     block_status=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*status: ([A-Za-z]+).*/\1/p' | head -1)
     block_branch=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*branch: ([^[:space:]]+).*/\1/p' | head -1)
-    runs=$(printf '%s' "$nm_out" | grep -E '^\s*"[A-Z0-9]+",[^,]+,(running|fixing),' || true)
+    runs=$(printf '%s' "$nm_out" | grep -E '^[[:space:]]*"[A-Z0-9]+",[^,]+,(running|fixing),' || true)
     if [ -n "$block_id" ] && { [ "$block_status" = running ] || [ "$block_status" = fixing ]; }; then
       runs=$(printf '  "%s",%s,%s,\n%s' "$block_id" "$block_branch" "$block_status" "$runs")
     fi
     [ -n "$runs" ] || continue
     while IFS= read -r line; do
-      run=$(printf '%s' "$line" | sed -E 's/^\s*"([A-Z0-9]+)".*/\1/')
-      run_branch=$(printf '%s' "$line" | sed -E 's/^\s*"[A-Z0-9]+",([^,]+),.*/\1/')
+      run=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*"([A-Z0-9]+)".*/\1/')
+      run_branch=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*"[A-Z0-9]+",([^,]+),.*/\1/')
       [ -n "$run" ] || continue
       [ "$run_branch" = "$branch" ] || continue
       for folder in "$HOME"/.no-mistakes/worktrees/*/"$run"; do

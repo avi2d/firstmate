@@ -24,8 +24,8 @@ MINUS3=$(jq -n --arg d "$TODAY" '$d | strptime("%Y-%m-%d") | mktime - 3*86400 | 
 NOW_EPOCH=$(date -u +%s)
 SPAWN_E=$((NOW_EPOCH - 3600))
 FIRST_E=$((NOW_EPOCH - 7200))
-SPAWN_T=$(date -u -d "@$SPAWN_E" +%Y-%m-%dT%H:%M:%SZ)
-FIRST_T=$(date -u -d "@$FIRST_E" +%Y-%m-%dT%H:%M:%SZ)
+SPAWN_T=$(jq -n --argjson e "$SPAWN_E" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")')
+FIRST_T=$(jq -n --argjson e "$FIRST_E" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")')
 
 WT_A="$TMP_ROOT/wt-a"
 WT_B="$TMP_ROOT/wt-b"
@@ -148,6 +148,44 @@ cat > "$BETA_SNAP" <<JSON
 JSON
 write_snap "$ALPHA" "$ALPHA_SNAP"
 write_snap "$BETA" "$BETA_SNAP"
+
+write_meta() {
+  local home=$1 id=$2 kind=$3 branch=$4 project=$5 spawn=$6 first=$7 worktree=$8
+  {
+    printf 'kind=%s\n' "$kind"
+    printf 'branch=%s\n' "$branch"
+    printf 'project=%s\n' "$project"
+    printf 'spawn_gen=%s\n' "$spawn"
+    printf 'first_spawn_gen=%s\n' "$first"
+    printf 'worktree=%s\n' "$worktree"
+  } > "$home/state/$id.meta"
+}
+
+write_crew_stub() {
+  cat > "$1/bin/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  alpha-ship) printf 'state: working \u00b7 source: run-step \u00b7 validating\n' ;;
+  alpha-parked) printf 'state: parked \u00b7 source: status-log \u00b7 \n' ;;
+  alpha-paused) printf 'state: paused \u00b7 source: status-log \u00b7 waiting on load\n' ;;
+  beta-wait) printf 'state: unknown \u00b7 source: none \u00b7 \n' ;;
+  beta-blocked) printf 'state: working \u00b7 source: status-log \u00b7 stuck\n' ;;
+  beta-livedone) printf 'state: done \u00b7 source: status-log \u00b7 landed\n' ;;
+  *) printf 'state: unknown \u00b7 source: none \u00b7 \n' ;;
+esac
+SH
+  chmod +x "$1/bin/fm-crew-state.sh"
+}
+
+write_meta "$ALPHA" alpha-ship ship fm/alpha-ship /w/checks "s${SPAWN_E}.1.1" "s${FIRST_E}.9.9" "$WT_A"
+write_meta "$ALPHA" alpha-parked scout fm/alpha-parked /w/tui-dash "s${SPAWN_E}.2.2" "" ""
+write_meta "$ALPHA" alpha-paused ship fm/alpha-paused /w/checks "s${SPAWN_E}.3.3" "" ""
+write_meta "$BETA" beta-wait ship fm/beta-wait /w/website "s${SPAWN_E}.4.4" "" "$WT_B"
+write_meta "$BETA" beta-blocked ship fm/beta-blocked /w/website "s${SPAWN_E}.5.5" "" ""
+write_meta "$BETA" beta-livedone ship fm/beta-livedone /w/skills "s${SPAWN_E}.6.6" "" ""
+write_crew_stub "$ALPHA"
+write_crew_stub "$BETA"
+printf '%s\n' "blocked [key=net] [at=$NOW_EPOCH]: CI runner unreachable" > "$BETA/state/beta-blocked.status"
 
 OUT="$TMP_ROOT/out.json"
 bash "$REPORT" >"$OUT" 2>"$TMP_ROOT/stderr.log" || { cat "$TMP_ROOT/stderr.log"; fail "report exits non-zero"; }
