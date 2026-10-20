@@ -17,6 +17,7 @@ fi
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 1; }
 
+# shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 
 CS_TIMEOUT="${FM_SNAPSHOT_CREW_STATE_TIMEOUT:-10}"

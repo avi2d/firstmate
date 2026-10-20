@@ -24,8 +24,8 @@ MINUS3=$(jq -n --arg d "$TODAY" '$d | strptime("%Y-%m-%d") | mktime - 3*86400 | 
 NOW_EPOCH=$(date -u +%s)
 SPAWN_E=$((NOW_EPOCH - 3600))
 FIRST_E=$((NOW_EPOCH - 7200))
-SPAWN_T=$(date -u -r "$SPAWN_E" +%Y-%m-%dT%H:%M:%SZ)
-FIRST_T=$(date -u -r "$FIRST_E" +%Y-%m-%dT%H:%M:%SZ)
+SPAWN_T=$(jq -n --argjson e "$SPAWN_E" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")')
+FIRST_T=$(jq -n --argjson e "$FIRST_E" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")')
 
 WT_A="$TMP_ROOT/wt-a"
 WT_B="$TMP_ROOT/wt-b"
