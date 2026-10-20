@@ -389,10 +389,17 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 # agent's environment.
 if fm_tasks_axi_compatible; then TASKS_AXI_COMPATIBLE=1; else TASKS_AXI_COMPATIBLE=0; fi
 
-STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-5}
-case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=5 ;; esac
-QUEUED_LIMIT=${FM_SESSION_START_QUEUED_LIMIT:-20}
-case "$QUEUED_LIMIT" in ''|*[!0-9]*|0) QUEUED_LIMIT=20 ;; esac
+if [ "$REEMIT" -eq 1 ]; then
+  STATUS_TAIL_DEFAULT=2
+  QUEUED_LIMIT_DEFAULT=10
+else
+  STATUS_TAIL_DEFAULT=5
+  QUEUED_LIMIT_DEFAULT=20
+fi
+STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-$STATUS_TAIL_DEFAULT}
+case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=$STATUS_TAIL_DEFAULT ;; esac
+QUEUED_LIMIT=${FM_SESSION_START_QUEUED_LIMIT:-$QUEUED_LIMIT_DEFAULT}
+case "$QUEUED_LIMIT" in ''|*[!0-9]*|0) QUEUED_LIMIT=$QUEUED_LIMIT_DEFAULT ;; esac
 # One per-task endpoint read may never outlive this bound: a hung backend CLI
 # becomes that task's endpoint: error line instead of the digest's whole
 # runtime budget.
@@ -407,6 +414,21 @@ SUBRULE='-----------------------------------------------------------------------
 section() { printf '\n%s\n%s\n%s\n' "$RULE" "$1" "$RULE"; }
 subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
 
+print_context_manifest_line() {
+  local path=$1 bytes digest
+  if [ ! -f "$path" ]; then
+    printf 'ABSENT\n'
+    return
+  fi
+  if [ ! -s "$path" ]; then
+    printf '(present, empty)\n'
+    return
+  fi
+  bytes=$(wc -c < "$path" 2>/dev/null | tr -d ' ' || true)
+  digest=$(hash_file_sha256 "$path" 2>/dev/null || true)
+  printf 'present, %s bytes%s (body omitted on context re-emit; read the file when this turn needs its content)\n' \
+    "${bytes:-unknown}" "${digest:+, $digest}"
+}
 # print_file_or_absent <path> <label>: full contents under a labeled
 # subsection, or an explicit ABSENT marker. Absence is semantically
 # meaningful for every one of these files (captain.md absent = firstmate
@@ -416,6 +438,10 @@ subsection() { printf '\n%s\n%s\n' "$1" "$SUBRULE"; }
 print_file_or_absent() {
   local path=$1 label=$2
   subsection "$label"
+  if [ "$REEMIT" -eq 1 ]; then
+    print_context_manifest_line "$path"
+    return
+  fi
   if [ -f "$path" ]; then
     if [ -s "$path" ]; then
       cat "$path"
@@ -681,8 +707,8 @@ if [ "$REEMIT" -eq 1 ]; then
   # delivers only a short head inline (Claude: about 2,000 characters), and
   # CONTEXT prints last, so this cue is the part that must survive the spill.
   printf 'RE-EMIT CUE: if this output ends with "Output too large ... Full output saved to <path>",\n'
-  printf 'read that whole file now, before acting. Otherwise read data/captain.md, data/captain-shared.md,\n'
-  printf 'and data/learnings.md under %s now if any of them is missing below.\n' "$DATA"
+  printf 'read that whole file now, before acting. The CONTEXT section below is a manifest (path, size,\n'
+  printf 'hash), not full bodies: read a file under %s only when this turn needs its content.\n' "$DATA"
   section "SESSION START (CONTEXT RE-EMIT) - $FM_HOME"
   printf 'This session already took the helm at its own startup and has only lost its\n'
   printf 'context. Lock ownership is re-verified and the durable records below are\n'
@@ -904,6 +930,15 @@ Go to a source directly only when:
   - or a context re-emit opened with a read cue because the
     harness cut the digest short.
 EOF
+
+if [ "$REEMIT" -eq 1 ]; then
+  cat <<'EOF'
+
+On this context re-emit the CONTEXT section below is a manifest (path, byte
+size, hash) rather than full bodies, so the "printed in full" line above
+does not cover it: read a file's body only when this turn needs its content.
+EOF
+fi
 
 # --- 6. fleet-state digest ---------------------------------------------
 # Before CONTEXT: see this file's ORDERING note. Live fleet identity is what a
