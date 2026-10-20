@@ -590,10 +590,13 @@ A pull request merges only when every one of these holds, each read by the progr
 - The pull request is on GitHub, open, and not a draft.
 - At least one check has reported, none is still running, and every one passed.
 - The task is not held for the captain and has no open `needs-decision` or `blocked` key.
-- The pull request is the task's recorded `pr=`.
-- When no `pr=` was recorded, the GitHub pull request the worker's latest `done:` line names is adopted once the forge shows its head branch is the task's ship branch.
+- The pull request is the newest one the task's `done:` or `ready:` reports name.
+  When the record still holds an earlier pull request that has already landed, the newest report wins.
+  A recorded pull request that has not landed keeps its claim.
+- When no `pr=` was recorded, the GitHub pull request the newest report names is adopted once the forge shows its head branch is the task's ship branch.
+  A report may name the pull request with its URL or with its bare number, and a bare number resolves through the task copy.
 - A URL the task does not own is never adopted.
-- The worker's latest `done:` line names this pull request, and no `working`, `paused`, or `failed` report follows it.
+- The worker's latest `done:` or `ready:` report names this pull request, and no `working`, `paused`, or `failed` report follows it.
 - The worker's latest `done:` line does not flag a credential, token, secret, auth, permission, sandbox, or isolation change.
   A mention counts as a flag unless its clause negates it.
 - The diff touches no path naming a credential, auth, token, secret, sandbox, runner isolation, key, or `.env` file, and changes no `permissions:` line or scope inside a workflow.

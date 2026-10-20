@@ -83,19 +83,20 @@ verdict() {  # <verdict> <reason>
   REASON=$2
 }
 
-# Sets DONE_LINE to the worker's latest done report and AFTER_DONE to the verb
-# of any working, paused, or failed report that follows it.
-DONE_LINE=
-AFTER_DONE=
-read_done_report() {  # <status-file>
-  local line verb
-  DONE_LINE='' AFTER_DONE=''
+# Sets REPORT_LINE to the worker's latest done or ready report and
+# AFTER_REPORT to the verb of any working, paused, or failed report after it.
+REPORT_LINE=
+AFTER_REPORT=
+read_status_report() {  # <status-file>
+  local line verb first
+  REPORT_LINE='' AFTER_REPORT=''
   [ -f "$1" ] && [ ! -L "$1" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     status_line_verb "$line" verb
-    case "$verb" in
-      done) DONE_LINE=$line AFTER_DONE='' ;;
-      working|paused|failed) [ -z "$DONE_LINE" ] || AFTER_DONE=$verb ;;
+    first=${verb%%[[:space:]]*}
+    case "$first" in
+      done|ready) REPORT_LINE=$line AFTER_REPORT='' ;;
+      working|paused|failed) [ -z "$REPORT_LINE" ] || AFTER_REPORT=$first ;;
     esac
   done < "$1"
 }
@@ -103,6 +104,65 @@ read_done_report() {  # <status-file>
 names_url() {  # <text> <url>
   case "${1//"$2"[0-9]/}" in *"$2"*) return 0 ;; esac
   return 1
+}
+
+# A bare pull request number names no repository, so gh reads it inside the
+# task copy and prints the canonical URL instead of one built from the number.
+resolve_bare_pr() {  # <meta> <number>
+  local meta=$1 num=$2 wt dir json url
+  case "$num" in ''|*[!0-9]*) return 1 ;; esac
+  wt=$(meta_value "$meta" worktree)
+  dir=
+  if [ -n "$wt" ] && [ -d "$wt" ]; then
+    dir=$wt
+  else
+    wt=$(meta_value "$meta" project)
+    [ -n "$wt" ] && [ -d "$wt" ] && dir=$wt
+  fi
+  [ -n "$dir" ] || return 1
+  json=$(cd "$dir" && forge gh pr view "$num" --json url,headRefName) || return 1
+  url=$(printf '%s' "$json" | jq -r '.url // ""' 2>/dev/null) || return 1
+  [ -n "$url" ] || return 1
+  fm_pr_url_parse "$url" 2>/dev/null || return 1
+  [ "$FM_PR_PROVIDER" = github ] || return 1
+  printf '%s\n' "$FM_PR_URL"
+}
+
+# The newest GitHub pull request the done or ready reports name, so a later
+# report supersedes the recorded one instead of ending at the earlier merge.
+# A bare number resolves through the task copy, never from the number alone.
+latest_status_pr_url() {  # <status-file> <meta>
+  local file=$1 meta=$2 line verb first note url num rest last=
+  [ -f "$file" ] && [ ! -L "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    status_line_verb "$line" verb
+    first=${verb%%[[:space:]]*}
+    case "$first" in done|ready) ;; *) continue ;; esac
+    note=$(status_line_note "$line")
+    if url=$(fm_dod_pr_url_from_done_note "$note" 2>/dev/null); then
+      if fm_pr_url_parse "$url" 2>/dev/null && [ "$FM_PR_PROVIDER" = github ]; then
+        last=$FM_PR_URL
+      fi
+      continue
+    fi
+    rest=$(printf '%s' "$note" | sed 's|https\?://[^ ]*| |g')
+    num=$(printf '%s' "$rest" | grep -Eo '(^|[^[:alnum:]])PR[ \t]*#?[0-9]+' | tail -1 | grep -Eo '[0-9]+$') || continue
+    [ -n "$num" ] || continue
+    if url=$(resolve_bare_pr "$meta" "$num"); then
+      last=$url
+    fi
+  done < "$file"
+  [ -n "$last" ] && printf '%s\n' "$last"
+  return 0
+}
+
+# A report names the pull request with its URL or with the bare number that
+# latest_status_pr_url resolved above.
+report_names_pr() {  # <line> <url> <number>
+  names_url "$1" "$2" && return 0
+  case "$3" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$(status_line_note "$1")" | sed 's|https\?://[^ ]*| |g' \
+    | grep -Eq "(^|[^[:alnum:]])PR[ \t]*#?$3([^[:alnum:]]|$)"
 }
 
 # A clause naming a boundary flags it unless it is negated, so an ambiguous
@@ -261,33 +321,39 @@ log_line() {  # <task-id> <event> <detail>
 assess() {  # <task-id>
   local id=$1 meta kind yolo project posture hold_rc open json fields
   local state draft mergeable merge_state base checks diff behind base_enc
-  local adopted candidate head_branch expected_branch
+  local adopted candidate supersede head_branch expected_branch
   VERDICT='' REASON='' URL='' HEAD='' DIFF_HEAD='' DIFF_RESULT='' CHECKS_DONE_AT=0
   meta="$STATE/$id.meta"
   [ -f "$meta" ] && [ ! -L "$meta" ] || { verdict skip "no task record"; return; }
   adopted=
   URL=$(meta_value "$meta" pr)
-  if [ -z "$URL" ]; then
-    # Recording is an agent step a missed turn can skip, while the done line
-    # still names the pull request, so the sweep adopts that URL instead of
-    # leaving a green pull request unmerged.
-    read_done_report "$STATE/$id.status"
-    if [ -n "$DONE_LINE" ]; then
-      candidate=$(fm_dod_pr_url_from_done_note "$(status_line_note "$DONE_LINE")" 2>/dev/null) || candidate=
-      if [ -n "$candidate" ] && fm_pr_url_parse "$candidate" 2>/dev/null && [ "$FM_PR_PROVIDER" = github ]; then
-        URL=$FM_PR_URL
-        adopted=1
-      fi
+  read_status_report "$STATE/$id.status"
+  candidate=$(latest_status_pr_url "$STATE/$id.status" "$meta") || candidate=
+  if [ -n "$candidate" ] && [ "$candidate" != "$URL" ]; then
+    # A later report names the next pull request while the record still
+    # holds the earlier one, so the newest report wins once the recorded
+    # one has landed instead of the task ending at the earlier merge while
+    # its follow-up sits green. A missed recording turn leaves no pr= at
+    # all, and the same newest report fills that gap instead of leaving a
+    # green pull request unmerged. A recorded pull request that has not
+    # landed keeps its claim, so a mistyped report cannot hijack it.
+    supersede=1
+    if [ -n "$URL" ] && fm_pr_url_parse "$URL" 2>/dev/null && [ "$FM_PR_PROVIDER" = github ]; then
+      fm_pr_poll_merge_already_notified "$STATE" "$id" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" || supersede=
+    fi
+    if [ -n "$supersede" ]; then
+      URL=$candidate
+      adopted=1
     fi
   fi
   [ -n "$URL" ] || { verdict skip "no recorded pull request"; return; }
-  if [ -z "$adopted" ]; then
-    if ! fm_pr_url_parse "$URL" || [ "$FM_PR_PROVIDER" != github ]; then
-      verdict skip "not a GitHub pull request"
-      return
-    fi
-    URL=$FM_PR_URL
+  # latest_status_pr_url parsed in a subshell, so its globals are lost
+  # there and every URL is parsed again in this shell.
+  if ! fm_pr_url_parse "$URL" || [ "$FM_PR_PROVIDER" != github ]; then
+    verdict skip "not a GitHub pull request"
+    return
   fi
+  URL=$FM_PR_URL
   kind=$(meta_value "$meta" kind)
   [ "${kind:-ship}" = ship ] || { verdict skip "not a ship task"; return; }
   yolo=$(meta_value "$meta" yolo)
@@ -318,14 +384,13 @@ assess() {  # <task-id>
     verdict skip "open decision or blocker ${open%%$'\t'*}"
     return
   fi
-  read_done_report "$STATE/$id.status"
-  [ -n "$DONE_LINE" ] || { verdict wait "the worker has not reported done"; return; }
-  names_url "$DONE_LINE" "$URL" || { verdict wait "the done report does not name this pull request"; return; }
-  case "$AFTER_DONE" in
+  [ -n "$REPORT_LINE" ] || { verdict wait "the worker has not reported done"; return; }
+  report_names_pr "$REPORT_LINE" "$URL" "$FM_PR_NUMBER" || { verdict wait "the done report does not name this pull request"; return; }
+  case "$AFTER_REPORT" in
     failed) verdict skip "the worker reported a failure after done"; return ;;
-    ?*) verdict wait "the worker reported $AFTER_DONE after done"; return ;;
+    ?*) verdict wait "the worker reported $AFTER_REPORT after done"; return ;;
   esac
-  if done_line_flags_boundary "$DONE_LINE"; then
+  if done_line_flags_boundary "$REPORT_LINE"; then
     verdict skip "the done line flags a credential, token or security-boundary change"
     return
   fi
@@ -470,9 +535,9 @@ cmd_sweep() {
     fm_pr_task_id_valid "$id" || continue
     if ! grep -q '^pr=https://github\.com/' "$meta" 2>/dev/null; then
       # No recorded pr= is not proof of no pull request: the recording turn
-      # can be missed while the done line still names it, and assess adopts
-      # it once the forge proves it is this task's.
-      grep -q 'PR https://github\.com/' "$STATE/$id.status" 2>/dev/null || continue
+      # can be missed while a done or ready line still names it, and assess
+      # adopts it once the forge proves it is this task's.
+      grep -Eq '(^|[^[:alnum:]])PR( +#?[0-9]+| +https://github\.com/)' "$STATE/$id.status" 2>/dev/null || continue
     fi
     sweep_task "$id"
   done
@@ -498,11 +563,11 @@ cmd_pending() {
       && [ "$(meta_value "$meta" mode)" != local-only ] \
       && [ "$(meta_value "$meta" forge)" != external ]; then
       # A yolo ship with no recorded pull request can still open one: a done
-      # line naming it is adopted by the sweep, and a task with no done
-      # report at all keeps the watch alive until its ready report lands.
-      read_done_report "$STATE/$id.status"
-      if [ -n "$DONE_LINE" ]; then
-        url=$(fm_dod_pr_url_from_done_note "$(status_line_note "$DONE_LINE")" 2>/dev/null) || url=
+      # or ready line naming it is adopted by the sweep, and a task with no
+      # report at all keeps the watch alive until its report lands.
+      read_status_report "$STATE/$id.status"
+      if [ -n "$REPORT_LINE" ]; then
+        url=$(latest_status_pr_url "$STATE/$id.status" "$meta") || url=
       else
         return 0
       fi

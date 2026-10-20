@@ -10,9 +10,9 @@ URL=https://github.com/example/repo/pull/9
 HEAD_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 HEAD_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
-write_view() {  # <case> <head> <rollup-json> [draft] [mergeable] [head-branch]
-  printf '{"state":"OPEN","isDraft":%s,"mergeable":"%s","mergeStateStatus":"CLEAN","headRefOid":"%s","headRefName":"%s","baseRefName":"main","statusCheckRollup":%s}\n' \
-    "${4:-false}" "${5:-MERGEABLE}" "$2" "${6:-fm/task-x1}" "$3" > "$1/view.json"
+write_view() {  # <case> <head> <rollup-json> [draft] [mergeable] [head-branch] [url]
+  printf '{"state":"OPEN","isDraft":%s,"mergeable":"%s","mergeStateStatus":"CLEAN","headRefOid":"%s","headRefName":"%s","baseRefName":"main","url":"%s","statusCheckRollup":%s}\n' \
+    "${4:-false}" "${5:-MERGEABLE}" "$2" "${6:-fm/task-x1}" "${7:-$URL}" "$3" > "$1/view.json"
 }
 
 green_rollup='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-19T10:00:00Z","completedAt":"2026-10-19T10:01:00Z"},{"__typename":"StatusContext","context":"commitlint","state":"SUCCESS","startedAt":"2026-10-19T10:00:30Z"}]'
@@ -52,12 +52,21 @@ make_case() {  # <name> [registry-tokens] [task-yolo]
   cat > "$c/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_CASE/gh.log"
+pick_view() {
+  local a n
+  for a in "$@"; do
+    case "$a" in
+      */pull/[0-9]*) n=${a##*/pull/}; n=${n%%[^0-9]*}; [ -f "$FM_TEST_CASE/view-$n.json" ] && { printf '%s' "$FM_TEST_CASE/view-$n.json"; return 0; } ;;
+    esac
+  done
+  printf '%s' "$FM_TEST_CASE/view.json"
+}
 case "${1:-} ${2:-}" in
   "pr view")
     case " $* " in
-      *statusCheckRollup*|*isDraft*) cat "$FM_TEST_CASE/view.json" ;;
-      *headRefOid*) jq -r .headRefOid "$FM_TEST_CASE/view.json" ;;
-      *) cat "$FM_TEST_CASE/view.json" ;;
+      *statusCheckRollup*|*isDraft*) cat "$(pick_view "$@")" ;;
+      *headRefOid*) jq -r .headRefOid "$(pick_view "$@")" ;;
+      *) cat "$(pick_view "$@")" ;;
     esac
     ;;
   "pr diff") cat "$FM_TEST_CASE/diff.txt" ;;
@@ -364,6 +373,52 @@ test_done_line_pull_request_from_another_branch_is_never_adopted() {
   pass "a done line naming a pull request from another branch is never adopted"
 }
 
+test_follow_up_pull_request_merges_after_the_recorded_one_landed() {
+  local c next
+  c=$(make_case followup)
+  next=https://github.com/example/repo/pull/10
+  printf '%s\n' fm-pr-poll-merge-notified-v1 github github.com example/repo 9 \
+    > "$c/state/task-x1.pr-poll-merge-notified"
+  chmod 600 "$c/state/task-x1.pr-poll-merge-notified"
+  write_view "$c" "$HEAD_B" "$green_rollup" false MERGEABLE fm/task-x1 "$next"
+  cp "$c/view.json" "$c/view-10.json"
+  write_view "$c" "$HEAD_A" "$green_rollup"
+  printf 'done [at=1792400000]: PR %s checks green\n' "$URL" > "$c/state/task-x1.status"
+  printf 'done [at=1792400100]: PR %s checks green\n' "$next" >> "$c/state/task-x1.status"
+  expect_verdict "$c" green "every check is green" followup
+  sweep "$c"
+  grep -qxF "pr merge 10 --repo example/repo --match-head-commit $HEAD_B --squash" "$c/gh.log" \
+    || fail "followup: the follow-up pull request did not merge: $(cat "$c/gh.log")"
+  pass "a follow-up pull request named after the recorded one landed is assessed and merged instead of skipped as already merged"
+}
+
+test_bare_pull_request_number_resolves_from_the_task_branch() {
+  local c
+  c=$(make_case bare-number)
+  sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
+  printf 'done [at=1792400000]: PR 9 checks green\n' > "$c/state/task-x1.status"
+  write_view "$c" "$HEAD_A" "$green_rollup"
+  expect_verdict "$c" green "every check is green" bare-number
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "bare-number: a done line naming a bare pull request number was not merged: $(cat "$c/gh.log")"
+  c=$(make_case bare-foreign)
+  sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
+  printf 'done [at=1792400000]: PR 9 checks green\n' > "$c/state/task-x1.status"
+  write_view "$c" "$HEAD_A" "$green_rollup" false MERGEABLE fm/someone-else
+  expect_stays_open "$c" skip "does not own" bare-foreign
+  pass "a done line naming a bare pull request number resolves through the task copy, and a foreign branch stays supervised"
+}
+
+test_ready_line_naming_a_bare_pull_request_is_followed() {
+  local c
+  c=$(make_case ready-bare)
+  sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
+  printf 'ready [at=1792400000]: PR 9 is open for review\n' > "$c/state/task-x1.status"
+  write_view "$c" "$HEAD_A" "$green_rollup"
+  expect_verdict "$c" green "every check is green" ready-bare
+  pass "a ready line naming a bare pull request number resolves through the task copy instead of waiting for a done report"
+}
+
 test_unrecorded_pull_request_merges_through_the_sweep() {
   local c
   c=$(make_case unrecorded-merge)
@@ -394,3 +449,6 @@ test_pr_check_arms_the_source_for_a_yolo_pull_request
 test_unrecorded_direct_pr_done_line_is_adopted_once_green
 test_done_line_pull_request_from_another_branch_is_never_adopted
 test_unrecorded_pull_request_merges_through_the_sweep
+test_follow_up_pull_request_merges_after_the_recorded_one_landed
+test_bare_pull_request_number_resolves_from_the_task_branch
+test_ready_line_naming_a_bare_pull_request_is_followed
