@@ -3755,7 +3755,8 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
 fi
 # The Mac load gate extends the capacity path above: a heavy start waits while
 # the five-minute average is high or the standing heavy cap for the hour is full.
-if [ "$KIND" != secondmate ] && fm_mac_load_gate_active; then
+# A relaunch replaces a worker that already holds a heavy place, so it skips the gate rather than stranding the task with no agent running.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_mac_load_gate_active; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
       echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2
@@ -3787,7 +3788,8 @@ fi
 # Firstmate homes share without a common local root. Each home lists the other
 # in config/winbox-load-siblings, so a heavy start waits while the five-minute
 # average is high or the standing heavy cap for the hour is full across both homes.
-if [ "$KIND" != secondmate ] && fm_winbox_load_gate_active "${SPAWN_CAPACITY_CONFIG:-}"; then
+# A relaunch replaces a worker that already holds a heavy place, so it skips the gate rather than stranding the task with no agent running.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_winbox_load_gate_active "${SPAWN_CAPACITY_CONFIG:-}"; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
       echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2
