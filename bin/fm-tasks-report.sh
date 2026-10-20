@@ -117,7 +117,7 @@ observe_remote_stub() {
 
 collect_home_snapshot() {
   local home=$1 snap_bin=$2 out=$3
-  local snap_dir crew_state work meta id kind branch project spawn_gen first_spawn_gen worktree present remote_host
+  local snap_dir crew_state work meta id kind mode branch project spawn_gen first_spawn_gen worktree present remote_host
   local pids="" batch=0 rc=0 contrib_pid=""
   snap_dir=$(dirname "$snap_bin")
   crew_state="$snap_dir/fm-crew-state.sh"
@@ -138,6 +138,7 @@ collect_home_snapshot() {
     id=$(basename "$meta" .meta)
     kind=$(meta_last "$meta" kind)
     [ -n "$kind" ] || kind=ship
+    mode=$(meta_last "$meta" mode)
     branch=$(meta_last "$meta" branch)
     project=$(meta_last "$meta" project)
     spawn_gen=$(meta_last "$meta" spawn_gen)
@@ -145,10 +146,10 @@ collect_home_snapshot() {
     worktree=$(meta_last "$meta" worktree)
     present=false
     if [ -n "$worktree" ] && [ -e "$worktree" ]; then present=true; fi
-    jq -n --arg id "$id" --arg kind "$kind" --arg branch "$branch" --arg project "$project" \
+    jq -n --arg id "$id" --arg kind "$kind" --arg mode "$mode" --arg branch "$branch" --arg project "$project" \
       --arg spawn_gen "$spawn_gen" --arg first_spawn_gen "$first_spawn_gen" \
       --arg worktree "$worktree" --argjson worktree_present "$present" \
-      '{id:$id,kind:$kind,branch:$branch,project:$project,spawn_gen:$spawn_gen,first_spawn_gen:$first_spawn_gen,worktree:$worktree,worktree_present:$worktree_present}' >>"$work/base.jsonl"
+      '{id:$id,kind:$kind,mode:$mode,branch:$branch,project:$project,spawn_gen:$spawn_gen,first_spawn_gen:$first_spawn_gen,worktree:$worktree,worktree_present:$worktree_present}' >>"$work/base.jsonl"
     remote_host=$(meta_last "$meta" remote_host)
     if [ -n "$remote_host" ]; then
       # An observation only surfaces for a live task, and reading a status
@@ -192,6 +193,7 @@ collect_home_snapshot() {
         | {
           id: $id,
           kind: .kind,
+          mode: (.mode // ""),
           branch: (if .branch == "" then null else .branch end),
           project: .project,
           spawn_gen: (if .spawn_gen == "" then null else .spawn_gen end),
@@ -276,7 +278,13 @@ fi
 jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
   --arg orch_version "$ORCH_VERSION" --slurpfile pipes "$PIPES" '
   ($pipes[0] // {}) as $pipes
-  | (map(
+  | def stage_kind($kind; $mode):
+      if $kind == "ship" and ($mode == "no-mistakes" or $mode == "no-mistakes-prod-only") then "full review fix"
+      elif $kind == "ship" and $mode == "direct-PR" then "quick fix"
+      elif $kind == "ship" and $mode == "local-only" then "local only"
+      elif $kind == "scout" then "scout"
+      else $kind end;
+    (map(
     . as $snap | ($snap.fm_home // "?") as $home
     | ([$snap.tasks[]? | .id]) as $live
     | {
@@ -298,7 +306,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           id: $t.id,
           title: ((($t.backlog.title // $t.id) | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           project: ((($t.project // $t.backlog.repo // "?") | tostring | split("/") | last) | if . == "" then "?" else . end),
-          kind: (($t.kind // "") | tostring),
+          kind: stage_kind((($t.kind // "") | tostring); (($t.mode // "") | tostring)),
           state: $st,
           detail: ((($t.current_state.detail // "") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           startedAt: $started,
@@ -317,7 +325,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           id: $r.id,
           title: ((($r.title // $r.id) | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           project: ((($r.repo // "?") | tostring | split("/") | last) | if . == "" then "?" else . end),
-          kind: (($r.kind // "") | tostring),
+          kind: stage_kind((($r.kind // "") | tostring); ""),
           state: "done",
           detail: ((($r.completion.verb // "done") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           startedAt: $ended,
