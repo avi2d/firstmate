@@ -399,6 +399,20 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
 }
 
+test_relaunch_replaces_its_worker_while_the_five_minute_average_is_high() {
+  local dir out rc
+  # A relaunch replaces a worker that already holds a heavy place, so the gate must not refuse the replacement once the old agent stops.
+  dir=$(new_case loadgate rl70)
+  add_ship_task "$dir" rl70 claude
+  export FM_MAC_LOAD_MOCK_5MIN=16
+  out=$(run_control "$dir" rl70 relaunch --note "continue under load"); rc=$?
+  export FM_MAC_LOAD_MOCK_5MIN=1.0
+  expect_code 0 "$rc" "a relaunch must replace its worker while the five-minute average is high"$'\n'"$out"
+  assert_contains "$out" "relaunched rl70" "the relaunch must confirm the replacement under load"
+  assert_grep "Firstmate operational input waiting: read" "$dir/fake/literal" "the replacement should have been launched under load"
+  pass "fm-control relaunch: a relaunch replaces its worker while the five-minute average is high"
+}
+
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text() {
   local dir out rc
   dir=$(new_case pending-exit rl43)
@@ -2916,6 +2930,7 @@ test_relaunch_off_opencode_removes_tracked_wiring
 test_exit_and_relaunch_remove_the_dialog_file
 test_exit_removes_the_dialog_file_before_releasing_the_lock
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
+test_relaunch_replaces_its_worker_while_the_five_minute_average_is_high
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
