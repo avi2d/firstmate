@@ -2577,6 +2577,73 @@ EOF
   pass "--reemit reprints the digest without repeating startup's mutating sweeps and still drains queued wakes"
 }
 
+test_reemit_context_manifest_names_every_source_without_bodies() {
+  local rec root home fakebin startup reemit
+  rec=$(new_world reemit-manifest)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '%s\n' 'REEMIT_MANIFEST_CAPTAIN_CANARY=present' > "$home/data/captain.md"
+  printf '%s\n' 'REEMIT_MANIFEST_LEARNINGS_CANARY=present' > "$home/data/learnings.md"
+  printf '%s\n' '- demo [no-mistakes] - a demo project' > "$home/data/projects.md"
+  : > "$home/data/captain-shared.md"
+
+  startup=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$startup" "REEMIT_MANIFEST_CAPTAIN_CANARY=present" "true startup did not print the captain body"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$reemit" "data/captain.md" "--reemit dropped the captain source label"
+  assert_contains "$reemit" "data/captain-shared.md" "--reemit dropped the shared-captain source label"
+  assert_contains "$reemit" "data/learnings.md" "--reemit dropped the learnings source label"
+  assert_contains "$reemit" "data/projects.md" "--reemit dropped the projects source label"
+  assert_contains "$reemit" "data/secondmates.md" "--reemit dropped the secondmates source label"
+  assert_contains "$reemit" "sha256:" "--reemit manifest names no hash the model could verify"
+  assert_contains "$reemit" "(present, empty)" "--reemit lost the empty-but-present distinction"
+  assert_contains "$reemit" "only when this turn needs its content" "--reemit cue does not scope the manifest follow-up reads"
+  assert_not_contains "$reemit" "REEMIT_MANIFEST_CAPTAIN_CANARY=present" "--reemit reprinted a context body it should manifest"
+  assert_not_contains "$reemit" "REEMIT_MANIFEST_LEARNINGS_CANARY=present" "--reemit reprinted a context body it should manifest"
+
+  pass "--reemit manifests every context source by size and hash instead of reprinting bodies"
+}
+
+test_reemit_defaults_bound_tighter_than_startup() {
+  local rec root home fakebin startup reemit explicit
+  rec=$(new_world reemit-bounds)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_tmux "$fakebin" "fm-sess:live"
+  make_fake_tasks_axi_compact "$fakebin"
+  printf '%s\n' '# Backlog' > "$home/data/backlog.md"
+  printf 'window=fm-sess:live\nkind=ship\n' > "$home/state/task-a.meta"
+  printf 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n' > "$home/state/task-a.status"
+
+  startup=$(FM_FAKE_TASKS_AXI_READY=12 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$startup" "line 3" "true startup tail (5 lines) missing an expected recent line"
+  assert_contains "$startup" "ready-11,queued" "true startup queued bound (20) dropped a row it should keep"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_FAKE_TASKS_AXI_READY=12 "$SESSION_START" --reemit)
+  assert_contains "$reemit" "line 6" "re-emit tail (2 lines) missing a recent line"
+  assert_not_contains "$reemit" "line 5" "re-emit tail (2 lines) leaked an older line"
+  assert_not_contains "$reemit" "ready-11,queued" "re-emit queued bound (10) leaked a row past its limit"
+  assert_contains "$reemit" "(shown 10 of 12 ready queued item(s))" "re-emit queued bound did not disclose what it showed"
+
+  explicit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_SESSION_START_STATUS_TAIL=7 "$SESSION_START" --reemit)
+  assert_contains "$explicit" "line 1" "an explicit status-tail setting did not win over the re-emit default"
+
+  pass "--reemit tails and queued rows default tighter while explicit settings still win"
+}
+
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact() {
   local rec root home fakebin startup compact_equal compact_first compact_second clear_out resume_out reset_out baseline baseline_after expected_hash refresh_line bootstrap_line
   rec=$(new_world agents-refresh)
@@ -3222,6 +3289,8 @@ test_runtime_bound_leaves_a_healthy_digest_untouched
 test_runtime_bound_leaves_harness_ancestry_headroom
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
 test_reemit_cue_survives_the_hook_output_preview
+test_reemit_context_manifest_names_every_source_without_bodies
+test_reemit_defaults_bound_tighter_than_startup
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
