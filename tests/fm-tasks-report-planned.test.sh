@@ -1,18 +1,13 @@
 #!/usr/bin/env bash
 set -u
 
-# shellcheck source=tests/lib.sh disable=SC1091
+# shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 REPORT="$ROOT/bin/fm-tasks-report.sh"
 TASKS_AXI="$ROOT/bin/fm-tasks-axi.sh"
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
-
-# Oracle: the dashboard's PlannedJson row shape (id, title, project, kind,
-# home, queuedOn nullable date, hold nullable {kind, reason} with kind
-# captain|external|unstated, after = blocked_by ids), in tasks-axi dispatch
-# order: ready rows first, then held, then blocked.
 
 TMP_ROOT=$(fm_test_tmproot fm-tasks-report-planned)
 HOME_FIX="$TMP_ROOT/home"

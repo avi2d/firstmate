@@ -36,8 +36,7 @@ meta_last() {
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
 
-# First CSV field of the indented rows under a tasks-axi "name[N]{...}:" section.
-planned_section_ids() {  # <file> <section>
+planned_section_ids() {
   awk -v sec="$2" '
     index($0, sec "[") == 1 { in_sec = 1; next }
     in_sec == 1 && /^  / { line = substr($0, 3); sub(/,.*$/, "", line); print line; next }
@@ -45,30 +44,28 @@ planned_section_ids() {  # <file> <section>
   ' "$1"
 }
 
-planned_show_field() {  # <file> <key>
+planned_show_field() {
   sed -n "s/^  $2: //p" "$1" | head -1
 }
 
-# A tasks-axi "-" or "none" reads as empty; one pair of quotes is lifted.
-planned_value() {  # stdin
+planned_value() {
   local v
   v=$(cat)
+  # The star stays unquoted: a quoted star matches literally.
   case "$v" in '"'*'"') v=${v#\"}; v=${v%\"} ;; esac
   if [ "$v" = "-" ] || [ "$v" = "none" ] || [ "$v" = "" ]; then printf ''; return 0; fi
   printf '%s' "$v"
 }
 
-# Titles keep a literal dash; one pair of quotes is lifted.
-planned_title() {  # stdin
+planned_title() {
   local v
   v=$(cat)
+  # The star stays unquoted: a quoted star matches literally.
   case "$v" in '"'*'"') v=${v#\"}; v=${v%\"} ;; esac
   printf '%s' "$v"
 }
 
-# Queued rows for one home through its own fm-tasks-axi, in dispatch order:
-# ready rows first, then held, then blocked. Any read failure leaves [].
-collect_home_planned() {  # <home> <out> <tag>
+collect_home_planned() {
   local home=$1 out=$2 tag=$3
   local name ready_f queued_f show_f rows_f groups_f emitted_f ordered_f
   local ready_ids queued_ids id title repo project kind created blocked_by blocked held hold_reason hold_kind group pass
