@@ -1,67 +1,5 @@
 #!/usr/bin/env bash
-# fm-role-lib.sh - the Firstmate home role and self-repository publication consent.
-#
-# Every Firstmate home runs as a user/operator by default: it may consume
-# firstmate, change its gitignored operational state, and repair the installation
-# locally, but nothing it does publishes to the firstmate repository's upstream.
-# Upstream publication - a pushed branch, pull request, issue, comment, or fork -
-# requires an explicit, home-local grant: the maintainer opt-in written by the
-# operator into config/firstmate-role, or a bounded per-task consent recorded at
-# dispatch. Role is never inferred from gh identity, permissions, remotes,
-# environment, or CI. docs/configuration.md "Firstmate role" owns the
-# operator-facing schema; this library owns parsing, repository-identity
-# normalization, self-repository detection, and the fail-closed gate the dispatch
-# surfaces share. Everything here resolves from files and local git plumbing
-# only; nothing calls gh or the network.
-#
-# Role file: one directive line in config/firstmate-role (blank lines and
-# full-line # comments ignored), either
-#   user                                 - the default; may be omitted
-#   maintainer <host>/<owner>/<repo>     - this home develops firstmate for the
-#                                          named upstream
-# A scope names the publication target repository (where a PR lands), not a push
-# destination. In a secondmate home (marked by .fm-secondmate-home) a role file
-# authorizes nothing on its own: it is trusted only when the existing
-# config-inheritance receipt config/.fm-inherit-firstmate-role.generation proves
-# the exact bytes the parent last published there, so a stale or unproven grant
-# is dead on arrival. The parent publishes its resolved role
-# (fm_role_inherit_payload), never its raw file, so a child never gains through
-# supported propagation a grant the parent does not resolve. The receipt proves
-# consistency, not provenance: it prevents accidental publication through
-# supported paths and is not a security boundary against a process that
-# deliberately forges local records.
-#
-# Self-repository detection compares the task's project dir against the running
-# code root by repository lineage, offline: a shared git common dir covers
-# linked worktrees and the code root itself, and a project holding a root commit
-# of the code root's history covers any fork, the parent, and any clone of
-# either. Lineage that cannot be determined (no code root history, or a shallow
-# side sharing no root) refuses rather than permits. The publication target is
-# compared only against a maintainer scope or task consent: the repository
-# gh repo set-default recorded, else the first remote named upstream, github,
-# or origin (the order gh prefers when resolving a default repository),
-# reduced to lowercase host/owner/repo; a local-path remote
-# is resolved one hop through that repository's own origin, and left as
-# path:<abs> when unreadable. An unknown target never permits.
-#
-# Public functions:
-#   fm_role_file <config-dir>            - the role file path
-#   fm_role_scope_valid <scope>          - host/owner/repo[/subgroup] shape check
-#   fm_role_scope_norm <scope>           - canonical comparison form
-#   fm_role_remote_identity <url> [<dir>]- host/owner/repo or path:<abs> or empty
-#   fm_role_publication_target <git-dir> - identity a default publication reaches
-#   fm_role_self_repo <project> <root>   - 0 firstmate lineage, 1 not, 2 unknown
-#   fm_role_parse_file <file>            - sets FM_ROLE/FM_ROLE_SCOPE/FM_ROLE_DIAG
-#   fm_role_resolve <home> <config-dir>  - effective role; adds FM_ROLE_SOURCE
-#   fm_role_inherit_payload <home> <config-dir> <out-file>
-#                                        - stage the resolved role a parent publishes
-#   fm_role_gate_self_publish <home> <config> <project> <root> [consent]
-#                                        - 0 authorized, 1 refused, 2 not self-repo
-#
-# Global outputs: FM_ROLE (user|maintainer), FM_ROLE_SCOPE (maintainer scope),
-# FM_ROLE_SOURCE (absent|local|inherited), FM_ROLE_DIAG (narrow refusal or
-# malformed-input reason), FM_ROLE_PUB_TARGET, FM_ROLE_PUB_AUTHORITY,
-# FM_ROLE_PUB_DENIAL.
+# Undeterminable lineage or publication target refuses rather than permits.
 
 # fm_role_file <config-dir>
 fm_role_file() {
@@ -245,18 +183,33 @@ fm_role_gh_default_url() {
   printf 'https://%s/%s\n' "${id%%/*}" "$value"
 }
 
-# fm_role_publication_target <git-dir> - the repository a default publication
-# (gh pr/issue, a no-mistakes PR) would reach: the gh repo set-default choice,
-# else the first of upstream, github, origin that is configured, in the order
-# gh prefers, normalized to host/owner/repo or path:<abs>. Empty when the repo
-# has no such remote.
+# fm_role_publication_target <git-dir> - the repository a default publication reaches.
 fm_role_publication_target() {
-  local dir=$1 remote url
-  url=$(fm_role_gh_default_url "$dir")
-  if [ -n "$url" ]; then
-    fm_role_remote_identity "$url" "$dir"
-    return 0
-  fi
+  local dir=$1 remote remotes url= value id
+  remotes=$(git -C "$dir" remote 2>/dev/null) || return 0
+  while IFS= read -r remote; do
+    [ -n "$remote" ] || continue
+    value=$(git -C "$dir" config --get "remote.$remote.gh-resolved" 2>/dev/null) || continue
+    case $value in
+      base)
+        url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || return 0
+        fm_role_remote_identity "$url" "$dir"
+        return
+        ;;
+      */*)
+        case $value in
+          */*/*|*\ *) continue ;;
+        esac
+        url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || return 0
+        id=$(fm_role_remote_identity "$url" "$dir")
+        case $id in
+          ''|path:*) return 0 ;;
+        esac
+        fm_role_remote_identity "https://${id%%/*}/$value" "$dir"
+        return
+        ;;
+    esac
+  done <<< "$remotes"
   for remote in upstream github origin; do
     if url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) && [ -n "$url" ]; then
       break
