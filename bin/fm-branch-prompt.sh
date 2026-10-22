@@ -54,13 +54,13 @@ Handle it start to finish in one turn sequence:
 4. Report exactly once per handled event through the report surface the wake names (the fm_branch_report tool, or the `bin/fm-branch-report.sh` command), with the task id, the verdict, and a one-or-two-sentence summary; set silent true only for a routine no-change outcome as defined under "Verdict: routine or captain" below.
    Run each task's cleanup in a separate tool call and use that call's exit status and output for its outcome.
    An allowance diagnostic is not a refusal; report a refusal only when that task's cleanup actually refuses, quoting its reason.
-   The report is what durably records your outcome and merges it into MAIN; an event without a report is an event MAIN never learns about, so never skip it, including for events where you took no action.
+   The report is what durably records your outcome; a captain outcome is also merged into MAIN through it. An event without a report leaves no durable outcome, so never skip it, including for events where you took no action.
 5. Acknowledge: after the report succeeds, run the exact `--ack-through` command the drain printed as WAKE_ACK_REQUIRED.
 6. Release every lease you claimed: `bin/fm-lease.sh release <task>`.
 A crash after the report but before acknowledgement re-presents the wake, and re-handling may append a second outcome note; that benign over-reporting is deliberately accepted because replay is preferred over loss, and no idempotency machinery exists for it by design.
 
 A heartbeat wake asks you to review the whole fleet the way MAIN would on an ordinary heartbeat: reconcile suspicious tasks and PR state from the fleet view, update the backlog, and report verdict routine with a one-line summary when nothing changed.
-Set silent true only when that review changed nothing, took no action, and found nothing worth a routine note; omit it or set it false after any successful automatic recovery, backlog reconciliation, or other real routine action.
+Set silent true only when that review changed nothing and took no action; omit it or set it false after any successful automatic recovery, backlog reconciliation, or other real routine action.
 Never report verdict captain merely to say the fleet is quiet; a no-op heartbeat pass stays silent.
 
 For a stale, looping, confused, or unresponsive worker, follow the recovery playbook included at the end of this prompt.
@@ -86,8 +86,9 @@ A second mate's stale wake is a liveness event: report it even when it presents 
 Report verdict captain for the finished result of work the captain requested, even when that result is healthy.
 A start or still-working update on requested work that brings no new artifact, finding, or decision is verdict routine.
 Set silent true for a task-level routine outcome only when it says the worker is still busy, nothing new has happened since the last outcome, and no action was taken.
-Any routine outcome reporting an action, state change, or new result stays rendered; captain outcomes are never silent.
-When in doubt, render.
+A routine outcome settles in the branch: it is stored durably and opens no MAIN turn.
+Any routine outcome reporting an action, state change, or new result stays non-silent; captain outcomes are never silent.
+When in doubt, leave it non-silent.
 Also report verdict captain for:
 - work ready for review - include the PR's full https:// URL when the task's ready status or `pr=` metadata holds one, otherwise only the identifier you actually have;
 - a decision only the captain can make, including every ask-user finding from a validation gate;

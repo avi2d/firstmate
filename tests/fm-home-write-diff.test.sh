@@ -161,6 +161,59 @@ test_file_replaced_by_link_is_retyped
 test_session_churn_is_not_reported
 test_both_modes_leave_the_home_untouched
 test_report_reads_the_home_recorded_at_spawn
+AUTH_BEFORE='{"openai":{"type":"oauth","access":"TOKEN-V1","refresh":"TOKEN-R1","expires":111,"clientId":"cid","scopes":["a"]},"opencode-go":{"type":"api_key","key":"SECRET-V1"}}'
+
+# Oracle: only the OAuth token fields were rewritten, so this is a renewal.
+# Rejects a value-based comparison that flags every token rewrite.
+auth_rewrite_report() {  # <name> <before-json> <after-json> sets AUTH_OUT
+  local name=$1
+  make_world "$name"
+  printf '%s' "$2" >"$HOME_DIR/.pi/agent/auth.json"
+  fm_touch_epoch 1700000000 "$HOME_DIR/.pi/agent/auth.json"
+  HOME=$HOME_DIR "$DIFF" snapshot "$SNAP" "$WORKTREE" || fail "$name: snapshot should succeed"
+  printf '%s' "$3" >"$HOME_DIR/.pi/agent/auth.json"
+  AUTH_OUT=$("$DIFF" report "$SNAP") || fail "$name: report should succeed"
+}
+
+test_auth_token_renewal_is_routine() {
+  auth_rewrite_report auth-renewal "$AUTH_BEFORE" '{"openai":{"type":"oauth","access":"TOKEN-V2-LONGER","refresh":"TOKEN-R2-LONGER","expires":999999,"clientId":"cid","scopes":["a"]},"opencode-go":{"type":"api_key","key":"SECRET-V1"}}'
+  assert_equals "routine .pi/agent/auth.json (sign-in token renewal)" "$AUTH_OUT" "rewritten token fields are a routine renewal, not a change to review"
+  assert_not_contains "$AUTH_OUT" "TOKEN" "the report prints no token value"
+  assert_not_contains "$AUTH_OUT" "SECRET" "the report prints no secret value"
+  assert_not_contains "$(cat "$SNAP")" "TOKEN" "the snapshot stores no token value"
+  assert_not_contains "$(cat "$SNAP")" "SECRET" "the snapshot stores no secret value"
+  pass "a sign-in token renewal is routine"
+}
+
+test_auth_added_entry_is_flagged() {
+  auth_rewrite_report auth-added "$AUTH_BEFORE" '{"openai":{"type":"oauth","access":"TOKEN-V1","refresh":"TOKEN-R1","expires":111,"clientId":"cid","scopes":["a"]},"opencode-go":{"type":"api_key","key":"SECRET-V1"},"newp":{"type":"api_key","key":"SECRET-9"}}'
+  assert_contains "$AUTH_OUT" "changed .pi/agent/auth.json" "an added provider entry is still flagged"
+  pass "an added provider entry is flagged"
+}
+
+test_auth_removed_entry_is_flagged() {
+  auth_rewrite_report auth-removed "$AUTH_BEFORE" '{"openai":{"type":"oauth","access":"TOKEN-V1","refresh":"TOKEN-R1","expires":111,"clientId":"cid","scopes":["a"]}}'
+  assert_contains "$AUTH_OUT" "changed .pi/agent/auth.json" "a removed provider entry is still flagged"
+  pass "a removed provider entry is flagged"
+}
+
+test_auth_retyped_entry_is_flagged() {
+  auth_rewrite_report auth-retyped "$AUTH_BEFORE" '{"openai":{"type":"api_key","key":"SECRET-9"},"opencode-go":{"type":"api_key","key":"SECRET-V1"}}'
+  assert_contains "$AUTH_OUT" "changed .pi/agent/auth.json" "a retyped provider entry is still flagged"
+  pass "a retyped provider entry is flagged"
+}
+
+test_auth_api_key_change_is_flagged() {
+  auth_rewrite_report auth-apikey "$AUTH_BEFORE" '{"openai":{"type":"oauth","access":"TOKEN-V1","refresh":"TOKEN-R1","expires":111,"clientId":"cid","scopes":["a"]},"opencode-go":{"type":"api_key","key":"SECRET-V2"}}'
+  assert_contains "$AUTH_OUT" "changed .pi/agent/auth.json" "an api_key value change is still flagged"
+  pass "an api_key value change is flagged"
+}
+
+test_auth_token_renewal_is_routine
+test_auth_added_entry_is_flagged
+test_auth_removed_entry_is_flagged
+test_auth_retyped_entry_is_flagged
+test_auth_api_key_change_is_flagged
 test_missing_or_foreign_snapshot_is_refused
 test_spawn_records_the_home_before_launch ship home-ship-a1 --mode local-only --yolo off
 test_spawn_records_the_home_before_launch scout home-scout-a1 --scout

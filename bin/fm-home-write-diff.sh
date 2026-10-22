@@ -33,6 +33,10 @@ Usage:
         changed <path>
         relinked <path>: <old target> -> <new target>
         retyped <path>: <old kind> -> <new kind>
+        routine <path> (<reason>)
+      A routine line is not a difference to review: a sign-in token renewal in
+      .pi/agent/auth.json, where the provider entries and their types match and
+      only the token fields were rewritten.
       A link whose target lies inside the recorded worktree gains the suffix
       " (into the task's worktree)". Exits 0 whether or not anything changed,
       non-zero when the snapshot is missing or unreadable.
@@ -43,10 +47,15 @@ the report once the endpoint is closed, prints any difference as a warning,
 keeps a copy at data/<id>/home-writes.txt, and removes the snapshot with the
 task's other volatile state.
 
-Both modes only read the home: no file content is opened and nothing is
-reverted. A file is compared by size and modification time, a link by its
-target, a directory by existence. Other sessions share the home, so a
-difference is a change since spawn, not proof that this worker made it.
+Both modes only read the home and nothing is reverted. A file is compared
+by size and modification time, a link by its target, a directory by
+existence. Only .pi/agent/auth.json is ever opened: the snapshot keeps a
+redacted fingerprint of its provider entries - names and types in plain
+text, secret values as hashes, token fields dropped - so the report can tell
+a token renewal from a real change.
+Secret values are never printed.
+Other sessions share the home, so a difference is a change since spawn, not
+proof that this worker made it.
 The trees each harness rewrites in every ordinary session - transcripts,
 caches, logs, session environments, installed packages - are skipped so they
 do not bury configuration writes. Names holding a tab or newline are skipped because
@@ -81,6 +90,53 @@ home_manifest() {
   ) | LC_ALL=C sort -t "$tab" -k2,2
 }
 
+auth_fingerprint() {  # <auth.json path>: redacted fingerprint, never a secret
+  local path=$1 out
+  if command -v python3 >/dev/null 2>&1 && out=$(python3 - "$path" 2>/dev/null <<'PY'
+import hashlib, json, sys
+TOKEN_FIELDS = {"access", "refresh", "expires", "expiry"}
+SECRET_FIELDS = {"key", "api_key"}
+def canon(v):
+    return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+def digest(v):
+    return hashlib.sha256(canon(v).encode("utf-8")).hexdigest()
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        data = json.load(f)
+except (FileNotFoundError, IsADirectoryError):
+    print("absent")
+except (ValueError, UnicodeDecodeError, OSError):
+    print("unavailable")
+else:
+    if not isinstance(data, dict):
+        print("unavailable")
+    else:
+        providers = {}
+        for name in sorted(data):
+            entry = data[name]
+            if not isinstance(entry, dict):
+                providers[name] = {"type": "", "pub": None, "sec": digest(entry)}
+                continue
+            kind = entry.get("type")
+            kind = kind if isinstance(kind, str) else ""
+            if kind == "oauth":
+                pub = {k: v for k, v in entry.items() if k not in TOKEN_FIELDS}
+                providers[name] = {"type": kind, "pub": canon(pub), "sec": None}
+            elif kind == "api_key":
+                sec = {k: entry[k] for k in SECRET_FIELDS if k in entry}
+                pub = {k: v for k, v in entry.items() if k not in SECRET_FIELDS}
+                providers[name] = {"type": kind, "pub": canon(pub), "sec": digest(sec)}
+            else:
+                providers[name] = {"type": kind, "pub": None, "sec": digest(entry)}
+        print("v1:" + canon({"providers": providers}))
+PY
+  ); then
+    printf '%s\n' "$out"
+  else
+    printf 'unavailable\n'
+  fi
+}
+
 snapshot() {
   local file=$1 worktree=$2 tmp worktree_real
   worktree_real=$(cd "$worktree" 2>/dev/null && pwd -P) || worktree_real=$worktree
@@ -90,6 +146,7 @@ snapshot() {
     printf 'home=%s\n' "$HOME"
     printf 'worktree=%s\n' "$worktree"
     printf 'worktree_real=%s\n' "$worktree_real"
+    printf 'auth=%s\n' "$(auth_fingerprint "$HOME/.pi/agent/auth.json")"
     home_manifest "$HOME"
   } >"$tmp"; then
     rm -f "$tmp"
@@ -99,7 +156,7 @@ snapshot() {
 }
 
 report() {
-  local file=$1 home worktree worktree_real
+  local file=$1 home worktree worktree_real writes want_auth got_auth
   [ -f "$file" ] || { echo "error: no home snapshot at $file" >&2; return 1; }
   [ "$(head -n 1 "$file")" = "$FM_HOME_WRITE_HEADER" ] ||
     { echo "error: $file is not a home snapshot" >&2; return 1; }
@@ -107,7 +164,7 @@ report() {
   worktree=$(sed -n '3s/^worktree=//p' "$file")
   worktree_real=$(sed -n '4s/^worktree_real=//p' "$file")
   [ -n "$home" ] || { echo "error: $file names no home" >&2; return 1; }
-  home_manifest "$home" | awk -F '\t' -v worktree="$worktree" -v worktree_real="$worktree_real" '
+  writes=$(home_manifest "$home" | awk -F '\t' -v worktree="$worktree" -v worktree_real="$worktree_real" '
     function kind(k) { return k == "d" ? "directory" : k == "l" ? "link" : "file" }
     function inside(target, dir) { return dir != "" && (target == dir || index(target, dir "/") == 1) }
     function into(target) {
@@ -115,7 +172,7 @@ report() {
       return ""
     }
     NR == FNR {
-      if (FNR > 4) { was_kind[$2] = $1; was_value[$2] = $3; order[++n] = $2 }
+      if ($0 ~ /\t/) { was_kind[$2] = $1; was_value[$2] = $3; order[++n] = $2 }
       next
     }
     {
@@ -134,7 +191,22 @@ report() {
     END {
       for (i = 1; i <= n; i++) if (!(order[i] in seen)) print "removed " order[i] " (" kind(was_kind[order[i]]) ")"
     }
-  ' "$file" -
+  ' "$file" -)
+  if [ "$writes" = "changed .pi/agent/auth.json" ]; then
+    want_auth=$(head -n 10 "$file" | sed -n 's/^auth=//p' | head -n 1)
+    case "$want_auth" in
+      v1:*)
+        got_auth=$(auth_fingerprint "$home/.pi/agent/auth.json")
+        if [ "$want_auth" = "$got_auth" ]; then
+          printf 'routine .pi/agent/auth.json (sign-in token renewal)\n'
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  if [ -n "$writes" ]; then
+    printf '%s\n' "$writes"
+  fi
 }
 
 case "${1:-}" in

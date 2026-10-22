@@ -3470,13 +3470,18 @@ cleanup_firstmate_home_children() {
 }
 
 report_home_writes() {  # <snapshot> <saved-report>
-  local snapshot=$1 saved=$2 writes
+  local snapshot=$1 saved=$2 writes rest
   [ -e "$snapshot" ] || return 0
   if ! writes=$("$SCRIPT_DIR/fm-home-write-diff.sh" report "$snapshot"); then
     echo "warning: could not compare ~/.claude and ~/.pi/agent with their state when $ID was spawned" >&2
     return 0
   fi
   [ -n "$writes" ] || return 0
+  rest=$(printf '%s\n' "$writes" | grep -v '^routine ' || true)
+  if [ -z "$rest" ]; then
+    echo "teardown $ID note: routine sign-in token renewal in ~/.pi/agent/auth.json while $ID was live; provider entries unchanged"
+    return 0
+  fi
   if mkdir -p "${saved%/*}" && printf '%s\n' "$writes" >"$saved"; then
     echo "warning: ~/.claude or ~/.pi/agent changed while $ID was live; nothing was reverted (saved to $saved):" >&2
   else

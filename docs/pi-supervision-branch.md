@@ -232,12 +232,10 @@ Outcomes are written to the store before delivery to Pi.
 A captain row advances the cursor only after its matching visible session entry exists.
 Locked session-start replay stops before the first captain row, so it cannot acknowledge that outcome through prose alone.
 
-A routine note has no such sequence-keyed record.
-If its cursor write fails after the note was delivered, the next reconciliation sends that note once more.
-That asymmetry is a known limitation of the routine delivery representation rather than of the ordering above.
-It predates delivery moving off Pi's render thread.
-Closing it means giving routine delivery a durable idempotent record.
-That work is tracked as follow-up `fm-pi-routine-delivery-idempotency-followup-r1`, and `tests/fm-pi-branch-extension.test.sh` pins that asymmetry meanwhile.
+A routine row needs no such sequence-keyed record.
+The store append already settled it, and the cursor advance only records that settlement.
+No message to main exists to duplicate, so a failed cursor write leaves the row unread without delivering anything twice.
+The next reconciliation only advances the cursor.
 
 ### Consistency
 
@@ -390,7 +388,7 @@ Stage two is the branch's verdict on each handled event, reported through its `f
 
 | Verdict | Delivery |
 | --- | --- |
-| `routine` | A non-silent outcome uses the custom-message path; a silent outcome is stored without a rendered note. Neither opens a follow-up turn. |
+| `routine` | Stored durably in the outcome store and marked read with no message to main. Neither it nor a silent outcome opens a follow-up turn. |
 | `captain` | Appends a versioned `fm-branch-visible-outcome` custom session entry. |
 
 ### The visible captain entry
@@ -451,7 +449,7 @@ The first two presentations of a given sequence set open a turn of their own.
 After that, the request rides the captain's next prompt, so an ignored request cannot become an unbounded loop of empty turns.
 Changed sequence membership and a session replacement each start that budget over.
 
-Routine outcomes never enter this path and stay turn-free.
+Routine outcomes never enter this path and never reach main at all.
 A home with no processed marker, including an upgrade or switch from the supervision host, re-presents delivered captain rows dated and check-first until acknowledged; see the marker contract in `bin/fm-branch-outcome.sh`.
 
 ### Ownership and verdict rules
@@ -498,8 +496,8 @@ The branch runs its normal operating procedure for the wake (`bin/fm-branch-prom
 
 | Review result | Report |
 | --- | --- |
-| Found literally nothing worth reporting | Verdict `routine`, `task=fleet`, and `silent=true`, so it is stored without a rendered note. |
-| A fleet-wide routine action | Omits `silent` and keeps its rendered sailboat note. |
+| Found literally nothing worth reporting | Verdict `routine`, `task=fleet`, and `silent=true`. It is stored without reaching main. |
+| A fleet-wide routine action | Omits `silent`. It is stored without reaching main. |
 
 Only a captain-worthy finding reports verdict `captain` and appends a visible captain outcome entry.
 
@@ -648,7 +646,7 @@ The generated prompt includes the [scout-completion](../.agents/skills/scout-com
 - Requested-versus-unsolicited delivery, exact visible entry content, and no unkeyed model turn.
 - The sequence-keyed processing request and its acknowledgement.
 - Suppression of empty or exact-repeat retry finals with differing replies preserved, preserved tool calls and user responses, the triggered-then-next-turn pacing, and session-start re-presentation.
-- Routine outcomes staying turn-free, task-level no-change notes staying hidden, absent-marker re-presentation, and malformed-age reporting without acknowledgement.
+- Routine outcomes never reaching main, task-level no-change notes staying hidden, absent-marker re-presentation, and malformed-age reporting without acknowledgement.
 - Idle and busy main state, and incident-shaped compaction and unrelated-assistant context.
 - Cold-start post-lock recovery, crash-before-cursor reload recovery, and repeated-reload idempotency.
 - Mirroring.
