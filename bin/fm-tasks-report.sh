@@ -9,6 +9,11 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 Usage: fm-tasks-report.sh [--help]
 Print the tasks report v1 for tui-dash, one JSON object on one line.
 FM_TASKS_HOMES overrides machine discovery with a colon-separated home list.
+Each home's queued work also appears as a top-level planned array of
+(id, title, project, kind, home, queuedOn, hold, after) rows in tasks-axi
+dispatch order: ready rows first, then held, then blocked. The planned key is
+omitted when no home has queued work. A home whose queue cannot be read
+contributes no rows.
 Exit 0 prints the report, exit 1 names the home or input that stopped it.
 EOF
   exit 0
@@ -29,6 +34,105 @@ trap 'rm -rf "$TMPDIR_WORK"' EXIT
 
 meta_last() {
   grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
+planned_section_ids() {
+  awk -v sec="$2" '
+    index($0, sec "[") == 1 { in_sec = 1; next }
+    in_sec == 1 && /^  / { line = substr($0, 3); sub(/,.*$/, "", line); print line; next }
+    in_sec == 1 { exit }
+  ' "$1"
+}
+
+planned_show_field() {
+  sed -n "s/^  $2: //p" "$1" | head -1
+}
+
+planned_value() {
+  local v
+  v=$(cat)
+  # The star stays unquoted: a quoted star matches literally.
+  case "$v" in '"'*'"') v=${v#\"}; v=${v%\"} ;; esac
+  if [ "$v" = "-" ] || [ "$v" = "none" ] || [ "$v" = "" ]; then printf ''; return 0; fi
+  printf '%s' "$v"
+}
+
+planned_title() {
+  local v
+  v=$(cat)
+  # The star stays unquoted: a quoted star matches literally.
+  case "$v" in '"'*'"') v=${v#\"}; v=${v%\"} ;; esac
+  printf '%s' "$v"
+}
+
+collect_home_planned() {
+  local home=$1 out=$2 tag=$3
+  local name ready_f queued_f show_f rows_f groups_f emitted_f ordered_f
+  local ready_ids queued_ids id title repo project kind created blocked_by blocked held hold_reason hold_kind group pass
+  printf '[]' >"$out"
+  name=$(basename "$home")
+  ready_f="$TMPDIR_WORK/planned-$tag.ready"
+  queued_f="$TMPDIR_WORK/planned-$tag.queued"
+  show_f="$TMPDIR_WORK/planned-$tag.show"
+  rows_f="$TMPDIR_WORK/planned-$tag.rows"
+  groups_f="$TMPDIR_WORK/planned-$tag.groups"
+  emitted_f="$TMPDIR_WORK/planned-$tag.emitted"
+  ordered_f="$TMPDIR_WORK/planned-$tag.ordered"
+  mkdir -p "$rows_f"
+  : >"$groups_f"
+  : >"$emitted_f"
+  : >"$ordered_f"
+  FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" ready >"$ready_f" 2>/dev/null || return 0
+  FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" list --state queued >"$queued_f" 2>/dev/null || return 0
+  ready_ids=$(planned_section_ids "$ready_f" ready)
+  queued_ids=$(planned_section_ids "$queued_f" tasks)
+  [ -n "$queued_ids" ] || return 0
+  for id in $queued_ids; do
+    FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" show "$id" --full >"$show_f" 2>/dev/null || continue
+    title=$(planned_show_field "$show_f" title | planned_title)
+    repo=$(planned_show_field "$show_f" repo | planned_value)
+    kind=$(planned_show_field "$show_f" kind | planned_value)
+    created=$(planned_show_field "$show_f" created | planned_value)
+    blocked_by=$(planned_show_field "$show_f" blocked_by | planned_value)
+    held=$(planned_show_field "$show_f" held | planned_value)
+    hold_reason=$(planned_show_field "$show_f" hold_reason | planned_value)
+    hold_kind=$(planned_show_field "$show_f" hold_kind | planned_value)
+    blocked=$(planned_show_field "$show_f" blocked | planned_value)
+    if [ "$held" = yes ]; then group=held
+    elif [ "$blocked" = yes ]; then group=blocked
+    else group=other; fi
+    printf '%s %s\n' "$id" "$group" >>"$groups_f"
+    project=${repo##*/}
+    [ -n "$project" ] || project="?"
+    case "$hold_kind" in captain) ;; external) ;; *) hold_kind=unstated ;; esac
+    jq -n --arg id "$id" --arg title "$title" --arg project "$project" --arg kind "$kind" \
+      --arg home "$name" --arg created "$created" --arg held "$held" \
+      --arg hold_kind "$hold_kind" --arg hold_reason "$hold_reason" --arg blocked_by "$blocked_by" \
+      '($blocked_by | if . == "" then [] else split(",") end) as $after
+      | {id: $id, title: $title, project: $project, kind: $kind, home: $home,
+        queuedOn: (if $created == "" then null else $created end),
+        hold: (if $held == "yes" then {kind: $hold_kind, reason: $hold_reason} else null end),
+        after: $after}' >"$rows_f/$id.json" || continue
+  done
+  for id in $ready_ids; do
+    [ -f "$rows_f/$id.json" ] || continue
+    grep -qxF "$id" "$emitted_f" 2>/dev/null && continue
+    printf '%s\n' "$id" >>"$ordered_f"
+    printf '%s\n' "$id" >>"$emitted_f"
+  done
+  for pass in held blocked other; do
+    for id in $queued_ids; do
+      grep -qxF "$id" "$emitted_f" 2>/dev/null && continue
+      awk -v id="$id" -v want="$pass" '$1 == id && $2 == want { found = 1 } END { exit !found }' "$groups_f" || continue
+      printf '%s\n' "$id" >>"$ordered_f"
+      printf '%s\n' "$id" >>"$emitted_f"
+    done
+  done
+  [ -s "$ordered_f" ] || return 0
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    cat "$rows_f/$id.json"
+  done <"$ordered_f" | jq -s '.' >"$out"
 }
 
 discover_homes() {
@@ -117,7 +221,7 @@ observe_remote_stub() {
 
 collect_home_snapshot() {
   local home=$1 snap_bin=$2 out=$3
-  local snap_dir crew_state work meta id kind branch project spawn_gen first_spawn_gen worktree present remote_host
+  local snap_dir crew_state work meta id kind mode branch project spawn_gen first_spawn_gen worktree present remote_host
   local pids="" batch=0 rc=0 contrib_pid=""
   snap_dir=$(dirname "$snap_bin")
   crew_state="$snap_dir/fm-crew-state.sh"
@@ -138,6 +242,7 @@ collect_home_snapshot() {
     id=$(basename "$meta" .meta)
     kind=$(meta_last "$meta" kind)
     [ -n "$kind" ] || kind=ship
+    mode=$(meta_last "$meta" mode)
     branch=$(meta_last "$meta" branch)
     project=$(meta_last "$meta" project)
     spawn_gen=$(meta_last "$meta" spawn_gen)
@@ -145,10 +250,10 @@ collect_home_snapshot() {
     worktree=$(meta_last "$meta" worktree)
     present=false
     if [ -n "$worktree" ] && [ -e "$worktree" ]; then present=true; fi
-    jq -n --arg id "$id" --arg kind "$kind" --arg branch "$branch" --arg project "$project" \
+    jq -n --arg id "$id" --arg kind "$kind" --arg mode "$mode" --arg branch "$branch" --arg project "$project" \
       --arg spawn_gen "$spawn_gen" --arg first_spawn_gen "$first_spawn_gen" \
       --arg worktree "$worktree" --argjson worktree_present "$present" \
-      '{id:$id,kind:$kind,branch:$branch,project:$project,spawn_gen:$spawn_gen,first_spawn_gen:$first_spawn_gen,worktree:$worktree,worktree_present:$worktree_present}' >>"$work/base.jsonl"
+      '{id:$id,kind:$kind,mode:$mode,branch:$branch,project:$project,spawn_gen:$spawn_gen,first_spawn_gen:$first_spawn_gen,worktree:$worktree,worktree_present:$worktree_present}' >>"$work/base.jsonl"
     remote_host=$(meta_last "$meta" remote_host)
     if [ -n "$remote_host" ]; then
       # An observation only surfaces for a live task, and reading a status
@@ -192,6 +297,7 @@ collect_home_snapshot() {
         | {
           id: $id,
           kind: .kind,
+          mode: (.mode // ""),
           branch: (if .branch == "" then null else .branch end),
           project: .project,
           spawn_gen: (if .spawn_gen == "" then null else .spawn_gen end),
@@ -224,12 +330,15 @@ YESTERDAY=$(jq -n --arg d "$TODAY" '$d | strptime("%Y-%m-%d") | mktime - 86400 |
 
 SNAPS_DIR="$TMPDIR_WORK/snaps"
 mkdir -p "$SNAPS_DIR"
+PLANNED_DIR="$TMPDIR_WORK/planned"
+mkdir -p "$PLANNED_DIR"
 N=0
 while IFS= read -r home; do
   [ -n "$home" ] || continue
   N=$((N + 1))
   snap="$home/bin/fm-fleet-snapshot.sh"
   [ -x "$snap" ] || snap="$SCRIPT_DIR/fm-fleet-snapshot.sh"
+  collect_home_planned "$home" "$PLANNED_DIR/$N.json" "$N"
   collect_home_snapshot "$home" "$snap" "$SNAPS_DIR/$N.json" "$N" || exit 1
   jq -e '.schema == "fm-fleet-snapshot.v1"' "$SNAPS_DIR/$N.json" >/dev/null || {
     echo "error: unexpected snapshot schema for $home" >&2
@@ -273,10 +382,18 @@ if command -v no-mistakes >/dev/null 2>&1; then
   done < <(jq -n -r '[inputs | .fm_home as $h | .tasks[]? | select(.paths.worktree.present == true) | (.branch // "") as $b | "\($h)\t\(.id)\t\($b)\t\(.paths.worktree.path)" ] | .[]' "$SNAPS_DIR"/*.json)
 fi
 
+jq -s 'add // []' "$PLANNED_DIR"/*.json >"$TMPDIR_WORK/planned.json"
+
 jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
-  --arg orch_version "$ORCH_VERSION" --slurpfile pipes "$PIPES" '
+  --arg orch_version "$ORCH_VERSION" --slurpfile pipes "$PIPES" --slurpfile planned "$TMPDIR_WORK/planned.json" '
   ($pipes[0] // {}) as $pipes
-  | (map(
+  | def stage_kind($kind; $mode):
+      if $kind == "ship" and ($mode == "no-mistakes" or $mode == "no-mistakes-prod-only") then "full review fix"
+      elif $kind == "ship" and $mode == "direct-PR" then "quick fix"
+      elif $kind == "ship" and $mode == "local-only" then "local only"
+      elif $kind == "scout" then "scout"
+      else $kind end;
+    (map(
     . as $snap | ($snap.fm_home // "?") as $home
     | ([$snap.tasks[]? | .id]) as $live
     | {
@@ -298,7 +415,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           id: $t.id,
           title: ((($t.backlog.title // $t.id) | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           project: ((($t.project // $t.backlog.repo // "?") | tostring | split("/") | last) | if . == "" then "?" else . end),
-          kind: (($t.kind // "") | tostring),
+          kind: stage_kind((($t.kind // "") | tostring); (($t.mode // "") | tostring)),
           state: $st,
           detail: ((($t.current_state.detail // "") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           startedAt: $started,
@@ -317,7 +434,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           id: $r.id,
           title: ((($r.title // $r.id) | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           project: ((($r.repo // "?") | tostring | split("/") | last) | if . == "" then "?" else . end),
-          kind: (($r.kind // "") | tostring),
+          kind: stage_kind((($r.kind // "") | tostring); ""),
           state: "done",
           detail: ((($r.completion.verb // "done") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           startedAt: $ended,
@@ -337,6 +454,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           detail: ((($r.hold_reason // "comes back to the queue") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end)
         }]
     })) as $homes
+  | ($planned[0] // []) as $planned_all
   | {
     schemaVersion: 1,
     generatedAt: $generated_at,
@@ -344,5 +462,6 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
     tasks: ([$homes[].live[]] + [$homes[].recent[]]),
     overhead: [$homes[].overhead[]],
     schedules: [$homes[].sched[]]
-  }
+  } as $report
+  | if ($planned_all | length) == 0 then $report else ($report + {planned: $planned_all}) end
 ' "$SNAPS_DIR"/*.json
