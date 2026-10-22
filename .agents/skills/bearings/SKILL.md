@@ -175,7 +175,7 @@ Rules that keep the contract unambiguous:
 - The chat follows `AGENTS.md` section 9 and carries one scannable line per item.
 - Detailed decisions, plans, full gate reasons, and evidence stay out of chat; file mode puts them in the report, while lavish mode puts only its payload-backed interactive detail on the board.
 - In file mode, include the report path or link inside the four-section digest without adding another heading.
-- In lavish mode, include the board URL inside the four-section digest the same way.
+- In lavish mode, include the board URL on the Mac-reachable board address 127.0.0.1:14387 inside the four-section digest the same way.
 
 ## Tone and content rules
 
