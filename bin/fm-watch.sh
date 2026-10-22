@@ -1972,10 +1972,10 @@ clear_pause_tracking() {  # <window-key>
 # endpoint change rechecks at once, and the slow interval still bounds a wait that
 # cleared silently, so a stalled wait is noticed rather than rotting.
 pause_state_class() {  # <window> <task>
-  local win=$1 task=$2 key last recheck_file sig_file class agent_alive kind backend cur_sig
+  local win=$1 task=$2 key last recheck_file sig_file class agent_alive kind backend cur_sig cached_class cached_sig
   key=$(window_key "$win")
   if fm_busy_provider_wait_until "$STATE" "$task" >/dev/null; then
-    rm -f "$STATE/.paused-rechecked-$key"
+    rm -f "$STATE/.paused-rechecked-$key" "$STATE/.paused-sig-$key"
     printf 'paused'
     return
   fi
@@ -1997,10 +1997,23 @@ pause_state_class() {  # <window> <task>
   # between slow-interval rechecks for one unchanged wait.
   cur_sig="status:$last
 endpoint:$backend:$win"
-  if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ] \
-    && [ "$(cat "$sig_file" 2>/dev/null || true)" = "$cur_sig" ]; then
-    printf 'paused'
-    return
+  if [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ] && [ -f "$sig_file" ]; then
+    cached_class=$(head -n 1 "$sig_file" 2>/dev/null || true)
+    case "$cached_class" in
+      paused|none)
+        cached_sig=$(tail -n +2 "$sig_file" 2>/dev/null || true)
+        if [ "$cached_sig" = "$cur_sig" ]; then
+          printf '%s' "$cached_class"
+          return
+        fi
+        ;;
+      *)
+        if [ "$(cat "$sig_file" 2>/dev/null || true)" = "$cur_sig" ]; then
+          printf 'paused'
+          return
+        fi
+        ;;
+    esac
   fi
   class=$(crew_absorb_class "$task")
   if [ "$class" = working ]; then
@@ -2011,7 +2024,7 @@ endpoint:$backend:$win"
   if [ "$kind" != secondmate ]; then
     agent_alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
-      rm -f "$recheck_file" "$sig_file"
+      date +%s > "$recheck_file"; printf 'none\n%s' "$cur_sig" > "$sig_file"
       printf 'none'
       return
     fi
@@ -2026,7 +2039,7 @@ endpoint:$backend:$win"
   # the bounded re-surface cadence, and a forgotten declaration would rot invisibly.
   [ "$class" = none ] && class=paused
   case "$class" in
-    paused) date +%s > "$recheck_file"; printf '%s' "$cur_sig" > "$sig_file" ;;
+    paused) date +%s > "$recheck_file"; printf 'paused\n%s' "$cur_sig" > "$sig_file" ;;
     *) rm -f "$recheck_file" "$sig_file" ;;
   esac
   printf '%s' "$class"
@@ -2204,7 +2217,7 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
     # poll - taking the throttle with it - and would hand the mate and dead-agent
     # cadences a declaration they were never given. Only the shared re-surface
     # marker is kept, which is the whole of what this bound needs.
-    rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key"
+    rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-sig-$key"
   else
     clear_pause_state "$key"
   fi
