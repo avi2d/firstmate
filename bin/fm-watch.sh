@@ -2534,6 +2534,36 @@ signal_files_actionable() {  # <status-file> ...
 
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by
 # fm-push-transition-lib.sh because push and poll paths must write one format.
+# Queued work the spawn gates admit never surfaces by itself, and only
+# for the home under supervision, so ask
+# bin/fm-ready-capacity.sh once per absorbed heartbeat: a watcher observing
+# foreign state never dispatches on another queue. The set is recorded
+# only after its wake is queued, so a failed append never silences a retry.
+ready_capacity_wake_fires() {
+  local ids sorted recorded count list home_state state_dir
+  away_record_present && return 1
+  home_state=$(cd -P -- "$FM_HOME/state" 2>/dev/null && pwd -P) || return 1
+  state_dir=$(cd -P -- "$STATE" 2>/dev/null && pwd -P) || return 1
+  [ "$home_state" = "$state_dir" ] || return 1
+  ids=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-ready-capacity.sh" 2>/dev/null) || {
+    triage_log "ready-capacity check unavailable; absorbing heartbeat"
+    return 1
+  }
+  if [ -z "$ids" ]; then
+    rm -f "$STATE/.ready-capacity-notified"
+    return 1
+  fi
+  sorted=$(printf '%s\n' "$ids" | LC_ALL=C sort -u)
+  recorded=$(cat "$STATE/.ready-capacity-notified" 2>/dev/null || true)
+  [ "$sorted" != "$recorded" ] || return 1
+  count=$(printf '%s\n' "$sorted" | wc -l)
+  count=${count//[[:space:]]/}
+  list=$(printf '%s' "$sorted" | tr '\n' ' ')
+  READY_CAPACITY_IDS=$sorted
+  READY_CAPACITY_REASON="check: ready-capacity: $count queued task(s) ready with room to run: ${list% }"
+  return 0
+}
+
 # Mark each actionable status log through the endpoint captured by the heartbeat
 # scan. Called after the backstop enqueues its wake, so the same events are not
 # re-surfaced by the next heartbeat.
@@ -3578,6 +3608,12 @@ EOF
         fm_wake_append heartbeat heartbeat heartbeat || exit 1
         touch "$STATE/.last-heartbeat"
         wake "heartbeat"
+      fi
+      if ready_capacity_wake_fires; then
+        fm_wake_append check ready-capacity "$READY_CAPACITY_REASON" || exit 1
+        printf '%s\n' "$READY_CAPACITY_IDS" > "$STATE/.ready-capacity-notified"
+        touch "$STATE/.last-heartbeat"
+        wake "$READY_CAPACITY_REASON"
       fi
       touch "$STATE/.last-heartbeat"
       echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
