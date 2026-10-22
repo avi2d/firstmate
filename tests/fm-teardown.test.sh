@@ -777,6 +777,31 @@ test_teardown_reports_home_writes_since_spawn() {
   pass "teardown reports what changed in the real home since spawn without reverting it"
 }
 
+test_teardown_records_auth_renewal_as_routine() {
+  local case_dir rc home
+  case_dir=$(make_case auth-renewal)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  home="$case_dir/home"
+  mkdir -p "$home/.claude" "$home/.pi/agent"
+  printf '%s' '{"openai":{"type":"oauth","access":"TOKEN-V1","refresh":"TOKEN-R1","expires":111}}' >"$home/.pi/agent/auth.json"
+  HOME="$home" "$ROOT/bin/fm-home-write-diff.sh" snapshot "$case_dir/state/task-x1.home-snapshot" "$case_dir/wt" \
+    || fail "auth-renewal: snapshot failed"
+  printf '%s' '{"openai":{"type":"oauth","access":"TOKEN-V2-LONGER","refresh":"TOKEN-R2-LONGER","expires":999999}}' >"$home/.pi/agent/auth.json"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "auth-renewal: a routine renewal is never a reason to refuse cleanup"
+  assert_grep "routine sign-in token renewal" "$case_dir/stdout" "auth-renewal: teardown did not record the routine renewal"
+  assert_not_contains "$(cat "$case_dir/stderr")" "warning:" "auth-renewal: teardown warned about a routine renewal"
+  assert_absent "$case_dir/data/task-x1/home-writes.txt" "auth-renewal: teardown kept a review file for a routine renewal"
+  pass "teardown records a sign-in token renewal as routine without raising it for review"
+}
+
 test_teardown_closes_the_backlog_item_itself() {
   local case_dir out
   case_dir=$(make_case tasks-axi-close)
@@ -5305,6 +5330,7 @@ test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
 test_teardown_reports_home_writes_since_spawn
+test_teardown_records_auth_renewal_as_routine
 test_teardown_closes_the_backlog_item_itself
 test_teardown_closes_a_gerrit_task_with_its_change_url_as_a_note
 test_teardown_closes_a_gitlab_task_with_its_merge_request_url_as_a_note
