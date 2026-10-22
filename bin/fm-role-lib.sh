@@ -185,7 +185,7 @@ fm_role_gh_default_url() {
 
 # fm_role_publication_target <git-dir> - the repository a default publication reaches.
 fm_role_publication_target() {
-  local dir=$1 remote remotes url= value id
+  local dir=$1 remote remotes url='' value id
   remotes=$(git -C "$dir" remote 2>/dev/null) || return 0
   while IFS= read -r remote; do
     [ -n "$remote" ] || continue
