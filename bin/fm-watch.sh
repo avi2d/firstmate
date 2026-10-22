@@ -2007,12 +2007,6 @@ endpoint:$backend:$win"
           return
         fi
         ;;
-      *)
-        if [ "$(cat "$sig_file" 2>/dev/null || true)" = "$cur_sig" ]; then
-          printf 'paused'
-          return
-        fi
-        ;;
     esac
   fi
   class=$(crew_absorb_class "$task")
@@ -2209,7 +2203,6 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   clear_write_tracking "$key"
   if [ "$declared" -eq 0 ]; then
     : > "$STATE/.paused-$key"
-    date +%s > "$STATE/.paused-rechecked-$key"
   elif [ "$bounded" -eq 0 ]; then
     # A backlog hold is NOT a declared pause, and must not be dressed up as one:
     # the loop-top reconciliation and pause_state_class both read the status LINE,
