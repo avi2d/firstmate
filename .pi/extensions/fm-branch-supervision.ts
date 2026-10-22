@@ -1041,16 +1041,6 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  function deliverRoutineOutcome(row: OutcomeRow): void {
-    const message = {
-      customType: "fm-branch-merge",
-      content: `${MERGE_NOTE_BOAT} ${row.task}: ${row.summary}`,
-      display: !row.silent,
-    };
-    if (mainStreaming) pi.sendMessage(message, { deliverAs: "nextTurn" });
-    else pi.sendMessage(message, {});
-  }
-
   // Captain rows that are read (their visible entry exists) but not yet
   // acknowledged as processed by main, in sequence order. null means the store
   // could not be read safely, never "nothing". A listed line that breaks the
@@ -1200,23 +1190,13 @@ export default function (pi: ExtensionAPI) {
         // because the session was replaced mid-write would leave the row
         // unread and deliver it a second time; the cursor records that the
         // row WAS delivered, which stays true across a replacement.
+        // A routine row is never delivered: the store append already settled
+        // it, so the cursor advance below only records that settlement. A
+        // captain row cannot duplicate - ensureVisibleCaptainOutcome finds
+        // its own earlier entry by store sequence.
         if (!(await generationOwnsLock(expectedGeneration))) return false;
-        // KNOWN PRE-EXISTING LIMITATION, unchanged by moving this work off Pi's
-        // render thread and tracked as
-        // fm-pi-routine-delivery-idempotency-followup-r1: if the mark-read
-        // below fails after a ROUTINE note was already delivered, the row stays
-        // unread and the next reconciliation sends that note a second time,
-        // because a routine note is a plain message with no sequence-keyed
-        // record to recognize. A captain row cannot duplicate that way -
-        // ensureVisibleCaptainOutcome finds its own earlier entry by store
-        // sequence. Closing the routine gap needs a durable, idempotent
-        // representation for routine delivery, which changes the delivery
-        // contract rather than this ordering, so it is deliberately not done
-        // here.
         if (row.verdict === "captain") {
           if (!ensureVisibleCaptainOutcome(row)) return false;
-        } else {
-          deliverRoutineOutcome(row);
         }
         if (!(await runOutcomeScript(["mark-read", "--through", String(row.seq)])).ok) return false;
       }
@@ -1237,7 +1217,7 @@ export default function (pi: ExtensionAPI) {
       name: "fm_branch_report",
       label: "Report supervision outcome",
       description:
-        "Record the outcome of one handled fleet event: write it durably to the outcome store, then merge it into the captain-facing main conversation. verdict captain persists an exact visible entry and opens one sequence-keyed processing turn on main that stays open until main acknowledges it; routine notes render unless silent marks an eligible no-change outcome.",
+        "Record the outcome of one handled fleet event: write it durably to the outcome store. A routine outcome settles there with no message to main; verdict captain persists an exact visible entry and opens one sequence-keyed processing turn on main that stays open until main acknowledges it.",
       parameters: Type.Object({
         task: Type.String({ description: "The task id the event belongs to (or 'fleet' for fleet-wide events)" }),
         verdict: Type.Union([Type.Literal("routine"), Type.Literal("captain")], {
@@ -1250,7 +1230,7 @@ export default function (pi: ExtensionAPI) {
         }),
         wake: Type.Optional(Type.String({ description: "The wake reason line this outcome answers" })),
         silent: Type.Optional(Type.Boolean({
-          description: "True only for an eligible routine no-change outcome; captain outcomes are never silent, and actions, state changes, or new results stay rendered",
+          description: "True only for an eligible routine no-change outcome; captain outcomes are never silent. Every routine outcome settles in the branch store with no message to main, so this marks shared store eligibility rather than requesting silence here",
         })),
       }),
       execute: async (_toolCallId, params) => {
@@ -1304,13 +1284,13 @@ export default function (pi: ExtensionAPI) {
           const seq = Number(appended.stdout);
           if (!Number.isSafeInteger(seq) || seq < 1 || !(await reconcileUnreadOutcomes(toolGeneration))) {
             return {
-              content: [{ type: "text", text: `recorded seq ${appended.stdout}, but visible delivery or cursor advancement failed` }],
+              content: [{ type: "text", text: `recorded seq ${appended.stdout}, but delivery or cursor advancement failed` }],
               details: undefined,
               isError: true,
             };
           }
           return {
-            content: [{ type: "text", text: `recorded seq ${appended.stdout} and delivered [${verdict}] into main` }],
+            content: [{ type: "text", text: verdict === "routine" ? `recorded seq ${appended.stdout} [routine] settled in branch` : `recorded seq ${appended.stdout} [captain] and delivered into main` }],
             details: undefined,
           };
         });
@@ -2500,8 +2480,7 @@ ${context.command}
     );
   });
 
-  // Pi only calls this renderer for a message with display: true, which every
-  // routine note uses except an explicitly silent no-change outcome.
+  // Health notes still use this type, and older transcripts hold routine notes of it.
   pi.registerMessageRenderer?.("fm-branch-merge", (message, _options, theme) => {
     const note = textOfContent(message.content);
     const hasGlyph = note.startsWith(MERGE_NOTE_BOAT);
