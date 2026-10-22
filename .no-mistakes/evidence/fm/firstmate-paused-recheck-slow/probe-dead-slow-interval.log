@@ -1,0 +1,1 @@
+ok - a past-due dead-agent wait reconciles once on the slow interval, and pane churn alone neither reconciles nor refreshes the timestamp

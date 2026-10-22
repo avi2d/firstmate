@@ -1,0 +1,4 @@
+ok - a declared pause is periodically rechecked against authoritative active-run state
+ok - an unchanged paused wait is not rechecked on consecutive polls: the cached verdict spends no crew-state read and no endpoint probe
+ok - a changed paused status is reconciled at once, without waiting for the slow interval
+ok - a parked live worker surfaces once, absorbs pane churn for the whole re-surface window, then re-surfaces when it elapses

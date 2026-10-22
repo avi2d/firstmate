@@ -1,0 +1,12 @@
+live extra checks for paused-recheck cache
+watch=~/.no-mistakes/worktrees/4ed212f46cf8/01M5J726GA0WTXW7X2GK84322N/bin/fm-watch.sh head=2f2f1139
+== S3 slow-interval recheck ==
+S3 settled crew_reads=2 rechecked=1792694341 sig_head=paused
+S3 after interval crew_reads=3 rechecked=1792694345
+S3 PASS slow interval rechecked an unchanged wait (2 -> 3)
+== S4 endpoint-change recheck ==
+S4 settled crew_reads=1
+S4 after endpoint change crew_reads=1
+S4 FAIL endpoint change did not recheck (1 -> 1)
+done
+NOTE: the S4 end-to-end attempt above used backend=tmux-alt, which has no capture implementation (fm_backend_capture returns 1), so the watcher skips that window before triage and no recheck can occur there; the endpoint dimension was instead driven live against the real pause_state_class, see live-paused-recheck-endpoint.log.

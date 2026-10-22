@@ -1,0 +1,7 @@
+sourced watcher lib: pause_state_class is a function
+task=live-endpoint
+key=test_fm-live-endpoint
+call1 verdict=paused crew_reads=1 sig=paused
+call2 verdict=paused crew_reads=1
+call3 verdict=none crew_reads=2 (after backend tmux -> tmux-alt)
+FN PASS endpoint change rechecked at once (1 -> 1 -> 2)
