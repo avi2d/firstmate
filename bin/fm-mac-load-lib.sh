@@ -80,11 +80,18 @@ fm_mac_load_config() {  # <config-dir>
   FM_MAC_LOAD_LIMIT=10
   FM_MAC_HEAVY_LIMIT=4
   FM_MAC_LOAD_ERROR=
-  if ! fm_machine_load_heavy_default 3 4; then
+  heavy_day=3 heavy_night=4
+  if [ "$(uname -s)" = Linux ]; then
+    # A Linux host can also run the winbox gate, so this gate borrows the
+    # winbox budget there instead of refusing what that gate admits.
+    FM_MAC_LOAD_LIMIT=16
+    heavy_day=4 heavy_night=6
+  fi
+  if ! fm_machine_load_heavy_default "$heavy_day" "$heavy_night"; then
     FM_MAC_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
     return 1
   fi
-  if ! fm_machine_load_config 10 "$FM_MACHINE_HEAVY_DEFAULT" "${1:-}"; then
+  if ! fm_machine_load_config "$FM_MAC_LOAD_LIMIT" "$FM_MACHINE_HEAVY_DEFAULT" "${1:-}"; then
     FM_MAC_LOAD_LIMIT=$FM_MACHINE_LOAD_LIMIT
     FM_MAC_HEAVY_LIMIT=$FM_MACHINE_HEAVY_LIMIT
     FM_MAC_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
@@ -97,7 +104,10 @@ fm_mac_load_config() {  # <config-dir>
 
 fm_mac_load_gate_active() {
   [ "${FM_MAC_LOAD_GATE_FORCE:-0}" = 1 ] && return 0
-  [ "$(uname -s)" = Darwin ]
+  case "$(uname -s)" in
+    Darwin|Linux) return 0 ;;
+  esac
+  return 1
 }
 
 fm_mac_loadavg_5min() {
