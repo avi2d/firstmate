@@ -371,6 +371,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0008-live-pi-tui-keystroke-echo-guard.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
