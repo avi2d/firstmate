@@ -4714,6 +4714,122 @@ test_nonterminal_paused_rechecks_authoritative_state() {
   pass "a declared pause is periodically rechecked against authoritative active-run state"
 }
 
+test_paused_unchanged_across_polls_skips_its_recheck() {
+  local dir state fakebin out capture_file window key pane_hash sig pid i crew_first probes_first
+  dir=$(make_case paused-unchanged-skips-recheck); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-quiet"
+  printf 'idle awaiting external\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-quiet.meta"
+  printf 'paused: awaiting the upstream release\n' > "$state/paused-quiet.status"
+  sig=$(seen_sig "$state/paused-quiet.status"); printf '%s' "$sig" > "$state/.seen-paused-quiet_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle awaiting external")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # An admitted pause with a recent recheck, and the slow interval far away, so
+  # only a genuine change may spend another probe.
+  : > "$state/.paused-$key"
+  date +%s > "$state/.paused-rechecked-$key"
+  export FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting the upstream release'
+  export FM_FAKE_CREW_STATE_LOG="$dir/crew-state.log"
+  export FM_FAKE_TMUX_CURRENT_COMMAND=bash
+  export FM_FAKE_TMUX_CALL_LOG="$dir/tmux-calls.log"
+  : > "$FM_FAKE_CREW_STATE_LOG"
+  : > "$FM_FAKE_TMUX_CALL_LOG"
+  mv "$fakebin/tmux" "$fakebin/tmux.real"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_TMUX_CALL_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
+exec "$(dirname "$0")/tmux.real" "$@"
+SH
+  chmod +x "$fakebin/tmux"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
+  pid=$!
+  # One full cycle observes the admitted pause; the evidence is a probe of
+  # either kind (a full reconciliation, or the bare liveness probe).
+  i=0
+  while [ "$i" -lt 100 ] && kill -0 "$pid" 2>/dev/null; do
+    [ -s "$FM_FAKE_CREW_STATE_LOG" ] || [ "$(grep -c '^display-message' "$FM_FAKE_TMUX_CALL_LOG")" -gt 0 ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -0 "$pid" 2>/dev/null || { reap "$pid"; fail "watcher exited on an admitted paused stale pane: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited while a paused wait stood unchanged: $(cat "$out")"; }
+  crew_first=$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)
+  probes_first=$(grep -c '^display-message' "$FM_FAKE_TMUX_CALL_LOG" 2>/dev/null || true)
+  # Two more consecutive cycles on the unchanged wait must spend no new probe.
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited while a paused wait stood unchanged: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited while a paused wait stood unchanged: $(cat "$out")"; }
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)" = "$crew_first" ] \
+    || { reap "$pid"; fail "an unchanged paused wait was re-read from authoritative crew state on a consecutive poll"; }
+  [ "$(grep -c '^display-message' "$FM_FAKE_TMUX_CALL_LOG" 2>/dev/null || true)" = "$probes_first" ] \
+    || { reap "$pid"; fail "an unchanged paused wait was re-probed at its endpoint on a consecutive poll"; }
+  [ ! -s "$out" ] || { reap "$pid"; fail "an unchanged paused wait printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "an unchanged paused wait enqueued a wake"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "an unchanged paused wait lost its pause marker"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_STATE_LOG FM_FAKE_TMUX_CURRENT_COMMAND FM_FAKE_TMUX_CALL_LOG
+  pass "an unchanged paused wait is not rechecked on consecutive polls: the cached verdict spends no crew-state read and no endpoint probe"
+}
+
+test_paused_status_change_rechecks_before_the_slow_interval() {
+  local dir state fakebin out capture_file window key pane_hash sig pid i crew_before
+  dir=$(make_case paused-change-rechecks-at-once); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-shift"
+  printf 'idle awaiting external\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-shift.meta"
+  printf 'paused: awaiting the upstream release\n' > "$state/paused-shift.status"
+  sig=$(seen_sig "$state/paused-shift.status"); printf '%s' "$sig" > "$state/.seen-paused-shift_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle awaiting external")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  : > "$state/.paused-$key"
+  date +%s > "$state/.paused-rechecked-$key"
+  export FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting the upstream release'
+  export FM_FAKE_CREW_STATE_LOG="$dir/crew-state.log"
+  export FM_FAKE_TMUX_CURRENT_COMMAND=bash
+  export FM_FAKE_TMUX_CALL_LOG="$dir/tmux-calls.log"
+  : > "$dir/crew-state.log"
+  : > "$dir/tmux-calls.log"
+  mv "$fakebin/tmux" "$fakebin/tmux.real"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_TMUX_CALL_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
+exec "$(dirname "$0")/tmux.real" "$@"
+SH
+  chmod +x "$fakebin/tmux"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && kill -0 "$pid" 2>/dev/null; do
+    [ -s "$FM_FAKE_CREW_STATE_LOG" ] || [ "$(grep -c '^display-message' "$FM_FAKE_TMUX_CALL_LOG")" -gt 0 ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -0 "$pid" 2>/dev/null || { reap "$pid"; fail "watcher exited on an admitted paused stale pane: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited before the pause settled: $(cat "$out")"; }
+  crew_before=$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)
+  # The worker names a new wait while the slow interval is still far away: the
+  # next polls must reconcile it at once, not when the interval elapses.
+  printf 'paused: the release slipped, now waiting on Thursday\n' >> "$state/paused-shift.status"
+  sig=$(seen_sig "$state/paused-shift.status"); printf '%s' "$sig" > "$state/.seen-paused-shift_status"
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited after a paused status change: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited after a paused status change: $(cat "$out")"; }
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)" = "$(( crew_before + 1 ))" ] \
+    || { reap "$pid"; fail "a changed paused status was not reconciled against authoritative crew state before the slow interval"; }
+  [ ! -s "$out" ] || { reap "$pid"; fail "a changed paused wait printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "a changed paused wait enqueued a wake"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "a changed paused wait lost its pause marker"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_STATE_LOG FM_FAKE_TMUX_CURRENT_COMMAND FM_FAKE_TMUX_CALL_LOG
+  pass "a changed paused status is reconciled at once, without waiting for the slow interval"
+}
+
 test_paused_authoritative_working_preserves_wedge_timer() {
   local dir state fakebin out capture_file window key pane_hash sig pid since
   dir=$(make_case paused-working-preserves-wedge-timer); state="$dir/state"; fakebin="$dir/fakebin"
@@ -7167,6 +7283,8 @@ test_secondmate_nonpaused_stale_remains_suppressed
 test_secondmate_unpause_clears_pause_tracking
 test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash
 test_nonterminal_paused_rechecks_authoritative_state
+test_paused_unchanged_across_polls_skips_its_recheck
+test_paused_status_change_rechecks_before_the_slow_interval
 test_paused_authoritative_working_preserves_wedge_timer
 test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_wedge_escalation_deferred_while_worktree_is_written

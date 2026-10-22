@@ -1913,7 +1913,7 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
 
 clear_pause_state() {  # <window-key>
   local key=$1
-  rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
+  rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key" "$STATE/.paused-sig-$key"
 }
 
 # The hash-scoped half of clear_pause_tracking: the stale suppressor, its wedge
@@ -1966,9 +1966,13 @@ clear_pause_tracking() {  # <window-key>
 # Reconcile a declared pause or captain-held status with authoritative crew state.
 # After fm-crew-state has fallen back to stopped or unknown, paused classification is
 # recovered only for a confidently dead ordinary crew, or for a secondmate, whose
-# endpoint liveness this function deliberately never reads.
+# endpoint liveness this function deliberately never reads. A paused verdict is
+# cached against the status line plus the endpoint it was probed on: consecutive
+# polls on an unchanged wait answer the cache with no probe at all, a status or
+# endpoint change rechecks at once, and the slow interval still bounds a wait that
+# cleared silently, so a stalled wait is noticed rather than rotting.
 pause_state_class() {  # <window> <task>
-  local win=$1 task=$2 key last recheck_file class agent_alive kind
+  local win=$1 task=$2 key last recheck_file sig_file class agent_alive kind backend cur_sig
   key=$(window_key "$win")
   if fm_busy_provider_wait_until "$STATE" "$task" >/dev/null; then
     rm -f "$STATE/.paused-rechecked-$key"
@@ -1977,8 +1981,9 @@ pause_state_class() {  # <window> <task>
   fi
   last=$(status_declared_wait_line "$STATE/$task.status")
   recheck_file="$STATE/.paused-rechecked-$key"
+  sig_file="$STATE/.paused-sig-$key"
   if ! status_is_paused_or_captain_held "$last"; then
-    rm -f "$recheck_file"
+    rm -f "$recheck_file" "$sig_file"
     crew_absorb_class "$task"
     return
   fi
@@ -1986,28 +1991,27 @@ pause_state_class() {  # <window> <task>
   # so a mate's stale poll costs one metadata scan rather than one per gate, and the
   # far more common no-declaration path above still costs none.
   kind=$(window_kind "$win")
-  if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
-    if [ "$kind" != secondmate ]; then
-      agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
-      if [ "$agent_alive" != dead ]; then
-        rm -f "$recheck_file"
-        printf 'none'
-        return
-      fi
-    fi
+  backend=$(window_backend "$win")
+  # Skip the probe when neither input moved: the endpoint probe costs a
+  # process-table scan, so answering it on every poll spends thousands of scans
+  # between slow-interval rechecks for one unchanged wait.
+  cur_sig="status:$last
+endpoint:$backend:$win"
+  if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ] \
+    && [ "$(cat "$sig_file" 2>/dev/null || true)" = "$cur_sig" ]; then
     printf 'paused'
     return
   fi
   class=$(crew_absorb_class "$task")
   if [ "$class" = working ]; then
-    rm -f "$recheck_file"
+    rm -f "$recheck_file" "$sig_file"
     printf 'working'
     return
   fi
   if [ "$kind" != secondmate ]; then
-    agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
+    agent_alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
-      rm -f "$recheck_file"
+      rm -f "$recheck_file" "$sig_file"
       printf 'none'
       return
     fi
@@ -2022,8 +2026,8 @@ pause_state_class() {  # <window> <task>
   # the bounded re-surface cadence, and a forgotten declaration would rot invisibly.
   [ "$class" = none ] && class=paused
   case "$class" in
-    paused) date +%s > "$recheck_file" ;;
-    *) rm -f "$recheck_file" ;;
+    paused) date +%s > "$recheck_file"; printf '%s' "$cur_sig" > "$sig_file" ;;
+    *) rm -f "$recheck_file" "$sig_file" ;;
   esac
   printf '%s' "$class"
 }
