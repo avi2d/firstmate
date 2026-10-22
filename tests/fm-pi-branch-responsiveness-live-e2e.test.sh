@@ -1,31 +1,6 @@
 #!/usr/bin/env bash
-# Default-on live guard for the ONE thing only a real Pi TUI can answer: whether
-# the captain can still type and see the screen repaint while a supervision
-# outcome is being delivered into his session.
-#
-# The portable regression in tests/fm-pi-branch-extension.test.sh pins the
-# mechanism (the delivery path must not block the event loop) with real
-# processes and no harness. This one measures the symptom the captain
-# actually reported, against the installed Pi, by typing into the pane and
-# timing how long each keystroke takes to be echoed - the method of
-# data/<scout>/report.md section 4.1.
-#
-# Three arms in one run, so the verdict is calibrated to this machine rather
-# than to a remembered millisecond figure:
-#   floor     - Pi with the supervision extension NOT loaded
-#   idle      - Pi with the extension loaded and nothing to deliver
-#   delivery  - Pi with the extension loaded and two outcomes arriving
-# The floor is what Pi itself costs here; the other two must stay in its
-# class. Before the asynchronous conversion the loaded arms ran an order of
-# magnitude worse than the floor, which is the regression this guard catches.
-#
-# Nothing global is touched: a scratch FM_HOME, a scratch project holding a
-# copy of the tracked extension, a private tmux socket, a scratch session
-# directory, --approve (trust for this run only), and --offline. Pi reads the
-# operator's own agent directory because a Pi with no model renders a setup
-# screen instead of a usable TUI, but nothing there is written and NO model
-# turn is ever started: /new is a local command, and it re-fires session_start,
-# which runs the same reconcile-and-deliver chain an arriving outcome runs.
+# Live guard: type into a real Pi TUI and time keystroke echo while
+# supervision outcomes arrive. Needs pi, tmux, and node.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -60,7 +35,7 @@ OUTCOME_SCRIPT="$ROOT/bin/fm-branch-outcome.sh"
 # The store this guard drives is the real one; only the rows are synthetic.
 append_outcome() {
   FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" FM_ROOT_OVERRIDE="$ROOT" \
-    bash "$OUTCOME_SCRIPT" append --task lab-task --verdict routine --summary "$1" --silent false >/dev/null \
+    bash "$OUTCOME_SCRIPT" append --task lab-task --verdict captain --summary "$1" --silent false >/dev/null \
     || fail "could not seed the outcome store"
 }
 
