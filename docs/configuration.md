@@ -2446,7 +2446,7 @@ The adapter automates only the exact deterministic subset: anything needing judg
 
 **Wake on tui-dash alert events**
 
-The `tui-dash` adapter, `bin/fm-procevent-tui-dash.sh`, turns each line `tui-dash alerts --json` prints into its own durable `check` wake, whose captured result is that alert event unchanged.
+The `tui-dash` adapter, `bin/fm-procevent-tui-dash.sh`, turns each line `tui-dash alerts --json` prints into its own durable `check` wake, whose captured result is that alert event unchanged, unless the adapter's `silent` command judges the alert deterministically routine and records it with no wake.
 A home arms it once with the configured tui-dash command, which defaults to `tui-dash` and is stored in the registration.
 The stream runs in a detached tap that outlives each runner, so tui-dash keeps its episodes and quiet clocks between alerts instead of refiring them.
 The tap stops when no runner has polled it for `FM_TUI_DASH_TAP_IDLE_SECONDS`, 1800 by default, or when its registration is gone.
