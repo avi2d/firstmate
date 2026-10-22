@@ -2017,6 +2017,7 @@ endpoint:$backend:$win"
   if [ "$kind" != secondmate ]; then
     agent_alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
+      : > "$STATE/.paused-$key"
       date +%s > "$recheck_file"; printf 'none\n%s' "$cur_sig" > "$sig_file"
       printf 'none'
       return
@@ -2032,7 +2033,8 @@ endpoint:$backend:$win"
   # the bounded re-surface cadence, and a forgotten declaration would rot invisibly.
   [ "$class" = none ] && class=paused
   case "$class" in
-    paused) date +%s > "$recheck_file"; printf 'paused\n%s' "$cur_sig" > "$sig_file" ;;
+    paused) : > "$STATE/.paused-$key"
+            date +%s > "$recheck_file"; printf 'paused\n%s' "$cur_sig" > "$sig_file" ;;
     *) rm -f "$recheck_file" "$sig_file" ;;
   esac
   printf '%s' "$class"
@@ -2200,9 +2202,12 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   printf '%s' "$h" > "$STATE/.stale-$key"
   rm -f "$STATE/.stale-since-$key"
   clear_write_tracking "$key"
+  # A declared wait leaves the pause records pause_state_class just reconciled
+  # untouched: renewing the slow-interval timestamp on a changed pane hash with
+  # unchanged inputs would keep the interval from ever elapsing, so a live or
+  # unknown worker would never get the recheck the declarations promise it.
   if [ "$declared" -eq 0 ]; then
-    : > "$STATE/.paused-$key"
-    date +%s > "$STATE/.paused-rechecked-$key"
+    :
   elif [ "$bounded" -eq 0 ]; then
     # A backlog hold is NOT a declared pause, and must not be dressed up as one:
     # the loop-top reconciliation and pause_state_class both read the status LINE,

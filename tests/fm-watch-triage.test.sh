@@ -4838,6 +4838,170 @@ SH
   pass "an unchanged paused wait beside a live agent is not rechecked on consecutive polls: the cached live verdict spends no crew-state read and no endpoint probe"
 }
 
+test_paused_throttled_resurface_keeps_the_old_recheck_clock() {
+  local dir state fakebin out capture_file window key pane_hash sig pid aged
+  dir=$(make_case paused-throttled-keeps-clock); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-throttle"
+  printf 'idle awaiting external\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-throttle.meta"
+  printf 'paused: awaiting the upstream release\n' > "$state/paused-throttle.status"
+  sig=$(seen_sig "$state/paused-throttle.status"); printf '%s' "$sig" > "$state/.seen-paused-throttle_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle awaiting external")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # A declared pause beside a live agent, never before surfaced: the first
+  # poll runs the full path and surfaces, which arms the re-surface throttle
+  # for this declaration.
+  : > "$state/.paused-$key"
+  date +%s > "$state/.paused-rechecked-$key"
+  export FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting the upstream release'
+  export FM_FAKE_CREW_STATE_LOG="$dir/crew-state.log"
+  export FM_FAKE_TMUX_CURRENT_COMMAND=claude
+  : > "$dir/crew-state.log"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "the first sight of a live declared pause did not surface: $(cat "$out")"; }
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG")" = 1 ] \
+    || fail "the first sight of a live declared pause did not reconcile once"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the immediate surface"
+  [ ! -s "$state/.wake-queue" ] || fail "the acknowledgement left a queued wake"
+  # A later poll meets the same hash with the per-hash suppressor gone, as a
+  # first sight leaves it: the verdict answers from the cache and the armed
+  # throttle absorbs the re-surface. The slow-interval clock must still belong
+  # to the reconciliation, not to this throttled pass.
+  rm -f "$state/.stale-$key"
+  aged=$(( $(date +%s) - 100 ))
+  set_mtime "$aged" "$state/.paused-rechecked-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited on a throttled re-surface: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited on a throttled re-surface: $(cat "$out")"; }
+  [ "$(file_mtime "$state/.paused-rechecked-$key")" = "$aged" ] \
+    || { reap "$pid"; fail "a throttled re-surface with unchanged inputs renewed the slow-interval clock without reconciling"; }
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG")" = 1 ] \
+    || { reap "$pid"; fail "a throttled re-surface with unchanged inputs reconciled instead of answering the cache"; }
+  [ ! -s "$out" ] || { reap "$pid"; fail "a throttled re-surface with unchanged inputs printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "a throttled re-surface with unchanged inputs enqueued a wake"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "a throttled re-surface with unchanged inputs lost its pause marker"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_STATE_LOG FM_FAKE_TMUX_CURRENT_COMMAND
+  pass "a throttled re-surface with unchanged inputs neither reconciles nor renews the slow-interval clock: the clock still belongs to the last reconciliation"
+}
+
+test_paused_untagged_signature_record_is_a_cache_miss() {
+  local dir state fakebin out capture_file window key pane_hash sig pid last
+  dir=$(make_case paused-untagged-sig-miss); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-untag"
+  printf 'idle awaiting external\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-untag.meta"
+  printf 'paused: awaiting the upstream release\n' > "$state/paused-untag.status"
+  sig=$(seen_sig "$state/paused-untag.status"); printf '%s' "$sig" > "$state/.seen-paused-untag_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle awaiting external")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  printf '1\n' > "$state/.count-$key"
+  # A signature-only record from before the verdict tag existed: fresh
+  # timestamp, inputs matching, but no recognized paused or none tag.
+  : > "$state/.paused-$key"
+  date +%s > "$state/.paused-rechecked-$key"
+  last=$(status_declared_wait_line "$state/paused-untag.status")
+  printf 'status:%s\nendpoint:tmux:%s' "$last" "$window" > "$state/.paused-sig-$key"
+  export FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting the upstream release'
+  export FM_FAKE_CREW_STATE_LOG="$dir/crew-state.log"
+  export FM_FAKE_TMUX_CURRENT_COMMAND=bash
+  export FM_FAKE_TMUX_CALL_LOG="$dir/tmux-calls.log"
+  : > "$dir/crew-state.log"
+  : > "$dir/tmux-calls.log"
+  mv "$fakebin/tmux" "$fakebin/tmux.real"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_TMUX_CALL_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
+exec "$(dirname "$0")/tmux.real" "$@"
+SH
+  chmod +x "$fakebin/tmux"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited on an untagged signature record: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited on an untagged signature record: $(cat "$out")"; }
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG")" -ge 1 ] \
+    || { reap "$pid"; fail "an untagged signature record answered the cache instead of reconciling"; }
+  [ "$(head -n 1 "$state/.paused-sig-$key")" = paused ] \
+    || { reap "$pid"; fail "a reconciled pause did not earn a tagged record: $(cat "$state/.paused-sig-$key")"; }
+  [ ! -s "$out" ] || { reap "$pid"; fail "an untagged signature record printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "an untagged signature record enqueued a wake"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_STATE_LOG FM_FAKE_TMUX_CURRENT_COMMAND FM_FAKE_TMUX_CALL_LOG
+  pass "an untagged signature record is a cache miss: it reconciles and earns a tagged record"
+}
+
+test_captain_held_unchanged_across_polls_skips_its_recheck() {
+  local dir state fakebin out capture_file window key pane_hash sig pid i crew_first probes_first
+  dir=$(make_case captain-held-unchanged-skips-recheck); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-held-quiet"
+  printf 'idle bare shell after captain-held transfer\n' > "$capture_file"
+  printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/held-quiet.meta"
+  printf 'captain-held [key=route]: awaiting the routing call\n' > "$state/held-quiet.status"
+  sig=$(seen_sig "$state/held-quiet.status"); printf '%s' "$sig" > "$state/.seen-held-quiet_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle bare shell after captain-held transfer")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  printf '1\n' > "$state/.count-$key"
+  # An admitted captain-held transfer with a confidently dead agent and the
+  # slow interval far away, so only a genuine change may spend another probe.
+  : > "$state/.paused-$key"
+  date +%s > "$state/.paused-rechecked-$key"
+  export FM_FAKE_CREW_STATE='state: none · source: status-log · no current-state mapping'
+  export FM_FAKE_CREW_STATE_LOG="$dir/crew-state.log"
+  export FM_FAKE_TMUX_CURRENT_COMMAND=bash
+  export FM_FAKE_TMUX_CALL_LOG="$dir/tmux-calls.log"
+  : > "$dir/crew-state.log"
+  : > "$dir/tmux-calls.log"
+  mv "$fakebin/tmux" "$fakebin/tmux.real"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_FAKE_TMUX_CALL_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
+exec "$(dirname "$0")/tmux.real" "$@"
+SH
+  chmod +x "$fakebin/tmux"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && kill -0 "$pid" 2>/dev/null; do
+    [ -s "$FM_FAKE_CREW_STATE_LOG" ] || [ "$(grep -c '^display-message' "$FM_FAKE_TMUX_CALL_LOG")" -gt 0 ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -0 "$pid" 2>/dev/null || { reap "$pid"; fail "watcher exited on an admitted captain-held stale pane: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited while a captain-held transfer stood unchanged: $(cat "$out")"; }
+  crew_first=$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)
+  probes_first=$(grep -c '^display-message' "$FM_FAKE_TMUX_CALL_LOG" 2>/dev/null || true)
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited while a captain-held transfer stood unchanged: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited while a captain-held transfer stood unchanged: $(cat "$out")"; }
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)" = "$crew_first" ] \
+    || { reap "$pid"; fail "an unchanged captain-held transfer was re-read from authoritative crew state on a consecutive poll"; }
+  [ "$(grep -c '^display-message' "$FM_FAKE_TMUX_CALL_LOG" 2>/dev/null || true)" = "$probes_first" ] \
+    || { reap "$pid"; fail "an unchanged captain-held transfer was re-probed at its endpoint on a consecutive poll"; }
+  [ "$(head -n 1 "$state/.paused-sig-$key")" = paused ] \
+    || { reap "$pid"; fail "an unchanged captain-held transfer did not keep its tagged paused record"; }
+  [ ! -s "$out" ] || { reap "$pid"; fail "an unchanged captain-held transfer printed a wake reason: $(cat "$out")"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "an unchanged captain-held transfer enqueued a wake"; }
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "an unchanged captain-held transfer lost its pause marker"; }
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_STATE_LOG FM_FAKE_TMUX_CURRENT_COMMAND FM_FAKE_TMUX_CALL_LOG
+  pass "an unchanged captain-held transfer is not rechecked on consecutive polls: the cached verdict spends no crew-state read and no endpoint probe"
+}
+
 test_paused_status_change_rechecks_before_the_slow_interval() {
   local dir state fakebin out capture_file window key pane_hash sig pid i crew_before
   dir=$(make_case paused-change-rechecks-at-once); state="$dir/state"; fakebin="$dir/fakebin"
@@ -7349,6 +7513,9 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash
 test_nonterminal_paused_rechecks_authoritative_state
 test_paused_unchanged_across_polls_skips_its_recheck
 test_paused_live_agent_unchanged_across_polls_skips_its_recheck
+test_paused_throttled_resurface_keeps_the_old_recheck_clock
+test_paused_untagged_signature_record_is_a_cache_miss
+test_captain_held_unchanged_across_polls_skips_its_recheck
 test_paused_status_change_rechecks_before_the_slow_interval
 test_paused_authoritative_working_preserves_wedge_timer
 test_nonterminal_stale_repairs_missing_or_corrupt_timer
