@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Behavior tests for the Mac load gate at night: a heavy start waits while the
-# five-minute average is high or four heavy workers already run.
+# five-minute average is high or the standing heavy cap already runs.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -13,6 +13,12 @@ TMP_ROOT=$(fm_test_tmproot fm-mac-load-gate)
 DEFER_EXIT=75
 HAVE_TASKS_AXI=0
 command -v tasks-axi >/dev/null 2>&1 && HAVE_TASKS_AXI=1
+
+# The suite asserts the real gate on the real platform, so the caps follow it.
+case "$(uname -s)" in
+  Linux) GATE_LOAD_HIGH=16.0 GATE_LOAD_CLEAR=15.9 GATE_LIMIT=16 GATE_FULL=6 ;;
+  *) GATE_LOAD_HIGH=10.0 GATE_LOAD_CLEAR=9.9 GATE_LIMIT=10 GATE_FULL=4 ;;
+esac
 
 write_brief() {  # <home> <id>
   mkdir -p "$1/data/$2"
@@ -169,37 +175,37 @@ test_high_average_defers_then_clear_admits() {
   home="$case_dir/home"
   before=$(call_count "$case_dir")
   worktrees=$(worktree_list "$case_dir")
-  out=$(spawn_ship_load 10.0 "$case_dir" task-c "$case_dir/unused") || rc=$?
-  expect_code "$DEFER_EXIT" "$rc" "a spawn at a five-minute average of 10 was not deferred: $out"
-  assert_contains "$out" "five-minute load average is 10.0 (limit 10)" "the deferral did not name the average and the limit"
+  out=$(spawn_ship_load "$GATE_LOAD_HIGH" "$case_dir" task-c "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a spawn at a five-minute average of $GATE_LOAD_HIGH was not deferred: $out"
+  assert_contains "$out" "five-minute load average is $GATE_LOAD_HIGH (limit $GATE_LIMIT)" "the deferral did not name the average and the limit"
   assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
   rc=0
-  out=$(spawn_ship_load 9.9 "$case_dir" task-c) || rc=$?
+  out=$(spawn_ship_load "$GATE_LOAD_CLEAR" "$case_dir" task-c) || rc=$?
   expect_code 0 "$rc" "the same spawn was refused after the average cleared: $out"
   assert_contains "$out" "spawned task-c" "the cleared spawn did not launch"
   pass "a high five-minute average defers a heavy start, and the same start launches once it clears"
 }
 
-test_four_heavy_workers_defer_a_fifth_then_release_admits() {
-  local case_dir home out rc=0 before worktrees
+test_full_heavy_cap_defers_one_more_then_release_admits() {
+  local case_dir home out rc=0 before worktrees i=0
   case_dir=$(make_case full task-c)
   home="$case_dir/home"
-  write_live "$home" live-a "$case_dir/project"
-  write_live "$home" live-b "$case_dir/project"
-  write_live "$home" live-c "$case_dir/project"
-  write_live "$home" live-d "$case_dir/project"
+  while [ "$i" -lt "$GATE_FULL" ]; do
+    i=$((i + 1))
+    write_live "$home" "live-$i" "$case_dir/project"
+  done
   before=$(call_count "$case_dir")
   worktrees=$(worktree_list "$case_dir")
   out=$(spawn_ship_load 1.0 "$case_dir" task-c "$case_dir/unused") || rc=$?
-  expect_code "$DEFER_EXIT" "$rc" "a fifth heavy worker was not deferred: $out"
-  assert_contains "$out" "4 heavy worker(s) already run on this machine (limit 4" "the deferral did not name the count and the limit"
+  expect_code "$DEFER_EXIT" "$rc" "one more heavy worker was not deferred: $out"
+  assert_contains "$out" "$GATE_FULL heavy worker(s) already run on this machine (limit $GATE_FULL" "the deferral did not name the count and the limit"
   assert_nothing_created "$case_dir" "$home" task-c "$before" "$worktrees"
-  printf 'pr=%s\n' "https://example.invalid/o/r/pull/1" >> "$home/state/live-a.meta"
+  printf 'pr=%s\n' "https://example.invalid/o/r/pull/1" >> "$home/state/live-1.meta"
   rc=0
   out=$(spawn_ship_load 1.0 "$case_dir" task-c) || rc=$?
   expect_code 0 "$rc" "the same spawn was refused after a handoff freed a place: $out"
   assert_contains "$out" "spawned task-c" "the released spawn did not launch"
-  pass "four heavy workers defer a fifth, and a handoff admits it again"
+  pass "a full heavy cap defers one more, and a handoff admits it again"
 }
 
 test_handed_off_and_secondmate_records_do_not_count() {
@@ -217,12 +223,13 @@ test_handed_off_and_secondmate_records_do_not_count() {
 }
 
 test_restart_does_not_count_its_own_record() {
-  local case_dir home out rc=0
+  local case_dir home out rc=0 i=0
   case_dir=$(make_case restart task-c task-d)
   home="$case_dir/home"
-  write_live "$home" live-a "$case_dir/project"
-  write_live "$home" live-b "$case_dir/project"
-  write_live "$home" live-c "$case_dir/project"
+  while [ "$i" -lt $((GATE_FULL - 1)) ]; do
+    i=$((i + 1))
+    write_live "$home" "live-$i" "$case_dir/project"
+  done
   fm_write_meta "$home/state/task-c.meta" "window=firstmate:fm-task-c" "project=$case_dir/project" "kind=ship"
   out=$(spawn_ship_load 1.0 "$case_dir" task-c) || rc=$?
   [ "$rc" -ne "$DEFER_EXIT" ] || fail "a restart was deferred by its own record: $out"
@@ -292,7 +299,7 @@ test_malformed_machine_setting_refuses() {
 }
 
 test_high_average_defers_then_clear_admits
-test_four_heavy_workers_defer_a_fifth_then_release_admits
+test_full_heavy_cap_defers_one_more_then_release_admits
 test_handed_off_and_secondmate_records_do_not_count
 test_restart_does_not_count_its_own_record
 test_unreadable_record_refuses

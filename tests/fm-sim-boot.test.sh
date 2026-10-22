@@ -97,6 +97,11 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/xcrun"
+  cat > "$fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+printf 'Darwin\n'
+SH
+  chmod +x "$fakebin/uname"
   : > "$case_dir/calls.log"
   printf '%s\n' "$case_dir"
 }
@@ -104,7 +109,8 @@ SH
 run_helper() {  # <case-dir> <load> <args...>
   local case_dir=$1 load=$2
   shift 2
-  FM_SIM_BOOT_XCRUN="$case_dir/fakebin/xcrun" \
+  PATH="$case_dir/fakebin:$PATH" \
+    FM_SIM_BOOT_XCRUN="$case_dir/fakebin/xcrun" \
     FM_SIM_BOOT_DIR="$case_dir/gate" \
     FM_SIM_BOOT_FORCE=1 \
     FM_SIM_BOOT_FAKE_LOG="$case_dir/calls.log" \
