@@ -867,6 +867,284 @@ test_attended_close_that_turns_main_only_before_its_turn_passes_to_main() {
   pass "host: an attended close whose task turns main-only before its turn still reaches main unchanged"
 }
 
+# --- the Claude re-arm owner around the host ----------------------------------
+
+# A fixture home that is also a genuine primary checkout whose bin is this
+# repo's, so the real Claude Stop hook (bin/fm-claude-stop-autoarm.sh) runs the
+# real host in it.
+make_primary_home() {  # <name>
+  local home
+  home=$(make_home "$1" attended)
+  git init -q "$home"
+  : > "$home/AGENTS.md"
+  ln -s "$ROOT/bin" "$home/bin"
+  printf '%s\n' "$home"
+}
+
+# One Claude main session under the fake harness. Each turn_end fires the real
+# Stop hook as the tracked asyncRewake registration does, and records its exit
+# status and stderr (the rewake banner Claude delivers on exit 2).
+start_hook_session() {  # <home>
+  local home=$1
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_CREW_STATE_BIN="$home/fakebin/fm-crew-state.sh" \
+    PATH="$home/fakebin:$PATH" "$FAKE_CLAUDE" -c '
+      printf "%s\n" "$$" > "$FM_HOME/state/.lock"
+      printf "%s\n" "$$" >> "$FM_HOME/claude-pids"
+      for seed in "$FM_HOME"/mirror-seed.*; do
+        [ -f "$seed" ] || continue
+        "$FM_HOME/bin/fm-host-mirror.sh" hook claude < "$seed"
+      done
+      while [ ! -e "$FM_HOME/session.stop" ]; do
+        if [ -e "$FM_HOME/stop.go" ]; then
+          rm -f "$FM_HOME/stop.go"
+          if [ -e "$FM_HOME/hook.own-group" ]; then
+            # Claude owns the hook as a process group of its own and tears the
+            # whole group down once the hook has exited.
+            printf "{\"session_id\":\"sess-host-hook\",\"stop_hook_active\":false}\n" > "$FM_HOME/hook.stdin"
+            set -m
+            "$FM_HOME/bin/fm-claude-stop-autoarm.sh" < "$FM_HOME/hook.stdin" > "$FM_HOME/hook.out" 2> "$FM_HOME/hook.err" &
+            printf "%s\n" "$!" > "$FM_HOME/hook.pgid"
+            wait "$!"
+            printf "%s\n" "$?" > "$FM_HOME/hook.rc"
+            set +m
+          else
+            printf "{\"session_id\":\"sess-host-hook\",\"stop_hook_active\":false}\n" \
+              | "$FM_HOME/bin/fm-claude-stop-autoarm.sh" > "$FM_HOME/hook.out" 2> "$FM_HOME/hook.err"
+            printf "%s\n" "$?" > "$FM_HOME/hook.rc"
+          fi
+        fi
+        sleep 0.1
+      done
+    ' 2>> "$home/claude.err" &
+}
+turn_end() { rm -f "$1/hook.rc"; : > "$1/stop.go"; }
+hook_exited() { [ -s "$1/hook.rc" ]; }
+
+# Main's rewoken turn drains; the caller runs the printed acknowledgement
+# (MAIN_ACK) when that turn's handling is done.
+main_drain() {  # <home>; prints the drain and sets MAIN_ACK
+  local out
+  out=$(FM_HOME="$1" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  MAIN_ACK=$(printf '%s\n' "$out" | sed -n 's/^WAKE_ACK_REQUIRED: after handling completes run bin\/fm-wake-drain.sh //p' | tail -1)
+  printf '%s\n' "$out"
+}
+
+assert_rewoke_main() {  # <home> <label>
+  expect_code 2 "$(cat "$1/hook.rc")" "$2: the Stop hook must rewake main: $(cat "$1/hook.err"; cat "$1/state/.watcher-down" 2>/dev/null)"
+  assert_grep 'firstmate watcher wake - one supervision event needs a handling turn now.' "$1/hook.err" "$2: the rewake banner is missing"
+  assert_re '^epoch=[0-9]+ owner_pid=[0-9]+ outcome=rewake ' "$1/state/.claude-autoarm-epoch" "$2: the auto-arm ledger must record the rewake"
+}
+
+# The live failure (2026-09-27): a main-only pass-through confirmed a handling
+# handoff before the close reached main's re-arm owner, so the Stop hook's
+# rewake commit refused and it exited 0 in silence. An idle primary was never
+# woken, and the detached successor's own later close reached no reader.
+test_claude_stop_hook_delivers_a_main_only_pass_through() {
+  local home
+  home=$(make_primary_home hook-main-only)
+  start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "hook main-only: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
+  append_status "$home" 'which export format?' needs-decision
+  wait_until 250 hook_exited "$home" || fail "hook main-only: the Stop hook never closed: $(cat "$home/state/.supervision-host.log")"
+  assert_re '	pass-through	attended	main-only	signal:' "$home/state/.supervision-host.log" "fixture: the close was not a main-only pass-through"
+  assert_rewoke_main "$home" "hook main-only"
+  assert_re '^signal: .*demo.status' "$home/hook.err" "the rewake must carry the close"
+  watcher_live "$home" || fail "hook main-only: the pass-through left no successor watcher"
+  pass "host+hook: an attended main-only pass-through rewakes main and keeps its successor watcher"
+}
+
+# A second task closes the successor while the first turn still owns handling
+# Its queued rows keep that handling episode open after the first turn's ack
+assert_main_only_close_after_handled_turn() {  # <restore|refuse>
+  local mode=$1 home successor real_mktemp
+  home=$(make_primary_home "hook-inherited-handling-$mode")
+  ln -s "$ROOT/.agents" "$home/.agents"
+  cat > "$home/engine-delayed" <<'SH'
+#!/usr/bin/env bash
+: > "$FM_HOME/before-drain.ready"
+while [ ! -e "$FM_HOME/before-drain.release" ]; do sleep 0.1; done
+"$FM_TEST_ENGINE_ORIGINAL" "$@"
+rc=$?
+: > "$FM_HOME/before-return.ready"
+while [ ! -e "$FM_HOME/before-return.release" ]; do sleep 0.1; done
+exit "$rc"
+SH
+  chmod +x "$home/engine-delayed"
+  if [ "$mode" = refuse ]; then
+    real_mktemp=$(command -v mktemp)
+    cat > "$home/fakebin/mktemp" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *'/.watcher-down.tmp.'*) [ ! -e "\$FM_HOME/fail-downtime-write" ] || exit 1 ;;
+esac
+exec "$real_mktemp" "\$@"
+SH
+    chmod +x "$home/fakebin/mktemp"
+  fi
+  FM_TEST_ENGINE_ORIGINAL="$STUB" FM_SUPERVISION_ENGINE_CLAUDE_BIN="$home/engine-delayed" start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "inherited handling: no watcher started"
+  append_status "$home" 'measurement driver running' paused
+  wait_until 250 test -e "$home/before-drain.ready" || fail "inherited handling: the first turn never started"
+  successor=$(cat "$home/state/.watch.lock/pid")
+  printf 'project=demo\nwindow=fm-beta\nharness=claude\n' > "$home/state/beta.meta"
+  printf 'needs-decision [at=%s]: select an export format\n' "$(date +%s)" > "$home/state/beta.status"
+  wait_until 250 bash -c '! kill -0 "$1" 2>/dev/null' _ "$successor" \
+    || fail "inherited handling: the main-only close did not occur during the first turn"
+  : > "$home/before-drain.release"
+  wait_until 250 test -e "$home/before-return.ready" || fail "inherited handling: the engine did not finish handling"
+  assert_re '^pending:handling:' "$home/state/.watcher-down" \
+    "fixture: the first turn did not leave an inherited handling episode"
+  [ "$mode" != refuse ] || : > "$home/fail-downtime-write"
+  : > "$home/before-return.release"
+  wait_until 250 hook_exited "$home" || fail "inherited handling: the Stop hook did not finish"
+  assert_re 'handled.*posture=attended' "$home/state/.supervision-host.log" "the first turn must finish"
+  assert_re 'pass-through[[:space:]]+attended[[:space:]]+main-only[[:space:]]+signal: .*beta.status' \
+    "$home/state/.supervision-host.log" "the second close must use the initial main-only path"
+  assert_grep 'beta.status' "$home/state/.wake-queue" "the main-owned rows must remain queued"
+  [ "$(engine_calls "$home")" -eq 1 ] || fail "the engine took the main-only close"
+  if [ "$mode" = restore ]; then
+    assert_rewoke_main "$home" "inherited handling"
+    assert_re '^(pending|announced):downtime:' "$home/state/.watcher-down" \
+      "the inherited episode must become deliverable downtime"
+    watcher_live "$home" || fail "the repaired hand-back must keep its successor alive"
+  else
+    expect_code 2 "$(cat "$home/hook.rc")" "restore refusal must notify main rather than exit silently"
+    assert_grep 'firstmate watcher auto-arm FAILED' "$home/hook.err" "the failure notice must reach main"
+    assert_re 'pass-through[[:space:]]+downtime-unrestored' "$home/state/.supervision-host.log" \
+      "fixture: the inherited episode restore did not fail"
+    assert_re 'outcome=failed ' "$home/state/.claude-autoarm-epoch" "the failure notice must be committed"
+  fi
+  stop_home_processes "$home"
+}
+
+test_main_only_close_after_handled_turn_restores_inherited_handling() {
+  assert_main_only_close_after_handled_turn restore
+  pass "host+hook: a main-only close after a handled turn restores inherited handling and rewakes main"
+}
+
+test_main_only_close_after_handled_turn_delivers_restore_failure() {
+  assert_main_only_close_after_handled_turn refuse
+  pass "host+hook: a refused inherited handling restore delivers a failure instead of silent success"
+}
+
+# A handled stale event for the idle worker, in the given posture, after the
+# handled paused and resolved signals
+stale_handled_after_resolved() {  # <home> <posture>
+  awk -F '\t' -v posture="posture=$2" '
+    $2 != "handled" { next }
+    /signal: .*\/demo\.status$/ { signals++; next }
+    signals >= 2 && index($0, posture) && /stale: firstmate:fm-demo$/ { found = 1 }
+    END { exit !found }
+  ' "$1/state/.supervision-host.log" 2>/dev/null
+}
+
+# Model the same returned driver with monitoring intact, in both postures
+assert_returned_driver_is_caught() {  # <attended|away>
+  local posture=$1 home
+  home=$(make_primary_home "hook-returned-driver-$posture")
+  ln -s "$ROOT/.agents" "$home/.agents"
+  if [ "$posture" = away ]; then
+    FM_HOME="$home" "$CONTRACT" enter --words 'keep the worker moving' >/dev/null 2>&1 \
+      || fail "returned driver: could not record away posture"
+  fi
+  FM_STALE_ESCALATE_SECS=4 start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "returned driver: no watcher started"
+  append_status "$home" 'measurement driver running' paused
+  wait_until 250 handled_at_least "$home" 1 || fail "returned driver: the paused signal was not handled"
+  cat > "$home/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  list-windows) printf 'fm-demo\n'; exit 0 ;;
+  capture-pane) printf 'Pi idle prompt; measurement driver returned\n'; exit 0 ;;
+  display-message) printf 'node\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$home/fakebin/tmux"
+  printf 'window=firstmate:fm-demo\nproject=demo\nkind=ship\nharness=pi\nbackend=tmux\n' > "$home/state/demo.meta"
+  append_status "$home" 'measurement driver returned; inspect receipts' resolved
+  # A hang guard only; the stale event's order after the resolved hand-back is the assertion
+  wait_until 1200 stale_handled_after_resolved "$home" "$posture" \
+    || fail "returned driver: the idle worker was not stale-handled in posture $posture after its resolved signal: $(cat "$home/state/.supervision-host.log")"
+  [ ! -s "$home/hook.rc" ] || fail "a routine returned-driver wake reached main"
+  wait_until 250 watcher_live "$home" || fail "the returned-driver control lost monitoring"
+  stop_home_processes "$home"
+}
+
+test_returned_driver_is_caught_attended() {
+  assert_returned_driver_is_caught attended
+  pass "host+hook: a driver returning to an idle worker is stale-handled while attended"
+}
+
+test_returned_driver_is_caught_away() {
+  assert_returned_driver_is_caught away
+  pass "host+hook: a driver returning to an idle worker is stale-handled while away"
+}
+
+# Close the confirmed handling watcher after the engine has acknowledged its
+# wake but before its captain outcome returns to the host.
+test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main() {
+  local home
+  home=$(make_primary_home hook-successor-closed-before-return)
+  ln -s "$ROOT/.agents" "$home/.agents"
+  echo captain-close-before-return > "$home/stub-mode"
+  start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "closed successor: the Stop hook never started a watcher cycle"
+  append_status "$home" 'first actionable wake'
+  wait_until 250 hook_exited "$home" || fail "closed successor: the Stop hook did not finish: $(cat "$home/state/.supervision-host.log")"
+  assert_re '^supervision-host: branch-outcome: ' "$home/hook.err" "the host must hand its captain outcome to main"
+  expect_code 2 "$(cat "$home/hook.rc")" "the Stop hook must rewake main after the successor closed"
+  assert_re '^(pending|announced):downtime:' "$home/state/.watcher-down" \
+    "the closed handling successor must leave a deliverable downtime episode"
+  pass "host+hook: a successor closed before exit_to_main does not suppress the branch-outcome rewake"
+}
+
+assert_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails() {
+  local status=$1 home real_mktemp successor
+  home=$(make_primary_home "hook-successor-restore-fails-$status")
+  ln -s "$ROOT/.agents" "$home/.agents"
+  echo captain-held > "$home/stub-mode"
+  mkfifo "$home/stub-release"
+  real_mktemp=$(command -v mktemp)
+  cat > "$home/fakebin/mktemp" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *'/.watcher-down.tmp.'*) [ ! -e "\$FM_HOME/fail-downtime-write" ] || exit 1 ;;
+esac
+exec "$real_mktemp" "\$@"
+SH
+  chmod +x "$home/fakebin/mktemp"
+  start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "restore failure: the Stop hook never started a watcher cycle"
+  append_status "$home" 'first actionable wake'
+  wait_until 250 test -s "$home/stub-ready" || fail "restore failure: the engine did not reach its hold"
+  successor=$(cat "$home/state/.watch.lock/pid")
+  append_status "$home" 'wake while the engine is handling'
+  wait_until 250 bash -c '! kill -0 "$1" 2>/dev/null' _ "$successor" \
+    || fail "restore failure: its watcher did not close during the engine turn"
+  FM_HOME="$home" bash -c '. "$1"; fm_recovery_marker_begin_handling "$2"' _ \
+    "$ROOT/bin/fm-wake-lib.sh" "$home/state/.watcher-down" \
+    || fail "fixture: could not model the queued successor wake entering handling"
+  if [ "$status" = announced ]; then
+    FM_HOME="$home" bash -c '. "$1"; fm_recovery_marker_read "$2" && _fm_recovery_marker_write_locked "$2" handling "${FM_RECOVERY_MARKER_TOKEN##*:}" announced' _ \
+      "$ROOT/bin/fm-wake-lib.sh" "$home/state/.watcher-down" \
+      || fail "fixture: could not model the handling episode as announced"
+  fi
+  assert_re "^$status:handling:" "$home/state/.watcher-down" \
+    "fixture: the closed handling successor must leave the marker in handling before the host hands back"
+  : > "$home/fail-downtime-write"
+  printf 'continue\n' > "$home/stub-release"
+  wait_until 250 hook_exited "$home" || fail "restore failure: the Stop hook did not finish"
+  expect_code 2 "$(cat "$home/hook.rc")" "the Stop hook must notify main when neither hand-back nor downtime restoration commits"
+  assert_grep 'firstmate watcher auto-arm FAILED' "$home/hook.err" "the refused rewake must turn into a delivered failure notice"
+  assert_re '^epoch=[0-9]+ owner_pid=[0-9]+ outcome=failed ' "$home/state/.claude-autoarm-epoch" \
+    "the failed hand-back must be committed"
+}
 test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails() {
   assert_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails pending
   pass "host+hook: a refused hand-back becomes a delivered failure notice"
@@ -1706,6 +1984,13 @@ test_superseded_host_leaves_the_owner_untouched() {
     || fail "superseded: the owner host did not stop on TERM"
   pass "host: a host under a superseded auto-arm generation stands down without touching the owner"
 }
+
+test_main_only_close_after_handled_turn_restores_inherited_handling
+test_main_only_close_after_handled_turn_delivers_restore_failure
+test_returned_driver_is_caught_attended
+test_returned_driver_is_caught_away
+test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main
+test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn
 test_claude_stop_hook_notifies_when_closed_successor_downtime_restore_fails
 test_claude_stop_hook_notifies_when_closed_announced_successor_downtime_restore_fails
 test_park_exit_probe_uses_half_second_child_sleeps

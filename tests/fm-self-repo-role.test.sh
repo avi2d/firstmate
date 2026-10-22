@@ -307,6 +307,7 @@ test_check_gh_default_outranks_upstream() {
     "an owner/repo default must name that repository as the target"
   pass "fm-role.sh check: the gh repo set-default choice is the publication target"
 }
+
 # A fetch-only parent remote must not override gh's explicitly selected fork.
 # Without the selection marker the existing upstream/github/origin order holds.
 test_check_gh_resolved_base_selects_fork() {
