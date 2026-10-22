@@ -801,6 +801,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
 # shellcheck source=bin/fm-mac-load-lib.sh
 . "$SCRIPT_DIR/fm-mac-load-lib.sh"
+# shellcheck source=bin/fm-core-budget-lib.sh
+. "$SCRIPT_DIR/fm-core-budget-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # shellcheck source=bin/fm-quota-axi-lib.sh
@@ -830,6 +832,8 @@ TRACEPARENT_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+WEIGHT=heavy
+WEIGHT_SET=0
 BACKEND_SET=0
 MODE_SET=0
 YOLO_SET=0
@@ -869,6 +873,10 @@ for a in "$@"; do
     effort)
       EFFORT=$a
       EFFORT_SET=1
+      ;;
+    weight)
+      WEIGHT=$a
+      WEIGHT_SET=1
       ;;
     backend)
       BACKEND_ARG=$a
@@ -940,6 +948,11 @@ for a in "$@"; do
     EFFORT=${a#--effort=}
     EFFORT_SET=1
     ;;
+  --weight) want_value=weight ;;
+  --weight=*)
+    WEIGHT=${a#--weight=}
+    WEIGHT_SET=1
+    ;;
   --backend) want_value=backend ;;
   --backend=*)
     BACKEND_ARG=${a#--backend=}
@@ -1004,6 +1017,10 @@ done
   echo "error: --effort requires a non-empty value" >&2
   exit 1
 }
+[ "$WEIGHT_SET" -eq 0 ] || [ -n "$WEIGHT" ] || {
+  echo "error: --weight requires a non-empty value" >&2
+  exit 1
+}
 [ "$BACKEND_SET" -eq 0 ] || [ -n "$BACKEND_ARG" ] || {
   echo "error: --backend requires a non-empty value" >&2
   exit 1
@@ -1061,6 +1078,13 @@ case "$EFFORT" in
   exit 1
   ;;
 esac
+case "$WEIGHT" in
+heavy | light) ;;
+*)
+  echo "error: --weight must be heavy or light" >&2
+  exit 1
+  ;;
+esac
 
 # --relaunch reuses an existing task's endpoint, worktree, project, and kind,
 # so every axis this block resolves for a fresh spawn instead comes from that
@@ -1093,6 +1117,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
   }
   [ "$UPSTREAM_CONSENT_SET" -eq 0 ] || {
     echo "error: --relaunch reuses the task's recorded upstream consent; --upstream-consent cannot override it" >&2
+    exit 1
+  }
+  [ "$WEIGHT_SET" -eq 0 ] || {
+    echo "error: --relaunch reuses the task's recorded weight; --weight cannot override it" >&2
     exit 1
   }
 else
@@ -1153,6 +1181,10 @@ else
     }
     [ "$KIND" != secondmate ] || [ "$BASE_BRANCH_SET" -eq 0 ] || {
       echo "error: --base-branch applies only to ship and scout spawns; a secondmate charter has no task base" >&2
+      exit 1
+    }
+    [ "$KIND" != secondmate ] || [ "$WEIGHT_SET" -eq 0 ] || {
+      echo "error: --weight applies only to ship and scout spawns; a secondmate waits on no machine budget" >&2
       exit 1
     }
     [ "$UPSTREAM_CONSENT_SET" -eq 0 ] || {
@@ -3821,6 +3853,53 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_winbox_load_gate_act
   if [ "$FM_WINBOX_HEAVY_COUNT" -ge "$FM_WINBOX_HEAVY_LIMIT" ]; then
     echo "deferred: $FM_WINBOX_HEAVY_COUNT heavy worker(s) already run on this machine (limit $FM_WINBOX_HEAVY_LIMIT: $FM_WINBOX_HEAVY_IDS); task $ID was not launched and its backlog item stays queued - dispatch it again once one of them records its ready PR or is cleaned up" >&2
     exit "$FM_WINBOX_LOAD_DEFER_EXIT"
+  fi
+fi
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$WEIGHT" = heavy ] && fm_mac_core_budget_gate_active; then
+  if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
+    SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
+      echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2
+      exit 1
+    }
+  fi
+  if ! fm_mac_load_config "$SPAWN_CAPACITY_CONFIG"; then
+    echo "error: spawn refused: the machine load declaration is unreadable ($FM_MAC_LOAD_ERROR)" >&2
+    exit 1
+  fi
+  SPAWN_BUDGET_HOME=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) || {
+    echo "error: spawn refused: the spawning home cannot be resolved" >&2
+    exit 1
+  }
+  SPAWN_BUDGET_SAMPLES=$(fm_machine_core_budget_samples_file "$FM_HOME" "$STATE") || {
+    echo "error: spawn refused: the machine-shared core sample log cannot be resolved" >&2
+    exit 1
+  }
+  if ! fm_machine_core_budget_record "$SPAWN_BUDGET_SAMPLES"; then
+    echo "error: spawn refused: the core sample cannot be recorded; refusing a heavy start rather than guessing it" >&2
+    exit 1
+  fi
+  if ! SPAWN_BUDGET_USAGE=$(fm_machine_core_budget_usage "$SPAWN_BUDGET_SAMPLES"); then
+    echo "error: spawn refused: the core sample log cannot be read ($FM_MACHINE_CORE_BUDGET_ERROR)" >&2
+    exit 1
+  fi
+  if fm_machine_core_budget_over "$SPAWN_BUDGET_USAGE" "$FM_MAC_CORE_BUDGET"; then
+    if ! "$SCRIPT_DIR/fm-mac-core-budget.sh" hold "$ID" "$(pwd -P)" "$SPAWN_BUDGET_HOME" -- "$@" >/dev/null; then
+      echo "error: spawn refused: the trailing hour burned $SPAWN_BUDGET_USAGE core-hours (budget $FM_MAC_CORE_BUDGET), and the paused start cannot be recorded" >&2
+      exit 1
+    fi
+    SPAWN_BUDGET_WATCH=$("$SCRIPT_DIR/fm-mac-core-budget.sh" watch-name) || SPAWN_BUDGET_WATCH=mac-core-budget
+    SPAWN_BUDGET_ARM_OUT=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent-when.sh" arm "$SPAWN_BUDGET_WATCH" --interval 60 --stable 2 --condition "$SCRIPT_DIR/fm-mac-core-budget.sh" check --clear --action "$SCRIPT_DIR/fm-mac-core-budget.sh" release 2>&1) || {
+      case "$SPAWN_BUDGET_ARM_OUT" in
+        *already\ exists*|*unhandled\ captured\ result*)
+          echo "note: the budget wake is already pending" >&2
+          ;;
+        *)
+          echo "warning: the budget wake did not arm ($SPAWN_BUDGET_ARM_OUT); task $ID stays queued for a hand retry" >&2
+          ;;
+      esac
+    }
+    echo "deferred: trailing-hour CPU use is $SPAWN_BUDGET_USAGE core-hours (budget $FM_MAC_CORE_BUDGET); task $ID was not launched and its backlog item stays queued - it resumes on its own once use drops under budget" >&2
+    exit "$FM_CORE_BUDGET_DEFER_EXIT"
   fi
 fi
 [ -f "$BRIEF" ] || {
