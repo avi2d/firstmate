@@ -1966,17 +1966,16 @@ clear_pause_tracking() {  # <window-key>
 # Reconcile a declared pause or captain-held status with authoritative crew state.
 # After fm-crew-state has fallen back to stopped or unknown, paused classification is
 # recovered only for a confidently dead ordinary crew, or for a secondmate, whose
-# endpoint liveness this function deliberately never reads. A reconciled verdict,
-# paused or live-or-unknown, is cached against the status line plus the endpoint
-# it was probed on: consecutive polls on an unchanged wait answer the cache with
-# no probe at all, a status or endpoint change rechecks at once, and the slow
-# interval still bounds a wait that cleared silently, so a stalled wait is noticed
-# rather than rotting.
+# endpoint liveness this function deliberately never reads. A paused verdict is
+# cached against the status line plus the endpoint it was probed on: consecutive
+# polls on an unchanged wait answer the cache with no probe at all, a status or
+# endpoint change rechecks at once, and the slow interval still bounds a wait that
+# cleared silently, so a stalled wait is noticed rather than rotting.
 pause_state_class() {  # <window> <task>
-  local win=$1 task=$2 key last recheck_file sig_file class agent_alive kind backend cur_sig cached cached_verdict
+  local win=$1 task=$2 key last recheck_file sig_file class agent_alive kind backend cur_sig cached_class cached_sig
   key=$(window_key "$win")
   if fm_busy_provider_wait_until "$STATE" "$task" >/dev/null; then
-    rm -f "$STATE/.paused-rechecked-$key"
+    rm -f "$STATE/.paused-rechecked-$key" "$STATE/.paused-sig-$key"
     printf 'paused'
     return
   fi
@@ -1995,17 +1994,19 @@ pause_state_class() {  # <window> <task>
   backend=$(window_backend "$win")
   # Skip the probe when neither input moved: the endpoint probe costs a
   # process-table scan, so answering it on every poll spends thousands of scans
-  # between slow-interval rechecks for one unchanged wait. The first inspection
-  # always runs the full path: only a stored verdict may answer, so a new wait
-  # is never silenced by a cache it never earned.
+  # between slow-interval rechecks for one unchanged wait.
   cur_sig="status:$last
 endpoint:$backend:$win"
-  if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
-    cached=$(cat "$sig_file" 2>/dev/null || true)
-    cached_verdict=${cached%%$'\n'*}
-    case "$cached_verdict" in
+  if [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ] && [ -f "$sig_file" ]; then
+    cached_class=$(head -n 1 "$sig_file" 2>/dev/null || true)
+    case "$cached_class" in
       paused|none)
-        [ "${cached#*$'\n'}" = "$cur_sig" ] && { printf '%s' "$cached_verdict"; return; } ;;
+        cached_sig=$(tail -n +2 "$sig_file" 2>/dev/null || true)
+        if [ "$cached_sig" = "$cur_sig" ]; then
+          printf '%s' "$cached_class"
+          return
+        fi
+        ;;
     esac
   fi
   class=$(crew_absorb_class "$task")
@@ -2017,7 +2018,6 @@ endpoint:$backend:$win"
   if [ "$kind" != secondmate ]; then
     agent_alive=$(fm_backend_agent_alive "$backend" "$win" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
-      : > "$STATE/.paused-$key"
       date +%s > "$recheck_file"; printf 'none\n%s' "$cur_sig" > "$sig_file"
       printf 'none'
       return
@@ -2033,8 +2033,7 @@ endpoint:$backend:$win"
   # the bounded re-surface cadence, and a forgotten declaration would rot invisibly.
   [ "$class" = none ] && class=paused
   case "$class" in
-    paused) : > "$STATE/.paused-$key"
-            date +%s > "$recheck_file"; printf 'paused\n%s' "$cur_sig" > "$sig_file" ;;
+    paused) date +%s > "$recheck_file"; printf 'paused\n%s' "$cur_sig" > "$sig_file" ;;
     *) rm -f "$recheck_file" "$sig_file" ;;
   esac
   printf '%s' "$class"
@@ -2202,12 +2201,8 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
   printf '%s' "$h" > "$STATE/.stale-$key"
   rm -f "$STATE/.stale-since-$key"
   clear_write_tracking "$key"
-  # A declared wait leaves the pause records pause_state_class just reconciled
-  # untouched: renewing the slow-interval timestamp on a changed pane hash with
-  # unchanged inputs would keep the interval from ever elapsing, so a live or
-  # unknown worker would never get the recheck the declarations promise it.
   if [ "$declared" -eq 0 ]; then
-    :
+    : > "$STATE/.paused-$key"
   elif [ "$bounded" -eq 0 ]; then
     # A backlog hold is NOT a declared pause, and must not be dressed up as one:
     # the loop-top reconciliation and pause_state_class both read the status LINE,
@@ -2215,7 +2210,7 @@ surface_nonterminal_stale() {  # <window> <hash> [dialog-name]
     # poll - taking the throttle with it - and would hand the mate and dead-agent
     # cadences a declaration they were never given. Only the shared re-surface
     # marker is kept, which is the whole of what this bound needs.
-    rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key"
+    rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-sig-$key"
   else
     clear_pause_state "$key"
   fi
