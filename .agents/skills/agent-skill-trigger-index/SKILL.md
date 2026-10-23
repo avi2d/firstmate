@@ -34,8 +34,7 @@ After changing a skill description, run `bin/fm-skill-trigger-index.sh --write`.
 - `process-event-sources` - Load before arming a long-polling source firstmate owns, before registering a deterministic condition->action watch, on any `procevent <adapter> <source-id> <sequence>` check wake, and on any `process-event source stranded` or `process-event source failed to start` check wake.
 - `project-management` - Load before adding, creating, removing, or initializing a project.
   Cloning or registering a project is add intake and uses the same trigger.
-- `quota-array-dispatch` - Agent-only decision procedure for resolving a matched crew-dispatch profile array from quota-axi's default TOON, ranking by spendPriority after three orthogonal gates, or taking the first candidate that passes them when the dispatch file declares array_order preference.
-  Load when a crew-dispatch rule or default resolves to more than one profile candidate.
+- `quota-array-dispatch` - Load when a crew-dispatch rule or default resolves to more than one profile candidate.
 - `scout-completion` - Load when a scout reports completion, presents a visual artifact for iteration, or is being considered for promotion to implementation.
 - `secondmate-provisioning` - Load when creating, seeding, validating, launching, recovering, handing backlog to, pushing inherited local material into, or retiring a secondmate home, or when editing data/secondmates.md.
 - `session-start-recovery` - Load when the session-start digest reports unfinished checks, actionable diagnostics, recovery inputs, or output requiring interpretation.

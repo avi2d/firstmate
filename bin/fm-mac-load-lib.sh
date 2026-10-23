@@ -6,10 +6,12 @@
 FM_MAC_LOAD_DEFER_EXIT=75
 FM_MAC_LOAD_LIMIT=10
 FM_MAC_HEAVY_LIMIT=4
+FM_MAC_CORE_BUDGET=6
 
-fm_machine_load_config() {  # <load-default> <heavy-default> <config-dir>
+fm_machine_load_config() {  # <load-default> <heavy-default> <config-dir> [core-default]
   FM_MACHINE_LOAD_LIMIT=$1
   FM_MACHINE_HEAVY_LIMIT=$2
+  FM_MACHINE_CORE_BUDGET=${4:-}
   FM_MACHINE_LOAD_ERROR=
   local file=${3:-}/project-capacity line lineno=0 name value seen=
   [ -n "${3:-}" ] || return 0
@@ -24,7 +26,7 @@ fm_machine_load_config() {  # <load-default> <heavy-default> <config-dir>
     line=${line#"${line%%[![:space:]]*}"}
     line=${line%"${line##*[![:space:]]}"}
     case "$line" in
-      '@heavy-limit '*|'@load-limit '*)
+      '@heavy-limit '*|'@load-limit '*|'@core-budget '*)
         name=${line%% *}
         value=${line#* }
         case "$value" in
@@ -45,7 +47,8 @@ fm_machine_load_config() {  # <load-default> <heavy-default> <config-dir>
         esac
         seen="$seen|$name|"
         if [ "$name" = '@heavy-limit' ]; then FM_MACHINE_HEAVY_LIMIT=$value
-        else FM_MACHINE_LOAD_LIMIT=$value; fi
+        elif [ "$name" = '@load-limit' ]; then FM_MACHINE_LOAD_LIMIT=$value
+        else FM_MACHINE_CORE_BUDGET=$value; fi
         ;;
       '@'*)
         FM_MACHINE_LOAD_ERROR="$file line $lineno names an unknown machine-wide setting"
@@ -79,24 +82,42 @@ fm_machine_load_heavy_default() {  # <day-default> <night-default>
 fm_mac_load_config() {  # <config-dir>
   FM_MAC_LOAD_LIMIT=10
   FM_MAC_HEAVY_LIMIT=4
+  FM_MAC_CORE_BUDGET=6
   FM_MAC_LOAD_ERROR=
-  if ! fm_machine_load_heavy_default 3 4; then
+  heavy_day=3 heavy_night=4
+  if [ "$(uname -s)" = Linux ]; then
+    # A Linux host can also run the winbox gate, so this gate borrows the
+    # winbox budget there instead of refusing what that gate admits.
+    FM_MAC_LOAD_LIMIT=16
+    heavy_day=4 heavy_night=6
+  fi
+  if ! fm_machine_load_heavy_default "$heavy_day" "$heavy_night"; then
     FM_MAC_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
     return 1
   fi
-  if ! fm_machine_load_config 10 "$FM_MACHINE_HEAVY_DEFAULT" "${1:-}"; then
+  if ! fm_machine_load_config "$FM_MAC_LOAD_LIMIT" "$FM_MACHINE_HEAVY_DEFAULT" "${1:-}" 6; then
     FM_MAC_LOAD_LIMIT=$FM_MACHINE_LOAD_LIMIT
     FM_MAC_HEAVY_LIMIT=$FM_MACHINE_HEAVY_LIMIT
+    FM_MAC_CORE_BUDGET=$FM_MACHINE_CORE_BUDGET
     FM_MAC_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
     return 1
   fi
   FM_MAC_LOAD_LIMIT=$FM_MACHINE_LOAD_LIMIT
   FM_MAC_HEAVY_LIMIT=$FM_MACHINE_HEAVY_LIMIT
+  FM_MAC_CORE_BUDGET=$FM_MACHINE_CORE_BUDGET
   return 0
 }
 
 fm_mac_load_gate_active() {
   [ "${FM_MAC_LOAD_GATE_FORCE:-0}" = 1 ] && return 0
+  case "$(uname -s)" in
+    Darwin|Linux) return 0 ;;
+  esac
+  return 1
+}
+
+fm_mac_core_budget_gate_active() {
+  [ "${FM_MAC_CORE_BUDGET_FORCE:-0}" = 1 ] && return 0
   [ "$(uname -s)" = Darwin ]
 }
 

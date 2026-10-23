@@ -32,6 +32,7 @@
     "docs/orca-backend.md",
     "docs/cmux-backend.md",
     "docs/paseo-backend.md",
+    "docs/rex-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -374,6 +375,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0009-fixture-git-isolation.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
@@ -455,6 +460,10 @@
     },
     {
       "path": "docs/paseo-backend.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/rex-backend.md",
       "audience": "operator-current"
     },
     {
