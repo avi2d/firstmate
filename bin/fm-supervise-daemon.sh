@@ -1388,7 +1388,7 @@ housekeeping() {  # <state>
   #     resolution lives in status_scan_parent_channel_exclude.
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
-    local event record rest endpoint ident rc exclude
+    local event record rest endpoint ident rc exclude stalled_items stalled_item stalled_reason
     exclude=$(status_scan_parent_channel_exclude "$state")
     for f in "$state"/*.status; do
       [ -e "$f" ] || [ -L "$f" ] || continue
@@ -1418,6 +1418,19 @@ housekeeping() {  # <state>
         escalate_add "$state" "$(basename "$f"): status position commit failed (catch-all scan)"
       fi
     done
+    stalled_items=$(scan_stalled_qa "$state") || {
+      log "stalled question/answer scan failed; continuing without the backstop"
+      stalled_items=
+    }
+    while IFS= read -r stalled_item || [ -n "$stalled_item" ]; do
+      [ -n "$stalled_item" ] || continue
+      stalled_reason=$(stalled_qa_item_reason "$stalled_item") || continue
+      if escalate_add "$state" "$stalled_reason"; then
+        stalled_qa_record_escalated "$state" "$stalled_item" || log "a stalled escalation could not be recorded; it will re-fire"
+      fi
+    done <<EOF
+$stalled_items
+EOF
   fi
 }
 
