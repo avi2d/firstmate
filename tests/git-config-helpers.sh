@@ -1,32 +1,28 @@
 #!/usr/bin/env bash
-# tests/git-config-helpers.sh - fixture Git isolation from the host's global and
-# system configuration and from an inherited repository location.
-#
-# Source this before a fixture's first Git operation:
-#   # shellcheck source=tests/git-config-helpers.sh
-#   . "$(dirname "${BASH_SOURCE[0]}")/git-config-helpers.sh"
-#
-# Fixture Git processes must not inherit host signing, hooks, or other global and
-# system preferences: with commit.gpgsign=true set globally and no secret key for
-# the fixture identities, every fixture commit fails before its assertion.
-# Isolation is limited to those two layers on purpose, so repository-local config,
-# inline `git -c`, GIT_CONFIG_COUNT, and a GIT_CONFIG_GLOBAL the caller supplies
-# after sourcing all stay authoritative - the Git-config suites assert on them.
-# The export reaches only the sourcing shell and its children, so the developer's
-# own config files are never written and real project commits made outside the
-# fixtures keep their configuration and signing.
-#
-# The repository-location variables are cleared too: an absolute GIT_DIR (as a
-# linked-worktree hook exports) overrides the discovery `git -C <fixture>`
-# implies, so fixture refs, commits, and worktree registrations would land in
-# the caller's repository instead. A suite that wants one sets it after sourcing.
-#
-# tests/lib.sh and tests/herdr-test-safety.sh source this for every suite that
-# uses them, bin/fm-test-run.sh sources it per suite in run_script_bounded, and a
-# suite reaching none of those sources it directly so a hand-run invocation is
-# isolated too. tests/fm-test-fixtures.test.sh is the regression - it drives the
-# shared helpers, the runner, and the standalone entry points that run without a
-# live vendor - and the changed-file map selects it for a change to this file.
-
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+unset GIT_CONFIG_PARAMETERS GIT_CONFIG_SYSTEM GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+_fm_strip_env_hooks_path() {
+  local i=0 kept=0 key value
+  while true; do
+    eval "key=\${GIT_CONFIG_KEY_$i-<unset>} value=\${GIT_CONFIG_VALUE_$i-<unset>}"
+    [ "$key" = '<unset>' ] && [ "$value" = '<unset>' ] && break
+    unset "GIT_CONFIG_KEY_$i" "GIT_CONFIG_VALUE_$i"
+    case $key in
+      [Cc][Oo][Rr][Ee].[Hh][Oo][Oo][Kk][Ss][Pp][Aa][Tt][Hh] | '<unset>') ;;
+      *)
+        if [ "$value" != '<unset>' ]; then
+          export "GIT_CONFIG_KEY_$kept=$key" "GIT_CONFIG_VALUE_$kept=$value"
+          kept=$((kept + 1))
+        fi
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  if [ "$kept" -eq 0 ]; then
+    unset GIT_CONFIG_COUNT
+  else
+    export GIT_CONFIG_COUNT=$kept
+  fi
+}
+_fm_strip_env_hooks_path
+unset -f _fm_strip_env_hooks_path

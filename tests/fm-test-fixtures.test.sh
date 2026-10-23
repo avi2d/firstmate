@@ -11,7 +11,6 @@
 # armed on a scratch config file: it drives every entry point that must reach
 # tests/git-config-helpers.sh - the shared helpers, bin/fm-test-run.sh's
 # per-suite wrapper, and the standalone scripts runnable without a live vendor.
-# That helper's header owns the contract and the layers it leaves in force.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -58,6 +57,13 @@ SH
   export GIT_CONFIG_GLOBAL="$dir/global" GIT_CONFIG_SYSTEM="$dir/system"
   export GIT_CONFIG_NOSYSTEM=0
   unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+  mkdir -p "$dir/hooks"
+  cat > "$dir/hooks/pre-commit" <<'SH'
+#!/bin/sh
+echo inherited hooksPath reached the fixture >&2
+exit 1
+SH
+  chmod +x "$dir/hooks/pre-commit"
 
   # A failing signer exposes inherited config without requiring GPG or keys.
   arm_host_signing() {  # <scope>: only this layer carries the failing signer
@@ -67,6 +73,20 @@ SH
     git config --file "$dir/$1" gpg.format openpgp
     git config --file "$dir/$1" gpg.program /usr/bin/false
     cp "$dir/$1" "$dir/expected"
+  }
+
+  arm_hooks_env() {
+    export GIT_CONFIG_COUNT=2
+    export GIT_CONFIG_KEY_0=core.hooksPath
+    export GIT_CONFIG_VALUE_0="$dir/hooks"
+    export GIT_CONFIG_KEY_1=init.defaultBranch
+    export GIT_CONFIG_VALUE_1=main
+    export GIT_CONFIG_PARAMETERS="'core.hooksPath'='$dir/hooks'"
+  }
+
+  disarm_hooks_env() {
+    unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+    unset GIT_CONFIG_KEY_1 GIT_CONFIG_VALUE_1 GIT_CONFIG_PARAMETERS
   }
 
   assert_helper_isolates() {  # <helper> <scope>
@@ -87,6 +107,8 @@ assert_grep 'gpg failed to sign' "$2/signing.log" "local signing was not attempt
 git -C "$2" -c commit.gpgsign=false commit -q --allow-empty -m explicit
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false \
   git -C "$2" commit -q --allow-empty -m environment
+git -C "$2" config --get core.hooksPath && fail "inherited hooksPath reached the fixture"
+[ "$(git -C "$2" config --get init.defaultBranch)" = main ] || fail "injected entries other than hooksPath were dropped"
 # A config test can deliberately supply its own global file after sourcing.
 [ "$(GIT_CONFIG_GLOBAL="$3" git config --global --get commit.gpgsign)" = true ] || fail "explicit global config was ignored"
 SH
@@ -108,6 +130,7 @@ SH
   # which layers that helper neutralizes is the helper's own property, settled
   # by the system-layer case below.
   arm_host_signing global
+  arm_hooks_env
   for helper in lib fixtures secondmate-helpers wake-helpers; do
     assert_helper_isolates "$helper" global
   done
@@ -124,7 +147,7 @@ SH
         FM_TEST_GIT_CONFIG="$dir/global" \
         "$dir/runner/bin/fm-test-run.sh" --jobs "$jobs" --per-script-timeout-secs "$timeout" \
         tests/fm-test-run.test.sh > "$dir/runner.log" 2>&1 \
-        || fail "runner inherited global config (jobs=$jobs, timeout=$timeout): $(cat "$dir/runner.log")"
+        || fail "runner inherited host config (jobs=$jobs, timeout=$timeout): $(cat "$dir/runner.log")"
       assert_grep 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0' "$dir/runner.log" \
         "runner did not execute the Git fixture"
     done
@@ -142,12 +165,15 @@ SH
     || fail "standalone fixture did not create its initial commit"
   bash "$ROOT/tests/fm-gitignore-config.test.sh" > "$dir/gitignore.log" 2>&1 \
     || fail "standalone gitignore fixture inherited global config: $(cat "$dir/gitignore.log")"
+  disarm_hooks_env
   assert_host_config_still_governs global
 
   # The system layer is the shared helper's other half: one entry point settles
   # it, and the caller still signing proves the layer was genuinely armed.
   arm_host_signing system
+  arm_hooks_env
   assert_helper_isolates lib system
+  disarm_hooks_env
   assert_host_config_still_governs system
 
   pass "runner and shared helpers isolate host Git config and preserve explicit config and outside commits"
