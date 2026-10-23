@@ -601,6 +601,7 @@ A pull request merges only when every one of these holds, each read by the progr
 - The pull request is on GitHub, open, and not a draft.
 - At least one check has reported, none is still running, and every one passed.
 - The task is not held for the captain and has no open `needs-decision` or `blocked` key.
+- The pull request carries no merge hold for the captain, recorded with `bin/fm-merge-hold.sh` against the pull request itself so it survives a task hold answer or release.
 - The pull request is the newest one the task's `done:` or `ready:` reports name.
   When the record still holds an earlier pull request that has already landed, the newest report wins.
   A recorded pull request that has not landed keeps its claim.
@@ -616,7 +617,7 @@ A pull request merges only when every one of these holds, each read by the progr
   It is settled when the last check finished at least `FM_MERGE_ON_GREEN_SETTLE_SECS` ago, or when the same head read green on two sweeps that far apart.
   The default is 10 seconds.
 
-Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the away record, and every check before the forge call.
+Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the per-pull-request merge hold, the away record, and every check before the forge call.
 A head that is behind its base is first brought up to date with `gh pr update-branch`, which merges the base into the branch and never rebases, and merges once its new head is green.
 A refused merge or a failed update is retried at the same head only after `FM_MERGE_ON_GREEN_RETRY_SECS`, 300 seconds by default.
 A pull request skipped for what the forge reported, such as a red check, is read again only every `FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS`, 60 seconds by default, so a standing red pull request does not spend a forge read on every sweep.
