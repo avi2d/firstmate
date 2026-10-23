@@ -130,6 +130,18 @@ if [ "$PROVIDER" = github ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && command -v g
   fi
 fi
 
+# Required checks that already read red cannot merge, so registering the pull
+# request as ready would park the worker on a merge decision that cannot
+# arrive. Only a positive failing reading refuses, before anything is recorded
+# or armed; pending, unreported, or unreadable checks arm as before.
+if [ "$PROVIDER" = github ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ] && command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  RED_CHECKS=$(gh pr checks "$URL" --required --json name,bucket --jq '[.[] | select(.bucket == "fail") | .name] | join(", ")' 2>/dev/null || true)
+  if [ -n "$RED_CHECKS" ]; then
+    echo "error: $URL has failing required checks ($RED_CHECKS); send the worker back to fix them with bin/fm-send.sh, then arm again once green - registering now would park it on a merge decision that cannot arrive" >&2
+    exit 1
+  fi
+fi
+
 "$FM_ROOT/bin/fm-guard.sh" || true
 
 # pr_head is recorded only when the forge's CLI can supply it. gh exposes the
