@@ -833,34 +833,22 @@ test_unreadable_status_file_keeps_catchup_gated() {
   pass "an unreadable status stays private and gates until a successful reread"
 }
 
-test_statusless_leftover_record_keeps_catchup_gated_until_cleanup() {
-  local dir out rc gate
-  dir="$TMP_ROOT/statusless-leftover"
+test_missing_status_file_lets_catchup_clear() {
+  local dir out
+  dir="$TMP_ROOT/missing-status"
   install_runner "$dir"
-  gate="$dir/home/state/.afk-return-catchup"
-  # A long-merged leftover: no window, no spawn_gen, no status file. The
-  # catch-up gate must keep refusing while that record exists, matching the
-  # proven path where writing a readable status file lets return proceed.
-  printf 'kind=ship\npr=https://github.com/example/repo/pull/1\n' \
-    > "$dir/home/state/leftover.meta"
+  # A task that never appended a status line: no events and no open
+  # blockers, so absence passes where a present but unreadable file gates.
+  printf 'window=synthetic:fm-landscape-hero\nbackend=tmux\nkind=ship\n' \
+    > "$dir/home/state/website-landscape-hero.meta"
+  [ -e "$dir/home/state/website-landscape-hero.status" ] && fail "fixture error: the status file must be absent"
   touch "$dir/home/state/.last-watcher-beat"
   : > "$dir/home/state/.fake-drain"
-  set +e
-  out=$(run_return "$dir" begin)
-  rc=$?
-  set -e
-  [ "$rc" -eq 3 ] || fail "a leftover without a status file should keep catch-up gated (rc=$rc): $out"
-  [ -f "$gate" ] || fail "a leftover without a status file did not retain the return gate"
-  assert_contains "$out" "status file unreadable: $dir/home/state/leftover.status; catch-up stays gated" \
-    "the gate did not name the missing leftover status"
-  assert_contains "$out" 'catch-up must finish before the captain request' \
-    "the visible return block did not name the catch-up gate"
-
-  : > "$dir/home/state/leftover.status"
-  out=$(run_return "$dir" check) || fail "catch-up did not clear after the leftover gained a readable status: $out"
-  assert_contains "$out" 'catch-up clear' "the readable leftover status did not clear catch-up"
-  [ ! -e "$gate" ] || fail "the readable leftover status left the return gate behind"
-  pass "a status-file-less leftover record gates return; a readable status on that same record is the proven path that passes"
+  out=$(run_return "$dir" begin) || fail "a task with no status file gated return: $out"
+  assert_contains "$out" 'catch-up clear' "a missing status file did not let ordinary work proceed"
+  assert_not_contains "$out" 'status file unreadable:' "a missing status file was reported as unreadable"
+  [ ! -e "$dir/home/state/.afk-return-catchup" ] || fail "a missing status file left the return gate behind"
+  pass "a missing status file holds no blockers and lets return catch-up clear"
 }
 
 test_statusful_leftover_record_lets_catchup_clear() {
@@ -1373,7 +1361,7 @@ test_missing_epoch_record_stays_required_after_disappearing
 test_unreadable_outcome_store_keeps_catchup_gated
 test_failed_held_listing_keeps_catchup_gated
 test_unreadable_status_file_keeps_catchup_gated
-test_statusless_leftover_record_keeps_catchup_gated_until_cleanup
+test_missing_status_file_lets_catchup_clear
 test_statusful_leftover_record_lets_catchup_clear
 test_return_guard_refuses_while_the_record_exists
 test_return_brief_health_leads_with_a_gap
