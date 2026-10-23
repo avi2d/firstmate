@@ -603,6 +603,7 @@ SPAWN_FAKEBIN="$TMP_ROOT/spawn-fakebin"
 mkdir -p "$SPAWN_FAKEBIN"
 printf '#!/bin/sh\nexit 1\n' > "$SPAWN_FAKEBIN/tmux"
 chmod +x "$SPAWN_FAKEBIN/tmux"
+fm_fake_exit0 "$SPAWN_FAKEBIN" claude codex opencode grok gemini
 
 write_ship_brief() {  # <home> <id> [<contract-extras>]
   local home=$1 id=$2 extras=${3:-}

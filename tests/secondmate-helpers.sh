@@ -170,6 +170,7 @@ exit 0
 SH
   chmod +x "$fakebin/tmux"
   chmod +x "$fakebin/treehouse"
+  fm_fake_exit0 "$fakebin" claude codex opencode grok gemini
   : > "$dir/tmux.log"
   printf '%s\n' "$fakebin"
 }

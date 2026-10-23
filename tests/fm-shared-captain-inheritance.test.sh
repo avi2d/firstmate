@@ -381,6 +381,7 @@ make_fake_spawn_toolchain() {
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" claude codex opencode grok gemini
   printf '%s\n' "$fakebin"
 }
 
