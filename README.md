@@ -63,7 +63,7 @@ Full detail on every feature lives in [docs/architecture.md](docs/architecture.m
 - Git and the GitHub CLI, authenticated through `gh auth login`.
 - The CLI and dependencies for your selected runtime backend; tmux is the reference default.
 
-The first mate detects and offers to install supported missing tools after you approve.
+The first mate detects supported missing or outdated tools and offers their install or upgrade after you approve.
 Backend-specific setup is linked in [Documentation](#documentation).
 
 ### Recommended harnesses
@@ -131,7 +131,7 @@ Pi's `/supervision-model` command pins a cheaper model and a shallower reasoning
 ```sh
 > ahoy! look at my github project xyz, then fix the flaky login test and add dark mode
 
-# firstmate checks its toolchain (asking your consent before installing anything),
+# firstmate checks its toolchain (asking your consent before installing or upgrading anything),
 # clones the project under projects/ and spawns two isolated workers in the active backend.
 # Minutes later:
 
@@ -221,6 +221,7 @@ Firstmate's skills live in two separate places with different audiences:
 - [docs/voice-relay.md](docs/voice-relay.md) - the optional spoken interface: setup on both machines, measured round-trip cost, what a spoken answer may read, and what this build does not do yet.
 - [docs/fleet-ledger.md](docs/fleet-ledger.md) - the opt-in activity ledger outside tools can read to follow a home's tasks, and its record contract.
 - [docs/wedge-alarm.md](docs/wedge-alarm.md) - configure the active alert for an away-mode escalation delivery that gets stuck.
+- [docs/usage-warner.md](docs/usage-warner.md) - configure the opt-in local threshold warner for Claude usage windows.
 - [docs/tmux-backend.md](docs/tmux-backend.md) - current setup and limits for the tmux reference backend.
 - [docs/herdr-backend.md](docs/herdr-backend.md) - current setup, CI coverage, safety boundaries, and limits for the Herdr backend.
 - [docs/zellij-backend.md](docs/zellij-backend.md) - current setup and limits for the experimental Zellij backend.
