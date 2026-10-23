@@ -3636,7 +3636,8 @@ fi
 marker=$(mktemp "${FM_MARKER_ROOT:?}/arm.XXXXXX") || exit 1
 cleanup() { rm -f "$marker"; }
 trap cleanup EXIT
-trap 'exit 0' TERM INT
+# A repeated TERM would otherwise interrupt cleanup and leak the marker.
+trap 'trap "" TERM INT; exit 0' TERM INT
 printf 'watcher: started pid=%s\n' "$$"
 printf '%s\n' "$$" > "${FM_CHILD_PID_FILE:?}"
 printf '%s\n' "$marker" > "${FM_CHILD_MARKER_FILE:?}"
@@ -3882,7 +3883,8 @@ fi
 marker=$(mktemp "${FM_MARKER_ROOT:?}/arm.XXXXXX") || exit 1
 cleanup() { rm -f "$marker"; }
 trap cleanup EXIT
-trap 'exit 0' TERM INT
+# A repeated TERM would otherwise interrupt cleanup and leak the marker.
+trap 'trap "" TERM INT; exit 0' TERM INT
 printf 'arm pid=%s marker=%s\n' "$$" "$marker" >> "${FM_ARM_LOG:?}"
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=replacement-fixture\n' "$$"
 while :; do
@@ -4635,7 +4637,8 @@ if [ -n "$previous" ] && kill -0 "$previous" 2>/dev/null; then
 fi
 cleanup() { rm -f "$FM_CHILD_MARKER"; }
 trap cleanup EXIT
-trap 'exit 0' TERM INT
+# A repeated TERM would otherwise interrupt cleanup and leak the marker.
+trap 'trap "" TERM INT; exit 0' TERM INT
 printf '%s\n' "$$" > "$FM_CHILD_MARKER"
 printf 'watcher: started pid=%s\n' "$$"
 while :; do sleep 0.02; done

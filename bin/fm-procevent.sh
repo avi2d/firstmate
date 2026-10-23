@@ -456,16 +456,62 @@ adapter_autohandle() {  # <adapter> <source-id> <result-file>
 # source, an adapter with no `answers` command, and a failure on either side all
 # leave the capture untouched and still announced, because this never
 # acknowledges anything (see the keyed-answer note in the header).
+#
+# The worker never writes its own resolved line, so feeding the intake alone
+# leaves the worker matching key open; fm-send --resolve-key is the one closer
+# spanning both ledgers, and this reuses it instead of a second closer.
+feed_answers_close_worker_keys() {  # <source-id> <answer-rows>
+  local id=$1 rows=$2 owner key answer rest line target status_file open
+  # The open-set fold lives behind the wake library lazy gate; without it the
+  # lookup below finds nothing and every answered key stays open.
+  _fm_wake_require_classify 2>/dev/null || return 0
+  owner=$(source_owner_task "$id" 2>/dev/null) || owner=
+  while IFS= read -r line; do
+    key=${line%%$'\t'*}; rest=${line#*$'\t'*}; answer=${rest%%$'\t'*}
+    # A reconcile selection is never an answer (RECONCILE_VALUE in
+    # bin/fm-captain-hold.sh); closing a key with it would lie in the ledger.
+    [ -n "$key" ] && [ -n "$answer" ] && [ "$answer" != reconcile ] || continue
+    target=
+    if [ -n "$owner" ] && [ -f "$STATE/$owner.status" ] && [ ! -L "$STATE/$owner.status" ]; then
+      open=$(status_open_decisions "$STATE/$owner.status" 2>/dev/null) || open=
+      case "$open" in
+        "$key"$'\t'*|*$'\n'"$key"$'\t'*) target=$owner ;;
+      esac
+    fi
+    if [ -z "$target" ]; then
+      for status_file in "$STATE"/*.status; do
+        [ -f "$status_file" ] && [ ! -L "$status_file" ] || continue
+        [ "$(basename "$status_file")" = parent-replies.status ] && continue
+        open=$(status_open_decisions "$status_file" 2>/dev/null) || continue
+        case "$open" in
+          "$key"$'\t'*|*$'\n'"$key"$'\t'*) target=$(basename "$status_file" .status); break ;;
+        esac
+      done
+    fi
+    [ -n "$target" ] || continue
+    "$SCRIPT_DIR/fm-send.sh" "$target" --resolve-key "$key" "$answer" >/dev/null 2>&1 || true
+  done <<< "$rows"
+  return 0
+}
 feed_keyed_answers() {  # <adapter> <source-id> <result-file>
-  local adapter=$1 id=$2 result=$3 script origin seq
+  local adapter=$1 id=$2 result=$3 script origin seq rows rc
   script=$(adapter_script "$adapter")
   [ -f "$script" ] && [ ! -L "$script" ] || return 1
   origin=$("$SCRIPT_DIR/fm-captain-hold.sh" binding "$id" 2>/dev/null) || return 1
   [ -n "$origin" ] || return 1
   seq=$(fm_procevent_result_sequence "$result") || return 1
-  "$script" answers "$result" 2>/dev/null \
-    | "$SCRIPT_DIR/fm-captain-hold.sh" answers "$origin" \
-        --source "the captured result $id sequence $seq" >/dev/null 2>&1
+  rows=$("$script" answers "$result" 2>/dev/null) || return 1
+  rc=0
+  if [ -n "$rows" ]; then
+    printf '%s\n' "$rows" \
+      | "$SCRIPT_DIR/fm-captain-hold.sh" answers "$origin" \
+          --source "the captured result $id sequence $seq" >/dev/null 2>&1 || rc=1
+    feed_answers_close_worker_keys "$id" "$rows"
+  else
+    "$SCRIPT_DIR/fm-captain-hold.sh" answers "$origin" \
+      --source "the captured result $id sequence $seq" >/dev/null 2>&1 < /dev/null || rc=1
+  fi
+  return "$rc"
 }
 
 feed_reconcile_requests() {  # <adapter> <source-id> <result-file>
