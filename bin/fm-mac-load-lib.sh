@@ -139,9 +139,23 @@ fm_mac_loadavg_5min() {
   esac
 }
 
-# Every ship or scout holds a place; the record this start replaces does not.
+# Every ship or scout holds a place, except one that is only waiting; the
+# record this start replaces does not.
 fm_mac_load_high() {  # <five-minute-average>
   awk -v avg="$1" -v limit="$FM_MAC_LOAD_LIMIT" 'BEGIN { exit !(avg + 0 >= limit + 0) }'
+}
+
+# A waiter is idle until the captain answers, so it holds no heavy place;
+# the next admission counts it again once its status shows it resumed.
+fm_heavy_holder_waiting() {  # <state-dir> <task-id>
+  local status=$1/$2.status last verb
+  [ -n "$(status_declared_wait_line "$status")" ] && return 0
+  last=$(last_status_line "$status")
+  status_line_verb "$last" verb
+  case "$verb" in
+    needs-decision|blocked) return 0 ;;
+  esac
+  return 1
 }
 
 fm_mac_heavy_count() {  # <first-state> <own-id>
@@ -171,6 +185,7 @@ fm_mac_heavy_count() {  # <first-state> <own-id>
       id=$(basename "$meta" .meta)
       label=$id
       [ "$state" = "$first" ] || label="$id in $(dirname "$state")"
+      fm_heavy_holder_waiting "$state" "$id" && continue
       FM_MAC_HEAVY_COUNT=$((FM_MAC_HEAVY_COUNT + 1))
       FM_MAC_HEAVY_IDS="${FM_MAC_HEAVY_IDS:+$FM_MAC_HEAVY_IDS, }$label"
     done
@@ -254,8 +269,8 @@ fm_winbox_sibling_homes() {  # <config-dir>
   done < "$file"
 }
 
-# Every ship or scout holds a place across the sibling homes; the record this
-# start replaces does not.
+# Every ship or scout holds a place across the sibling homes, except one that
+# is only waiting; the record this start replaces does not.
 fm_winbox_heavy_count() {  # <first-state> <own-id> <config-dir>
   local first=$1 self=$2 config=${3:-} state meta kind id label
   local saved_home sib sib_state known existing
@@ -314,6 +329,7 @@ fm_winbox_heavy_count() {  # <first-state> <own-id> <config-dir>
       id=$(basename "$meta" .meta)
       label=$id
       [ "$state" = "$first" ] || label="$id in $(dirname "$state")"
+      fm_heavy_holder_waiting "$state" "$id" && continue
       FM_WINBOX_HEAVY_COUNT=$((FM_WINBOX_HEAVY_COUNT + 1))
       FM_WINBOX_HEAVY_IDS="${FM_WINBOX_HEAVY_IDS:+$FM_WINBOX_HEAVY_IDS, }$label"
     done

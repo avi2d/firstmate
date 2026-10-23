@@ -298,8 +298,35 @@ test_malformed_machine_setting_refuses() {
   pass "a malformed machine setting refuses a heavy start rather than guessing the limit"
 }
 
+test_waiting_holders_free_heavy_places_then_resume_retakes_them() {
+  local case_dir home out rc=0 i=0
+  case_dir=$(make_case waiting task-c task-d)
+  home="$case_dir/home"
+  while [ "$i" -lt $((GATE_FULL - 2)) ]; do
+    i=$((i + 1))
+    write_live "$home" "live-$i" "$case_dir/project"
+    printf 'working: doing heavy work %s\n' "$i" > "$home/state/live-$i.status"
+  done
+  write_live "$home" wait-captain "$case_dir/project"
+  printf 'needs-decision: which API shape, A or B?\n' > "$home/state/wait-captain.status"
+  write_live "$home" wait-time "$case_dir/project"
+  printf 'paused: waiting for the release window until 2030-01-01T00:00Z\n' > "$home/state/wait-time.status"
+  rc=0
+  out=$(spawn_ship_load 1.0 "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "a heavy start was refused while two holders only waited: $out"
+  assert_contains "$out" "spawned task-c" "the admitted spawn did not launch"
+  printf 'working: resumed after the answer\n' >> "$home/state/wait-captain.status"
+  printf 'working: release window opened\n' >> "$home/state/wait-time.status"
+  out=$(spawn_ship_load 1.0 "$case_dir" task-d "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a heavy start was admitted after both waiters resumed: $out"
+  assert_contains "$out" "$((GATE_FULL + 1)) heavy worker(s) already run on this machine (limit $GATE_FULL" "the deferral did not name the resumed holders"
+  assert_absent "$home/state/task-d.meta" "a deferred spawn published a task record for task-d"
+  pass "waiting holders free heavy places, and resuming retakes them"
+}
+
 test_high_average_defers_then_clear_admits
 test_full_heavy_cap_defers_one_more_then_release_admits
+test_waiting_holders_free_heavy_places_then_resume_retakes_them
 test_handed_off_and_secondmate_records_do_not_count
 test_restart_does_not_count_its_own_record
 test_unreadable_record_refuses
