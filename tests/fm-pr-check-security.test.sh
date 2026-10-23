@@ -164,6 +164,19 @@ case "${1:-} ${2:-}" in
         ;;
     esac
     ;;
+  "pr checks")
+    if [ -n "${FM_TEST_PR_CHECKS_ERROR:-}" ]; then
+      printf '%s\n' "$FM_TEST_PR_CHECKS_ERROR" >&2
+      exit 1
+    fi
+    prog= prev=
+    for arg in "$@"; do
+      [ "$prev" != --jq ] || prog=$arg
+      prev=$arg
+    done
+    printf '%s\n' "${FM_TEST_PR_CHECKS_JSON:-[]}" | jq -r "$prog" || exit 1
+    exit 0
+    ;;
   "pr merge")
     [ -z "${FM_TEST_GH_MERGE_HOOK:-}" ] || "$FM_TEST_GH_MERGE_HOOK"
     exit 0
@@ -688,6 +701,57 @@ test_draft_pull_request_is_not_armed() {
     > "$dir/stdout" 2> "$dir/stderr" || fail "an unreadable draft state blocked arming"
   [ -f "$dir/home/state/task-a.check.sh" ] || fail "an unreadable draft state was not armed"
   pass "arming refuses a draft pull request, naming it, and arms a ready or unreadable one"
+}
+
+# A pull request whose required checks already read red cannot merge, so
+# registering it as ready would park the worker on a merge decision that can
+# never arrive. Only a positive failing reading refuses, before anything is
+# recorded or armed; pending, unreported, or unreadable checks arm as before.
+test_red_required_checks_refuse_registration() {
+  local dir rc
+  dir=$(make_case red-checks-refused)
+  write_task_meta "$dir"
+  cp "$dir/home/state/task-a.meta" "$dir/meta.before"
+  set +e
+  FM_TEST_PR_CHECKS_JSON='[{"name":"ci","state":"FAILURE","bucket":"fail"}]' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "arming accepted a pull request with failing required checks"
+  grep -qF 'https://github.com/o/r/pull/9' "$dir/stderr" || fail "the refusal did not name the pull request"
+  grep -qF 'ci' "$dir/stderr" || fail "the refusal did not name the failing check"
+  grep -qF 'fm-send' "$dir/stderr" || fail "the refusal did not send the worker back to fix the checks"
+  cmp -s "$dir/meta.before" "$dir/home/state/task-a.meta" || fail "a refused red check changed the task metadata"
+  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "a refused red check armed a poll"
+  [ ! -e "$dir/home/state/task-a.pr-poll" ] || fail "a refused red check wrote a poll sidecar"
+  [ ! -s "$dir/guard.log" ] || fail "a refused red check reached the guard"
+
+  dir=$(make_case red-checks-direct-pr)
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" "worktree=$dir/wt" \
+    "project=$dir/project" "kind=ship" "mode=direct-PR"
+  set +e
+  FM_TEST_PR_CHECKS_JSON='[{"name":"ci","state":"FAILURE","bucket":"fail"}]' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr"; rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "arming accepted a direct-PR pull request with failing required checks"
+  [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "a refused direct-PR red check armed a poll"
+
+  dir=$(make_case red-checks-pending)
+  write_task_meta "$dir"
+  FM_TEST_PR_CHECKS_JSON='[{"name":"ci","state":"IN_PROGRESS","bucket":"pending"}]' \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "arming refused a pull request with pending checks"
+  [ -f "$dir/home/state/task-a.check.sh" ] || fail "a pending pull request was not armed"
+
+  dir=$(make_case red-checks-unreadable)
+  write_task_meta "$dir"
+  FM_TEST_PR_CHECKS_ERROR="no checks reported on the 'main' branch" \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/9 \
+    > "$dir/stdout" 2> "$dir/stderr" || fail "an unreadable check state blocked arming"
+  [ -f "$dir/home/state/task-a.check.sh" ] || fail "an unreadable check state was not armed"
+  pass "arming refuses a pull request with failing required checks, naming it, and arms a pending or unreadable one"
 }
 
 # A secondmate is a persistent worker, not a delivery lane: it never owns a
@@ -3633,6 +3697,7 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_draft_pull_request_is_not_armed
+test_red_required_checks_refuse_registration
 test_secondmate_record_refuses_a_pr_watch
 test_unpushed_named_head_refuses_registration
 test_direct_pr_unpushed_commit_refuses_registration
