@@ -188,6 +188,8 @@ scan_open_blockers() {  # -> tab-separated blocker rows
     id=$(basename "$meta")
     id=${id%.meta}
     status="$STATE/$id.status"
+    # A missing status file holds no events, so absence passes.
+    [ -e "$status" ] || [ -L "$status" ] || continue
     if ! status_path_readable "$status"; then
       STATUS_SCAN_ERROR=$status
       return 1
