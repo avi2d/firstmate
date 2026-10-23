@@ -5067,7 +5067,7 @@ test_paused_throttled_resurface_keeps_the_old_recheck_clock() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 FM_SECONDMATE_LIVENESS_SECS=99999999 "$WATCH" > "$out" &
   pid=$!
   wait_for_exit "$pid" 100 || { reap "$pid"; fail "the first sight of a live declared pause did not surface: $(cat "$out")"; }
-  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG")" = 1 ] \
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG")" -eq 1 ] \
     || fail "the first sight of a live declared pause did not reconcile once"
   ack_stopped_cycle "$state" || fail "could not acknowledge the immediate surface"
   [ ! -s "$state/.wake-queue" ] || fail "the acknowledgement left a queued wake"
@@ -5086,7 +5086,7 @@ test_paused_throttled_resurface_keeps_the_old_recheck_clock() {
   wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited on a throttled re-surface: $(cat "$out")"; }
   [ "$(file_mtime "$state/.paused-rechecked-$key")" = "$aged" ] \
     || { reap "$pid"; fail "a throttled re-surface with unchanged inputs renewed the slow-interval clock without reconciling"; }
-  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG")" = 1 ] \
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG")" -eq 1 ] \
     || { reap "$pid"; fail "a throttled re-surface with unchanged inputs reconciled instead of answering the cache"; }
   [ ! -s "$out" ] || { reap "$pid"; fail "a throttled re-surface with unchanged inputs printed a wake reason: $(cat "$out")"; }
   [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "a throttled re-surface with unchanged inputs enqueued a wake"; }
@@ -5251,7 +5251,7 @@ SH
   sig=$(seen_sig "$state/paused-shift.status"); printf '%s' "$sig" > "$state/.seen-paused-shift_status"
   wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited after a paused status change: $(cat "$out")"; }
   wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited after a paused status change: $(cat "$out")"; }
-  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)" = "$(( crew_before + 1 ))" ] \
+  [ "$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)" -eq "$(( crew_before + 1 ))" ] \
     || { reap "$pid"; fail "a changed paused status was not reconciled against authoritative crew state before the slow interval"; }
   [ ! -s "$out" ] || { reap "$pid"; fail "a changed paused wait printed a wake reason: $(cat "$out")"; }
   [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "a changed paused wait enqueued a wake"; }
