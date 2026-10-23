@@ -45,9 +45,11 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  cat > "$fb/sleep" <<'SH'
+  # Sleep stays real: the runner's bounded readiness waits become scheduling
+  # races under a no-op sleep, and a loaded machine then fails the run.
+  cat > "$fb/sleep" <<SH
 #!/usr/bin/env bash
-exit 0
+exec "$(command -v sleep)" "$@"
 SH
   chmod +x "$fb/sleep"
 }
