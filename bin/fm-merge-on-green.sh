@@ -379,6 +379,14 @@ assess() {  # <task-id>
     1|3) ;;
     *) verdict skip "the captain hold could not be read"; return ;;
   esac
+  merge_hold_rc=0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-merge-hold.sh" open "$URL" >/dev/null 2>&1 || merge_hold_rc=$?
+  case "$merge_hold_rc" in
+    0) verdict skip "the pull request is held for the captain"; return ;;
+    1) ;;
+    *) verdict skip "the merge hold could not be read"; return ;;
+  esac
   open=$(status_open_decisions "$STATE/$id.status")
   if [ -n "$open" ]; then
     verdict skip "open decision or blocker ${open%%$'\t'*}"

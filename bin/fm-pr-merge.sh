@@ -1399,6 +1399,23 @@ require_released_captain_hold() {
   esac
 }
 
+require_released_merge_hold() {
+  local hold_status=0
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-merge-hold.sh" open "$URL" >/dev/null 2>&1 || hold_status=$?
+  case "$hold_status" in
+    0)
+      echo "error: $URL is held for the captain; release the merge hold before merging" >&2
+      return 1
+      ;;
+    1) return 0 ;;
+    *)
+      echo "error: could not determine whether $URL is held for the captain; refusing to merge" >&2
+      return 1
+      ;;
+  esac
+}
+
 FM_PR_MERGE_AUTHORITY=
 # The authority read. bin/fm-merge-authority-lib.sh owns what the away-posture
 # record's presence means; this function owns what a merge run may do about it,
@@ -1669,6 +1686,7 @@ require_current_away_authority || away_status=$?
 require_recorded_pr_identity || exit 1
 record_pr_metadata || exit 1
 require_released_captain_hold || exit 1
+require_released_merge_hold || exit 1
 
 # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
 # oversight: if this lock-owning shell dies while its gh or glab child lives,
