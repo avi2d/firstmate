@@ -3990,8 +3990,13 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   SOURCE_BRIEF=$BRIEF
   BRIEF="$DATA/$ID/launch-brief.md"
   BRIEF_TMP="$DATA/$ID/.launch-brief.md.${BASHPID:-$$}"
+  SPAWN_BRIEF_MODEL=$MODEL
+  if [ -z "$SPAWN_BRIEF_MODEL" ] && [ "$RELAUNCH" = 1 ]; then
+    SPAWN_BRIEF_MODEL=$(fm_meta_get "$RELAUNCH_META" model) || SPAWN_BRIEF_MODEL=
+  fi
   {
     fm_brief_worker_role "$STATE" "$ID" "$FM_ROOT" &&
+      fm_brief_haiku_scope_line "$SPAWN_BRIEF_MODEL" &&
       printf '\n' &&
       cat "$SOURCE_BRIEF" &&
       if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
