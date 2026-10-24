@@ -217,8 +217,8 @@ case "${1:-}" in
     for a in "$@"; do
       if [ "$prev" = "-l" ]; then
         case "$a" in
-          ". '"*"'")
-            staged=${a#". '"}
+          " . '"*"'")
+            staged=${a#" . '"}
             staged=${staged%"'"}
             if [ -f "$staged" ] && grep -q -- 'opencode.* --standalone --prompt' "$staged"; then
               fake_opencode_launched

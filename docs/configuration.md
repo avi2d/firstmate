@@ -1373,7 +1373,7 @@ A Claude worker on a mapped directory reads that directory's settings, memory, a
 
 ### How resolution reads an account
 
-[Typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key) takes one `clauth status --json` snapshot when any profile names an account, and reads the account's own windows instead of quota-axi's `claude` row, which measures only the active login.
+[Typed dispatch resolution](#typed-dispatch-resolution-env-fm_dispatch_provider-fm_dispatch_model) takes one `clauth status --json` snapshot when any profile names an account, and reads the account's own windows instead of quota-axi's `claude` row, which measures only the active login.
 
 - `all_models` remaining is 100 minus the larger of the 5-hour and 7-day utilization, and a per-model weekly window such as `7d fable` adds `model:fable`.
 - A profile `floor`, such as `{ "scope": "all_models", "min_percent": 30 }`, makes the account ineligible below 30% remaining, and 0% remaining is exhausted.
