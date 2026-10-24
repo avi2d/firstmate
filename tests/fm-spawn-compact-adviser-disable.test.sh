@@ -290,6 +290,7 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+  fm_fake_exit0 "$fb" claude codex opencode grok gemini
 }
 
 test_relaunch_rebuilds_the_switch() {

@@ -457,6 +457,46 @@ test_launch_prompt_requires_a_captured_tail() {
   pass "the launch-prompt backstop never runs without a captured tail"
 }
 
+test_launch_exec_failed_shell_cannot_start_agent() {
+  local state out tail
+  for tail in "env: 'opencode': No such file or directory" \
+    "env: opencode: No such file or directory" \
+    "opencode: command not found" \
+    "zsh: command not found: opencode" \
+    "fish: Unknown command: opencode"; do
+    state=$(new_state_dir launch-exec-failed-opencode)
+    "$EV" arm "$state" t1 >/dev/null
+    out=$(fm_busy_classify tmux w1 opencode t1 "$state" "$tail")
+    [ "$out" = "unknown launch-exec-failed" ] \
+      || fail "a seed over the shell's exec failure must classify unknown launch-exec-failed, got '$out' for '$tail'"
+  done
+  pass "a launch the shell could not exec classifies unknown launch-exec-failed"
+}
+
+test_launch_exec_failed_needs_both_markers() {
+  local state out
+  state=$(new_state_dir launch-exec-failed-partial)
+  "$EV" arm "$state" t1 >/dev/null
+  out=$(fm_busy_classify tmux w1 opencode t1 "$state" 'opencode --prompt "read the brief"')
+  [ "$out" = "busy fm-spawn" ] \
+    || fail "the harness name without an exec failure must stay busy fm-spawn, got '$out'"
+  out=$(fm_busy_classify tmux w1 opencode t1 "$state" 'some-tool: command not found')
+  [ "$out" = "busy fm-spawn" ] \
+    || fail "an exec failure naming another binary must stay busy fm-spawn, got '$out'"
+  pass "the exec-failure match needs the recorded harness and the shell's failure together"
+}
+
+test_launch_exec_failed_never_reclassifies_an_advanced_record() {
+  local state gen out
+  state=$(new_state_dir launch-exec-failed-advanced)
+  gen=$("$EV" arm "$state" t1)
+  "$EV" apply "$state" t1 busy --gen "$gen" --source claude-hook --event user-prompt-submit
+  out=$(fm_busy_classify tmux w1 claude t1 "$state" "claude: command not found")
+  [ "$out" = "busy claude-hook" ] \
+    || fail "a record past fm-spawn must never be reclassified by pane text, got '$out'"
+  pass "the exec-failure match only ever touches the untouched fm-spawn seed"
+}
+
 test_grok_regex_isolated() {
   local state out
   state=$(new_state_dir grok-arm)
@@ -671,6 +711,9 @@ test_launch_prompt_gemini_dialogs
 test_launch_prompt_never_shortens_a_working_launch
 test_launch_prompt_scoped_to_armed_harnesses
 test_launch_prompt_never_reclassifies_an_advanced_record
+test_launch_exec_failed_shell_cannot_start_agent
+test_launch_exec_failed_needs_both_markers
+test_launch_exec_failed_never_reclassifies_an_advanced_record
 test_launch_prompt_requires_a_captured_tail
 test_grok_regex_isolated
 test_codex_unverified_gate
