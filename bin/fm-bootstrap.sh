@@ -826,7 +826,7 @@ secondmate_liveness_one() {  # <meta> <id>
       ;;
     relaunchable)
       if fm_secondmate_liveness_relaunch "$meta" "$id"; then
-        secondmate_note_respawned "$id"
+        [ "$FM_SM_LIVE_RESUME" = 1 ] || secondmate_note_respawned "$id"
         report_relaunch "$id" "$FM_SM_LIVE_CAUSE" "$FM_SM_LIVE_WHERE"
       elif [ "$FM_SM_LIVE_STATUS" = skipped ]; then
         echo "SECONDMATE_LIVENESS: secondmate $id: skipped: $FM_SM_LIVE_REASON"

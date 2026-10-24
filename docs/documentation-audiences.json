@@ -33,6 +33,7 @@
     "docs/cmux-backend.md",
     "docs/paseo-backend.md",
     "docs/rex-backend.md",
+    "docs/t3code-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -98,6 +99,10 @@
     },
     {
       "source": "docs/cmux-backend.md",
+      "target": "docs/verification/runtime-backends.md"
+    },
+    {
+      "source": "docs/t3code-backend.md",
       "target": "docs/verification/runtime-backends.md"
     },
     {
@@ -539,6 +544,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/t3code-backend.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/tmux-backend.md",
       "audience": "operator-current"
     },
@@ -648,6 +657,10 @@
     },
     {
       "path": "tests/captures/pi-1.0.2-herdr-0.9.3/README.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "tests/captures/kimi-code-2.3.0/README.md",
       "audience": "maintainer-verification"
     },
     {
