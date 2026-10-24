@@ -671,6 +671,7 @@ IFS= read -r -d '' TASKTMP_RULE <<EOF || true
 Keep every scratch file, including any file holding a no-mistakes intent, under \`/tmp/fm-$ID/\` and never under a fixed name in \`/tmp\`.
 EOF
 TASKTMP_RULE=${TASKTMP_RULE%$'\n'}
+
 # One shared string keeps the ship and scout shell-path rule identical.
 IFS= read -r -d '' SHARED_NO_CD_RULE <<'EOF' || true
 8. Never start a shell command with `cd`, and never run a search whose path depends on the current directory.

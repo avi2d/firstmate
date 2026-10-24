@@ -39,6 +39,10 @@ Rex's hierarchy is server > session > window (a tab) > block (a pane), and each 
 When Firstmate itself runs directly inside a Rex block, every task tab opens in Firstmate's own session, once the server confirms that the block named by `REX_BLOCK` lives in the session named by `REX_SESSION`.
 A claim the server cannot confirm refuses rather than guessing a placement.
 Otherwise, and always for a secondmate's own home, the tab opens in one session per home labeled with the home tag (`firstmate-<hash>` or `2ndmate-<id>-<hash>`), adopted when exactly one session carries that label, created once when none does, and refused when several do.
+=======
+A newly created local secondmate session is placed immediately after the launching session when `REX_SESSION` is available; a respawned secondmate tab in an adopted session is moved to the first position ahead of its crews.
+Both ordering steps are best-effort: a failure warns without failing the launch.
+The secondmate session label's hash is based on the secondmate home, not the launching home's code root.
 
 Tabs in an existing session are created with `window new --focus=false`; when a per-home session must be created, its initial window becomes the first task's tab.
 An unviewed block starts at 80x24, so the adapter attempts to resize each new task block to 200x50 and warns if resizing fails; a client that later views it takes ownership and applies its own size.
@@ -101,7 +105,9 @@ Task tabs in a second Rex session stay on polling, because one reader covers one
 
 Cleanup closes only the task's block, which closes its tab, and then proves it gone: only an exact not-found after the close counts, so a close that failed or left the block alive keeps the task's records.
 An already-gone block counts as closed.
-A per-home session left with no tabs is then killed, but only a session carrying this home's label, never Firstmate's own launcher session, and never when its view cannot be read.
+A per-home session left with no tabs is then killed, but only the exact recorded session carrying this home's label, never the launcher session, and never when its view cannot be read.
+An omitted `windows` field is treated as an empty session for both retirement and adoption, so a crewless secondmate can relaunch into its emptied session.
+When main retires a local secondmate, it checks and retires that secondmate's session using the secondmate home's identity; sessions with tabs or renamed labels are preserved.
 Spawning, reclaiming, and that retirement share one home-wide lock (`state/.rex-session.lock`), so a new tab can never land in a session between its empty check and its kill.
 
 `bin/fm-control.sh` `exit` and `relaunch` work on Rex; [`agent-control.md`](agent-control.md#reclaiming-a-task-whose-endpoint-is-gone) owns the recorded-server absence proof, stopped-server recovery, reclaim placement, and reclaim-only shell-husk cleanup.
@@ -118,7 +124,7 @@ A Rex-hosted Firstmate can run away and quiet supervision: the supervisor target
 - The viewport is derived, not read directly, as described above.
 - Only harnesses that report OSC 7501 contribute native busy evidence; the others are classified from their own lifecycle and rendered footer.
 - Command Code is refused on Rex until it is live-verified there, and Cursor Agent is not yet live-verified on Rex.
-- There is no Rex CI lane; the real-server tests run where a Rex server is already up.
+- There is no Rex CI lane; see "Regression entry points" below for real-Rex validation.
 
 ## Deferred upstream asks
 
@@ -141,5 +147,6 @@ tests/fm-backend-rex-eventwait-smoke.test.sh
 FM_REX_COMPOSER_LIVE=1 tests/fm-backend-rex-composer-live-e2e.test.sh
 ```
 
-The real-server isolation contract is owned by [`tests/rex-test-safety.sh`](../tests/rex-test-safety.sh): an already-running server, mutations confined to the tests' own `fm-test-` sessions, and unchanged ids and labels in every other session's structural snapshot.
+[`tests/rex-test-safety.sh`](../tests/rex-test-safety.sh) owns private-server isolation, cleanup, capability skips, and startup-failure handling for the real-Rex suites.
+The smoke test also stops and restarts its private server to verify passive reads and session-loss reclaim behavior.
 [`verification/runtime-backends.md`](verification/runtime-backends.md#rex) records the live evidence.
