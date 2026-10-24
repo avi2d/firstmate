@@ -37,7 +37,7 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse no-mistakes
+  fm_fake_exit0 "$fakebin" treehouse no-mistakes claude codex opencode grok gemini
   printf '%s\n' "$fakebin"
 }
 

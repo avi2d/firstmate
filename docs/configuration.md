@@ -613,6 +613,7 @@ A pull request merges only when every one of these holds, each read by the progr
 - The pull request is on GitHub, open, and not a draft.
 - At least one check has reported, none is still running, and every one passed.
 - The task is not held for the captain and has no open `needs-decision` or `blocked` key.
+- The pull request carries no merge hold for the captain, recorded with `bin/fm-merge-hold.sh` against the pull request itself so it survives a task hold answer or release.
 - The pull request is the newest one the task's `done:` or `ready:` reports name.
   When the record still holds an earlier pull request that has already landed, the newest report wins.
   A recorded pull request that has not landed keeps its claim.
@@ -628,7 +629,7 @@ A pull request merges only when every one of these holds, each read by the progr
   It is settled when the last check finished at least `FM_MERGE_ON_GREEN_SETTLE_SECS` ago, or when the same head read green on two sweeps that far apart.
   The default is 10 seconds.
 
-Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the away record, and every check before the forge call.
+Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the per-pull-request merge hold, the away record, and every check before the forge call.
 A head that is behind its base is first brought up to date with `gh pr update-branch`, which merges the base into the branch and never rebases, and merges once its new head is green.
 A refused merge or a failed update is retried at the same head only after `FM_MERGE_ON_GREEN_RETRY_SECS`, 300 seconds by default.
 A pull request skipped for what the forge reported, such as a red check, is read again only every `FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS`, 60 seconds by default, so a standing red pull request does not spend a forge read on every sweep.
@@ -1544,6 +1545,7 @@ A line that is only `#`, or that begins with `#` followed by whitespace, is a co
 A project name may begin with `#` when that `#` is written immediately against the rest of the name and the line ends with the project's capacity.
 A name that is `#`, or that begins with `#` and a space, cannot be declared, because that line is a comment.
 A line whose name starts with `@` is a machine-wide setting rather than a project: `@heavy-limit` caps heavy workers across every project with a standing 3 from 06:00 up to but not including 21:00 UTC and 4 at other hours, and `@load-limit` caps the five-minute load average a heavy start tolerates with a standing 10.
+A worker that is only waiting on the captain or on a set time holds no heavy worker place, and counts again once its status shows it resumed.
 On Linux the standing caps are 4 from 06:00 up to but not including 21:00 UTC and 6 at other hours with a load cap of 16.
 `@core-budget` caps trailing-hour core hours on the Mac with a standing 6, so a heavy start waits while the hour already burned that budget and resumes on its own once use drops back under, while a light start never waits.
 On a Linux host that two Firstmate homes share without a common local root, each home lists the other in `config/winbox-load-siblings`, and the same two lines cap heavy starts across both homes with a standing 4 from 06:00 up to but not including 21:00 UTC and 6 at other hours, while the load average cap stays 16.
@@ -1772,6 +1774,13 @@ After the answer, code applies all remaining checks and ranking:
 - Each candidate's `provider` and `floor`.
 - Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
 - The numeric `spendPriority` argmax over candidates, using each candidate's limiting row, or, when the file declares `array_order` preference, the first eligible candidate in array order.
+
+Before ranking, the resolver applies the Haiku-first promotion to the matched candidate array.
+The promotion moves a Haiku candidate directly ahead of a Muse candidate when both are present and the quota snapshot shows a short Go allowance with a comfortable Claude allowance.
+A short Go allowance means the Go monthly window runs ahead of pace with `reservePercentPoints` at or below -15, or the Go weekly or rolling window has under 10 percent left.
+A comfortable Claude allowance means the seven-day window has at least 25 percent left and the five-hour window has at least 30 percent left.
+Unknown or missing window readings leave the default order unchanged.
+The per-window readings come from the snapshot `windows` entries, since the effective-availability scopes carry only the limiting percent.
 
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
 

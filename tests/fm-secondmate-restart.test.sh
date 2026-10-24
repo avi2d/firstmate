@@ -133,6 +133,7 @@ esac
 exit 0
 SH
   chmod +x "$fb/sleep"
+  fm_fake_exit0 "$fb" claude codex opencode grok gemini
 }
 
 # new_case <name> -> a parent home with a stub session provider.

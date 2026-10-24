@@ -1380,6 +1380,13 @@ if [ "$KIND" != secondmate ]; then
   case "${BUSY_VERDICT%% *}" in
     busy) emit working pane "harness busy (${BUSY_VERDICT#* })" ;;
     idle) ;;
+    unknown)
+      case "$BUSY_VERDICT" in
+        "unknown launch-exec-failed")
+          emit blocked pane "harness '$HARNESS' never started: the worker shell could not exec it (launch-exec-failed)" ;;
+        *) emit unknown pane "harness state unavailable ($BUSY_VERDICT)" ;;
+      esac
+      ;;
     *) emit unknown pane "harness state unavailable ($BUSY_VERDICT)" ;;
   esac
 fi

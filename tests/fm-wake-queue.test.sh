@@ -3177,6 +3177,7 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" claude codex opencode grok gemini
   make_fake_crew_state "$fakebin" >/dev/null
   printf '%s\n' "$dir"
 }

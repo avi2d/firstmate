@@ -379,6 +379,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0010-per-pr-merge-hold.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

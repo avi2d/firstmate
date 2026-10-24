@@ -3789,6 +3789,22 @@ EOF
       touch "$STATE/.last-check"
       wake "$reason"
     fi
+    stalled_items=$(scan_stalled_qa "$STATE") || {
+      triage_log "stalled question/answer scan failed; continuing without the backstop"
+      stalled_items=
+    }
+    if [ -n "$stalled_items" ]; then
+      while IFS= read -r stalled_item || [ -n "$stalled_item" ]; do
+        [ -n "$stalled_item" ] || continue
+        reason="check: stalled-qa: $(stalled_qa_item_reason "$stalled_item")" || continue
+        fm_wake_append check stalled-qa "$reason" || exit 1
+        stalled_qa_record_escalated "$STATE" "$stalled_item" || exit 1
+        touch "$STATE/.last-check"
+        wake "$reason"
+      done <<EOF
+$stalled_items
+EOF
+    fi
     touch "$STATE/.last-check"
     if [ -n "$contribution_check_output" ]; then
       wake "$contribution_check_output"

@@ -54,6 +54,7 @@ cat > "$REMOTE_ROOT/bin/tmux" <<'SH'
 exit 0
 SH
 chmod +x "$REMOTE_ROOT/bin/tmux"
+fm_fake_exit0 "$REMOTE_ROOT/bin" claude codex opencode grok gemini
 install_remote_herdr_fixture "$REMOTE_ROOT" "$HERDR_STATE" "$HERDR_LOG" \
   "$TMP_ROOT/herdr-send-fail" "$TMP_ROOT/herdr.sock"
 git -C "$REMOTE_ROOT" init -q -b main

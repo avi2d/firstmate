@@ -1137,6 +1137,180 @@ EOF
   return 0
 }
 
+# --- stalled question/answer backstop ---------------------------------------
+#
+# Position-deduped spans never re-fire an already-surfaced question, and the
+# inbox ladder needs a recorded window. This fold is the time-based twin the
+# heartbeat reviews consume instead: an open question with no answer past the
+# bound, and a recorded answer its worker never acknowledged. Window-free, so
+# every home runs it identically.
+
+STALLED_QA_ESCALATE_SECS_DEFAULT=3600
+
+stalled_qa_escalate_secs() {  # bound past which a stall is raised
+  local s=${FM_STALLED_QA_ESCALATE_SECS:-$STALLED_QA_ESCALATE_SECS_DEFAULT}
+  case "$s" in ''|*[!0-9]*) s=$STALLED_QA_ESCALATE_SECS_DEFAULT ;; esac
+  printf '%s' "$s"
+}
+
+stalled_qa_marker() {  # <state> <task> <tag> <name> -> marker path for one escalated episode
+  local safe
+  safe=$(printf '%s--%s' "$2" "$4" | tr '/' '_')
+  printf '%s/.stalled-%s-%s' "$1" "$3" "$safe"
+}
+
+status_decision_opened_epoch() {  # <status-file> <key> -> epoch of the latest opener, or fail
+  local line verb key epoch latest=
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    verb=$(status_line_verb "$line") || continue
+    case "$verb" in needs-decision|blocked) ;; *) continue ;; esac
+    key=$(_fm_decision_key "$line") || continue
+    [ "$key" = "$2" ] || continue
+    epoch=$(status_line_at_epoch "$line") || continue
+    latest=$epoch
+  done < "$1"
+  [ -n "$latest" ] || return 1
+  printf '%s' "$latest"
+}
+
+stalled_qa_msg_mtime() {  # <path> -> mtime epoch, or fail
+  case "${_FM_CLASSIFY_UNAME_S}" in
+    Darwin) stat -f %m "$1" 2>/dev/null ;;
+    *) stat -c %Y "$1" 2>/dev/null ;;
+  esac
+}
+
+stalled_qa_sweep_markers() {  # <state> -> drop markers whose episode ended
+  local marker name prefix f dir task key msg open found line
+  local okey overb
+  for marker in "$1"/.stalled-q-*; do
+    [ -e "$marker" ] || continue
+    name=${marker##*/}
+    found=1
+    for f in "$1"/*.status; do
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      task=$(basename "$f"); task=${task%.status}
+      prefix=".stalled-q-$task--"
+      case "$name" in "$prefix"*)
+        key=${name#"$prefix"}
+        open=$(status_own_open_decisions "$f") || open=
+        while IFS=$(printf '\t') read -r okey overb line; do
+          [ "$okey" = "$key" ] || continue
+          case "$overb" in needs-decision|blocked) found=0 ;; esac
+        done <<EOF
+$open
+EOF
+        ;;
+      esac
+      [ "$found" -eq 0 ] && break
+    done
+    [ "$found" -eq 0 ] || rm -f "$marker"
+  done
+  for marker in "$1"/.stalled-a-*; do
+    [ -e "$marker" ] || continue
+    name=${marker##*/}
+    found=1
+    for dir in "$1"/*.inbox; do
+      [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+      task=$(basename "$dir"); task=${task%.inbox}
+      prefix=".stalled-a-$task--"
+      case "$name" in "$prefix"*)
+        msg=${name#"$prefix"}
+        [ -f "$dir/$msg" ] && found=0
+        ;;
+      esac
+      [ "$found" -eq 0 ] && break
+    done
+    [ "$found" -eq 0 ] || rm -f "$marker"
+  done
+  return 0
+}
+
+scan_stalled_qa() {  # <state> [now] -> one TAB-separated line per stall due for escalation
+  local state=$1 now=${2:-} bound f task key verb note epoch age open line exclude
+  local dir oldest oldest_age oldest_file given_up marker
+  [ -n "$now" ] || now=$(date +%s)
+  bound=$(stalled_qa_escalate_secs)
+  exclude=$(status_scan_parent_channel_exclude "$state")
+  if ! command -v fm_task_inbox_oldest_unhandled >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-task-inbox-lib.sh
+    . "$_FM_CLASSIFY_LIB_DIR/fm-task-inbox-lib.sh"
+  fi
+  for f in "$state"/*.status; do
+    [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || continue
+    [ "$f" = "$exclude" ] && continue
+    task=$(basename "$f"); task=${task%.status}
+    open=$(status_own_open_decisions "$f") || continue
+    [ -n "$open" ] || continue
+    while IFS=$(printf '\t') read -r key verb note; do
+      [ -n "$key" ] || continue
+      case "$verb" in needs-decision|blocked) ;; *) continue ;; esac
+      epoch=$(status_decision_opened_epoch "$f" "$key") || continue
+      age=$(( now - epoch ))
+      [ "$age" -ge "$bound" ] || continue
+      marker=$(stalled_qa_marker "$state" "$task" q "$key")
+      [ "$(cat "$marker" 2>/dev/null)" = "$epoch" ] && continue
+      [ "${#note}" -le 200 ] || note="${note:0:200}..."
+      printf 'question\t%s\t%s\t%s\t%s\t%s\t%s\n' "$task" "$key" "$verb" "$epoch" "$age" "$note"
+    done <<EOF
+$open
+EOF
+  done
+  for dir in "$state"/*.inbox; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+    task=$(basename "$dir"); task=${task%.inbox}
+    oldest_file=$(fm_task_inbox_oldest_unhandled "$state" "$task" 2>/dev/null) || continue
+    oldest=${oldest_file##*/}
+    oldest_age=$(stalled_qa_msg_mtime "$oldest_file") || continue
+    age=$(( now - oldest_age ))
+    [ "$age" -ge "$bound" ] || continue
+    # The ladder owns delivery while it has budget: this record is a stall only
+    # once the ladder gave up on it and marked it escalated.
+    given_up=$(cat "$dir/.escalated" 2>/dev/null) || continue
+    [ "$given_up" = "$oldest" ] || continue
+    marker=$(stalled_qa_marker "$state" "$task" a "$oldest")
+    [ -e "$marker" ] && continue
+    printf 'answer\t%s\t%s\t%s\n' "$task" "$oldest" "$age"
+  done
+  stalled_qa_sweep_markers "$state"
+  return 0
+}
+
+stalled_qa_record_escalated() {  # <state> <scan item> -> remember the escalation so it fires once per episode
+  local state=$1 item=$2 type task name f4 f5 marker tmp content
+  [ -d "$state" ] || return 1
+  IFS=$(printf '\t') read -r type task name f4 f5 rest <<EOF
+$item
+EOF
+  case "$type" in
+    question) marker=$(stalled_qa_marker "$state" "$task" q "$name"); content=$f5 ;;
+    answer) marker=$(stalled_qa_marker "$state" "$task" a "$name"); content=$f4 ;;
+    *) return 1 ;;
+  esac
+  [ -n "$marker" ] && [ -n "$content" ] || return 1
+  tmp=$(umask 077; mktemp "$state/.stalled-XXXXXX") || return 1
+  printf '%s' "$content" >"$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$marker" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+stalled_qa_item_reason() {  # <scan item> -> the human line both heartbeat reviews raise
+  local type task name verb epoch age note msg item=$1
+  IFS=$(printf '\t') read -r type task name verb epoch age note <<EOF
+$item
+EOF
+  case "$type" in
+    question)
+      printf 'worker question unanswered %ss: %s [key=%s] %s: %s' "$age" "$task" "$name" "$verb" "$note" ;;
+    answer)
+      msg=$name; age=$verb
+      printf 'recorded answer undelivered %ss: %s/%s is still unhandled' "$age" "$task" "$msg" ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
 # --- incremental (cursor-backed) open-decisions fold ------------------------
 #
 # status_open_decisions above re-reads and re-folds a status file's ENTIRE

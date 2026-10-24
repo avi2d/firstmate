@@ -1003,6 +1003,7 @@ test_secondmate_spawn_refuses_explicit_paseo_only() {
   printf 'paseo\n' >"$dir/config-paseo/backend"
   printf '#!/bin/sh\necho Linux\n' >"$dir/fakebin/uname"
   chmod +x "$dir/fakebin/uname"
+  fm_fake_exit0 "$dir/fakebin" claude codex opencode grok gemini
 
   out=$(paseo_secondmate_spawn "$dir" "$dir/config" '' --backend paseo)
   assert_contains "$out" "backend=paseo does not support --secondmate" "fm-spawn.sh did not refuse --secondmate with --backend paseo"

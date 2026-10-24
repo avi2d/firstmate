@@ -152,6 +152,13 @@ EOF
   printf "If the \`firstmate-coding-guidelines\` skill name does not resolve in this session, read \`%s/.agents/skills/firstmate-coding-guidelines/SKILL.md\` instead.\n" "$root"
 }
 
+fm_brief_haiku_scope_line() {  # <model>
+  local model=${1:-}
+  case "$model" in
+    *[Hh][Aa][Ii][Kk][Uu]*) printf '%s\n' "Report a failure outside your task scope instead of fixing it." ;;
+  esac
+}
+
 # Closed-set gate shared by every forge-aware renderer and bin/fm-brief.sh, so a
 # caller cannot reach a half-rendered contract. local-only is refused rather than
 # rendered with an inert annotation: it publishes nothing, and its landing

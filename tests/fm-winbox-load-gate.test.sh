@@ -89,7 +89,7 @@ printf 'treehouse %s\n' "$*" >> "$FM_FAKE_CALL_LOG"
 exit 0
 SH
   chmod +x "$fakebin/tmux" "$fakebin/treehouse"
-  fm_fake_exit0 "$fakebin" gh gh-axi no-mistakes
+  fm_fake_exit0 "$fakebin" gh gh-axi no-mistakes claude codex opencode grok gemini
   fm_git_init_commit "$case_dir/project"
   fm_git_add_origin "$case_dir/project" "$case_dir/project.origin.git"
   make_home "$case_dir/home-a" "$@"
@@ -234,7 +234,37 @@ test_malformed_sibling_refuses() {
   pass "a malformed sibling entry refuses a heavy start rather than undercounting"
 }
 
+test_waiting_holders_free_shared_places_then_resume_retakes_them() {
+  local case_dir home_a out rc=0
+  case_dir=$(make_case waiting task-c task-d)
+  home_a="$case_dir/home-a"
+  write_live "$home_a" live-a1 "$case_dir/project"
+  printf 'working: building the feature\n' > "$home_a/state/live-a1.status"
+  write_live "$home_a" live-a2 "$case_dir/project"
+  printf 'working: running the suite\n' > "$home_a/state/live-a2.status"
+  write_live "$home_a" wait-a "$case_dir/project"
+  printf 'needs-decision: which API shape, A or B?\n' > "$home_a/state/wait-a.status"
+  write_live "$case_dir/home-b" live-b1 "$case_dir/project"
+  printf 'working: building the other half\n' > "$case_dir/home-b/state/live-b1.status"
+  write_live "$case_dir/home-b" live-b2 "$case_dir/project"
+  printf 'working: reviewing the diff\n' > "$case_dir/home-b/state/live-b2.status"
+  write_live "$case_dir/home-b" wait-b "$case_dir/project"
+  printf 'paused: waiting for the release window until 2030-01-01T00:00Z\n' > "$case_dir/home-b/state/wait-b.status"
+  rc=0
+  out=$(spawn_ship_load 1.0 "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "a heavy start was refused while two of six holders only waited: $out"
+  assert_contains "$out" "spawned task-c" "the admitted spawn did not launch"
+  printf 'working: resumed after the answer\n' >> "$home_a/state/wait-a.status"
+  printf 'working: release window opened\n' >> "$case_dir/home-b/state/wait-b.status"
+  out=$(spawn_ship_load 1.0 "$case_dir" task-d "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a heavy start was admitted after both waiters resumed: $out"
+  assert_contains "$out" "7 heavy worker(s) already run on this machine (limit 6" "the deferral did not name the resumed holders"
+  assert_absent "$home_a/state/task-d.meta" "a deferred spawn published a task record for task-d"
+  pass "waiting holders free shared heavy places across homes, and resuming retakes them"
+}
+
 test_six_across_two_homes_defer_a_seventh_then_release_admits
+test_waiting_holders_free_shared_places_then_resume_retakes_them
 test_load_sixteen_defers_then_clear_admits
 test_handed_off_and_secondmate_records_do_not_count
 test_malformed_sibling_refuses

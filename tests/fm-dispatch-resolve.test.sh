@@ -1384,4 +1384,139 @@ assert_equals '2' "$(grep -c 'https://api.typesafe.ai/v1/systemone' "$LOG/argv")
 cp "$BASE_RULES" "$RULES"
 pass "tuned request: scout briefs resolve rule_5 with no call, ship requests omit rule_5 and carry the paragraph, one retry rescues a 503"
 
+# --- haiku-first promotion: a short Go allowance moves Haiku ahead of Muse ---
+# Oracle is the eval report quota rule and worked example (bounds -15, 10, 25
+# and 30), independent of the resolver under test.
+HAIKU_RULES="$TMP_ROOT/haiku-rules.json"
+cat > "$HAIKU_RULES" <<'JSON'
+{
+  "array_order": "preference",
+  "rules": [
+    { "when": "Trivial or small implementation work.",
+      "use": [
+        { "harness": "opencode", "model": "opencode-go/muse-spark-1.3-contributor", "provider": "opencode-go" },
+        { "harness": "claude", "model": "claude-bridge/claude-haiku-5-5", "effort": "low", "provider": "claude", "floor": { "scope": "all_models", "min_percent": 15 } },
+        { "harness": "claude", "model": "opus", "effort": "low", "provider": "claude" }
+      ] }
+  ],
+  "default": [ { "harness": "claude", "model": "opus" } ]
+}
+JSON
+HAIKU_RESPONSE="$TMP_ROOT/haiku-response.json"
+cat > "$HAIKU_RESPONSE" <<'JSON'
+{ "model": "jev-1.13.0",
+  "answers": { "rule": { "type": "choice", "choice": "rule_1", "confidence": 0.93,
+    "probabilities": { "rule_1": 0.93, "default": 0.07 } } },
+  "usage": { "input_tokens": 400, "output_tokens": 20 } }
+JSON
+cp "$HAIKU_RULES" "$RULES"
+
+write_promo_quota() {  # <path> <monthly reserve> <monthly pace> <go weekly> <go rolling> <claude seven_day> <claude five_hour>
+  local path=$1 monthly_reserve=$2 monthly_pace=$3 go_weekly=$4 go_rolling=$5 claude_7d=$6 claude_5h=$7
+  cat > "$path" <<JSON
+{
+  "generatedAt": "2030-01-01T00:00:00Z",
+  "schemaVersion": 5,
+  "providers": [
+    { "provider": "opencode-go", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 31, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -0.5 } } ] },
+      "windows": [
+        { "id": "rolling", "percentRemaining": $go_rolling, "pace": { "status": "behind", "reservePercentPoints": 40.9 } },
+        { "id": "weekly", "percentRemaining": $go_weekly, "pace": { "status": "ahead", "reservePercentPoints": -3.5 } },
+        { "id": "monthly", "percentRemaining": 31, "pace": { "status": "$monthly_pace", "reservePercentPoints": $monthly_reserve } } ] },
+    { "provider": "claude", "state": { "status": "fresh" }, "quotaSemantics": { "status": "known", "effectiveAvailability": [
+      { "scope": "all_models", "status": "known", "effectivePercentRemaining": 51, "runway": { "status": "projected_exhaustion" }, "selection": { "spendPriority": -0.46 } } ] },
+      "windows": [
+        { "id": "five_hour", "percentRemaining": $claude_5h, "pace": { "status": "unknown" } },
+        { "id": "seven_day", "percentRemaining": $claude_7d, "pace": { "status": "ahead", "reservePercentPoints": -1.2 } } ] }
+  ]
+}
+JSON
+}
+PROMO_QUOTA="$TMP_ROOT/promo-quota.json"
+HAIKU_PROFILE="  profile: --harness 'claude' --model 'claude-bridge/claude-haiku-5-5' --effort 'low'"
+MUSE_PROFILE="  profile: --harness 'opencode' --model 'opencode-go/muse-spark-1.3-contributor'"
+PROMOTED_ORDER='candidate: claude:claude-bridge/claude-haiku-5-5 candidate: opencode:opencode-go/muse-spark-1.3-contributor candidate: claude:opus '
+DEFAULT_ORDER='candidate: opencode:opencode-go/muse-spark-1.3-contributor candidate: claude:claude-bridge/claude-haiku-5-5 candidate: claude:opus '
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -20.4 ahead 32 97 51 93
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+expect_code 0 "$code" "promotion resolves"
+assert_contains "$out" '  status: clear' "the report worked example resolves"
+assert_contains "$out" "$HAIKU_PROFILE" "monthly 20.4 ahead of pace with a comfortable Claude week promotes Haiku"
+assert_equals "$PROMOTED_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "promotion moves Haiku directly ahead of Muse"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -2.4 ahead 32 97 51 93
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "a monthly reserve inside -15 keeps Muse first"
+assert_equals "$DEFAULT_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "the order is otherwise unchanged"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -2.4 ahead 9 97 51 93
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$HAIKU_PROFILE" "a Go weekly window under 10 promotes Haiku without the monthly pace"
+assert_equals "$PROMOTED_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "the weekly leg promotes through the same reorder"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" 40.9 behind 32 9 51 93
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$HAIKU_PROFILE" "a Go rolling window under 10 promotes Haiku while monthly runs behind"
+assert_equals "$PROMOTED_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "the rolling leg promotes through the same reorder"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -20.4 ahead 32 97 24 93
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "a Claude week under 25 holds the default order against a short Go month"
+assert_equals "$DEFAULT_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "a failing Claude leg leaves every order unchanged"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -20.4 ahead 32 97 51 29
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "a Claude five-hour window under 30 holds the default order"
+assert_equals "$DEFAULT_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "a failing five-hour leg leaves every order unchanged"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -15 ahead 32 97 25 30
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$HAIKU_PROFILE" "the bounds -15, 25 and 30 promote, since each is inclusive"
+assert_equals "$PROMOTED_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "the inclusive bounds promote through the same reorder"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -2.4 ahead 10 97 51 93
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "a Go weekly window at exactly 10 is not under 10"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -14.9 ahead 32 97 51 93
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "a monthly reserve just inside -15 keeps Muse first"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -20.4 ahead 32 97 24.9 29.9
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "Claude windows just inside 25 and 30 hold the default order"
+
+reset_log
+write_promo_quota "$PROMO_QUOTA" -20.4 ahead 32 97 51 93
+jq 'del(.providers[].windows)' "$PROMO_QUOTA" > "$PROMO_QUOTA-nowindows.json"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA-nowindows.json" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "a snapshot with no window readings leaves the default order"
+assert_equals "$DEFAULT_ORDER" "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "missing readings change no order"
+
+reset_log
+jq 'del(.rules[0].use[1])' "$HAIKU_RULES" > "$RULES"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "an array without a Haiku candidate resolves as before"
+assert_equals 'candidate: opencode:opencode-go/muse-spark-1.3-contributor candidate: claude:opus ' "$(grep -o 'candidate: [^ ]*' <<<"$out" | tr '\n' ' ')" "an array without both candidates keeps its order"
+
+reset_log
+jq 'del(.array_order)' "$HAIKU_RULES" > "$RULES"
+jq '(.providers[] | select(.provider == "opencode-go") | .quotaSemantics.effectiveAvailability[0].selection.spendPriority) = 0.5' "$PROMO_QUOTA" > "$PROMO_QUOTA-argmax.json"
+TYPESAFE_API_KEY=$KEY FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA-argmax.json" run code out err "$BRIEF"
+assert_contains "$out" "$MUSE_PROFILE" "without preference order the spendPriority argmax still picks, promotion or not"
+assert_not_contains "$out" 'array_order' "without array_order no ordering line is printed"
+pass "haiku-first promotion: a short Go month, week, or rolling window promotes Haiku ahead of Muse only while both Claude windows hold, at the inclusive bounds, and never without both candidates"
+
 printf '# all fm-dispatch-resolve tests passed\n'
