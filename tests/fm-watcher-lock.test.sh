@@ -386,6 +386,8 @@ leave_dead_link_locks() {  # <state> <lock>...
     exec sleep 30
   ' _ "$LIB" "$@" >/dev/null 2>&1 &
   holder=$!
+  # A loaded serial shard can stall the holder's startup past a second; allow
+  # the same ~5s as this file's other child-startup waits.
   i=0
   # Sourcing the lock library can take seconds on a loaded runner.
   while [ "$i" -lt 500 ] && [ ! -s "$last/pid" ]; do
