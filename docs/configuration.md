@@ -1687,6 +1687,13 @@ After the answer, code applies all remaining checks and ranking:
 - Every applicable account-wide and model/product row from one `quota-axi --json` snapshot.
 - The numeric `spendPriority` argmax over candidates, using each candidate's limiting row, or, when the file declares `array_order` preference, the first eligible candidate in array order.
 
+Before ranking, the resolver applies the Haiku-first promotion to the matched candidate array.
+The promotion moves a Haiku candidate directly ahead of a Muse candidate when both are present and the quota snapshot shows a short Go allowance with a comfortable Claude allowance.
+A short Go allowance means the Go monthly window runs ahead of pace with `reservePercentPoints` at or below -15, or the Go weekly or rolling window has under 10 percent left.
+A comfortable Claude allowance means the seven-day window has at least 25 percent left and the five-hour window has at least 30 percent left.
+Unknown or missing window readings leave the default order unchanged.
+The per-window readings come from the snapshot `windows` entries, since the effective-availability scopes carry only the limiting percent.
+
 The [shared quota library](../bin/fm-quota-axi-lib.sh) accepts schema 5 and schema 6 and implements the [account-matching contract](../.agents/skills/quota-array-dispatch/SKILL.md#1-eligibility).
 
 - An expanded provider with no matching account row leaves the candidate eligible but unranked.
