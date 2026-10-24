@@ -488,6 +488,40 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
       end
     end;
+  # No schema field carries the Haiku promotion, and a second Haiku entry is
+  # refused as a duplicate profile, so the resolver reorders in code.
+  def haiku_profile: ((.model // "") | contains("haiku"));
+  def muse_profile: ((.model // "") | contains("muse-spark"));
+  def window_at($snap; $provider; $id):
+    ([(quota_row($snap; $provider; "") | .windows[]?) | select(.id == $id)] | first);
+  def window_number($win; $path):
+    (($win | getpath($path)) as $v | if ($v | type) == "number" then $v else null end);
+  def haiku_promotion_holds($snap):
+    (window_at($snap; "opencode-go"; "monthly")) as $monthly |
+    ((($monthly | .pace) | select(type == "object")) // null) as $pace |
+    (window_number($monthly; ["pace", "reservePercentPoints"])) as $reserve |
+    (window_number(window_at($snap; "opencode-go"; "weekly"); ["percentRemaining"])) as $weekly_left |
+    (window_number(window_at($snap; "opencode-go"; "rolling"); ["percentRemaining"])) as $rolling_left |
+    (window_number(window_at($snap; "claude"; "seven_day"); ["percentRemaining"])) as $seven_day_left |
+    (window_number(window_at($snap; "claude"; "five_hour"); ["percentRemaining"])) as $five_hour_left |
+    (($monthly != null and $pace != null and $pace.status == "ahead"
+      and $reserve != null and $reserve <= -15)) as $go_ahead |
+    ([$weekly_left, $rolling_left] | map(select(. != null and . < 10)) | length > 0) as $go_low |
+    (($seven_day_left != null and $seven_day_left >= 25)
+     and ($five_hour_left != null and $five_hour_left >= 30)) as $claude_ok |
+    (($go_ahead or $go_low) and $claude_ok);
+  def haiku_first($use; $snap):
+    if ([$use[] | select(muse_profile)] | length) == 0
+       or ([$use[] | select(haiku_profile)] | length) == 0
+       or (haiku_promotion_holds($snap) | not)
+    then $use
+    else
+      ([$use[] | select(haiku_profile)] | first) as $haiku |
+      ([$use[] | select(. != $haiku)]) as $rest |
+      ([$rest[] | select(muse_profile)] | first) as $muse |
+      ($rest | index($muse)) as $at |
+      $rest[0:$at] + [$haiku] + $rest[$at:]
+    end;
   def rule_at($c):
     if ($c | test("^rule_[1-9][0-9]*$")) then
       ($c | ltrimstr("rule_") | tonumber) as $n |
@@ -538,14 +572,14 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   as $ev |
   if $sel.invalid then $ev + {status: "error", reason: $sel.invalid}
   elif $fb.below and $fb.global then
-    $ev + {status: "ambiguous", reason: "confidence \($a.confidence) below floor \($floor)", candidates: ($answer_use | map(evaluate(.)))}
+    $ev + {status: "ambiguous", reason: "confidence \($a.confidence) below floor \($floor)", candidates: (haiku_first($answer_use; $q) | map(evaluate(.)))}
   elif $fb.below and ($fb.to | not) then
-    $ev + {status: "ambiguous", reason: "\($picked) probability \($a.probabilities[$picked]) below its floor \($picked_floor); \($fb.why)", candidates: ($answer_use | map(evaluate(.)))}
+    $ev + {status: "ambiguous", reason: "\($picked) probability \($a.probabilities[$picked]) below its floor \($picked_floor); \($fb.why)", candidates: (haiku_first($answer_use; $q) | map(evaluate(.)))}
   elif $sel.escalate then
-    $ev + {status: "escalate", reason: $sel.escalate, candidates: ($answer_use | map(evaluate(.)))}
+    $ev + {status: "escalate", reason: $sel.escalate, candidates: (haiku_first($answer_use; $q) | map(evaluate(.)))}
   elif ($sel.use | length) == 0 then $ev + {status: "escalate", reason: "no profiles configured for \($sel.source)", note: $sel.note, candidates: []}
   else
-    ($sel.use | map(evaluate(.))) as $cands |
+    (haiku_first($sel.use; $q) | map(evaluate(.))) as $cands |
     if $cfg.array_order == "preference" then
       ([$cands[] | select(.eligible)] | first) as $first |
       if $first == null then $ev + {status: "escalate", reason: "no eligible candidate in preference order", note: $sel.note, candidates: $cands}
