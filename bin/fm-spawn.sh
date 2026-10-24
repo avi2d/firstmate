@@ -3156,7 +3156,8 @@ fi
 
 case "$HARNESS" in
 claude | codex | opencode | grok | gemini)
-  command -v "$HARNESS" >/dev/null 2>&1 || {
+  # T3 starts the agent on its own server, so this host needs no local binary.
+  [ "$BACKEND" = t3code ] || command -v "$HARNESS" >/dev/null 2>&1 || {
     echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
     exit 1
   }
