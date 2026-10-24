@@ -1017,6 +1017,15 @@ fm_busy_launch_prompt_parked() {  # <harness>
   esac
 }
 
+# The shell printed its own exec failure naming this harness, so no agent runs behind the seed.
+fm_busy_launch_exec_failed() {  # <harness>, tail on stdin
+  local harness=${1-} buf
+  [ -n "$harness" ] || return 1
+  buf=$(cat)
+  printf '%s' "$buf" | grep -Fq -- "$harness" || return 1
+  printf '%s' "$buf" | grep -qiE 'command not found|No such file or directory|Unknown command'
+}
+
 fm_busy_provider_wait_until() {  # <state-dir> <id> -> active wait's clearing epoch
   local record state source event reset ts until now
   record=$(fm_busy_record_read "$1" "$2") || return 1
@@ -1089,6 +1098,9 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
       if [ "$provider_harness" = 1 ] && [ "$r_event" = provider-limit ] && \
         fm_busy_provider_wait_until "$state" "$id" >/dev/null; then
         printf 'paused %s' "$r_source"
+      elif [ "$r_state" = busy ] && [ "$r_source" = fm-spawn ] && [ -n "$tail40" ] \
+        && printf '%s' "$tail40" | fm_busy_launch_exec_failed "$harness"; then
+        printf 'unknown launch-exec-failed'
       elif [ "$r_state" = busy ] && [ "$r_source" = fm-spawn ] && [ -n "$tail40" ] \
         && printf '%s' "$tail40" | fm_busy_launch_prompt_parked "$harness"; then
         printf 'unknown launch-prompt'

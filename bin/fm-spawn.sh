@@ -2982,6 +2982,12 @@ if [ "$KIND" != secondmate ]; then
 fi
 
 case "$HARNESS" in
+claude | codex | opencode | grok | gemini)
+  command -v "$HARNESS" >/dev/null 2>&1 || {
+    echo "error: $HARNESS executable not found on PATH; install it or select a different verified harness" >&2
+    exit 1
+  }
+  ;;
 devin)
   DEVIN_BIN=$(command -v devin) || {
     echo "error: devin executable not found on PATH" >&2

@@ -143,6 +143,7 @@ esac
 exit 0
 SH
   chmod +x "$fb/orca"
+  fm_fake_exit0 "$fb" claude codex opencode grok gemini
   printf '%s\n' "$fb"
 }
 

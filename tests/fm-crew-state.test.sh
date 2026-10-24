@@ -2673,6 +2673,26 @@ Enter to confirm . Esc to cancel'
   pass "a launch parked on a recognized interactive prompt never reads working, closing the absorb path a stale watcher poll depends on"
 }
 
+test_no_run_exec_failed_seed_is_blocked_not_working() {
+  reset_fakes
+  local d; d=$(new_case exec-failed)
+  make_repo_on_branch "$d/wt" fm/feat-exec
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-exec.meta" "window=fm:fm-feat-exec" "worktree=$d/wt" "kind=ship" "harness=opencode"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_RUNS_LIST=""
+  FM_FAKE_BUSY=1
+  FM_FAKE_BUSY_TEXT='env: opencode: No such file or directory'
+  export FM_FAKE_BUSY_TEXT
+  "$ROOT/bin/fm-busy-event.sh" arm "$d/state" feat-exec >/dev/null
+  local out; out=$(run_crew_state "$d" feat-exec)
+  assert_not_contains "$out" "state: working" "a launch the shell could not start must never read working"
+  assert_contains "$out" "state: blocked" "an unstartable launch reads blocked, not busy or unknown"
+  assert_contains "$out" "source: pane" "the blocked verdict is attributed to the pane"
+  assert_contains "$out" "opencode" "the blocked verdict names the harness that never started"
+  pass "a launch whose shell could not exec the harness reads blocked, never working"
+}
+
 # A converted adapter must NOT read working from rendered footer text: the
 # redesign removed that dependency, so a pane painting "esc to interrupt" with
 # no semantic record is unknown, never working and never silently idle.
@@ -6047,6 +6067,7 @@ test_external_review_done_reads_ready
 test_no_run_busy_pane
 test_no_run_overview_zero_branch_falls_through
 test_no_run_launch_prompt_parked_is_not_working
+test_no_run_exec_failed_seed_is_blocked_not_working
 test_no_run_footer_text_alone_is_not_working
 test_no_run_grok_uses_isolated_fallback
 test_no_run_herdr_unknown_uses_backend_capture
