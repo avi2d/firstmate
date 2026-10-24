@@ -15,6 +15,11 @@ set -u
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-batch)
 export FM_BACKEND=tmux
+# Routing never launches (missing briefs stop each pair), but resolution still requires the binary present.
+BATCH_FAKEBIN="$TMP_ROOT/fakebin"
+mkdir -p "$BATCH_FAKEBIN"
+fm_fake_exit0 "$BATCH_FAKEBIN" claude codex opencode grok gemini
+PATH="$BATCH_FAKEBIN:$PATH"
 
 # Clear ambient firstmate overrides so the behavior test owns its environment.
 run_spawn() {

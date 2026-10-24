@@ -793,6 +793,7 @@ test_spawn_fast_forwards_before_launch() {
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" claude codex opencode grok gemini
 
   PATH="$fakebin:$BASE_PATH" TMUX='' \
     FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" \
@@ -827,6 +828,7 @@ test_spawn_warns_when_sync_skipped_before_launch() {
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" claude codex opencode grok gemini
 
   PATH="$fakebin:$BASE_PATH" TMUX='' \
     FM_ROOT_OVERRIDE="$w/main" FM_HOME="$w/home" \
@@ -1605,7 +1607,7 @@ test_remote_launch_does_not_retarget_host_copy() {
   install_remote_herdr_fixture "$herdrbin" "$w/herdr.state" "$w/herdr.log" \
     "$w/herdr.sendfail" "$w/herdr.sock"
   cp "$herdrbin/bin/herdr" "$fakebin/herdr"
-  fm_fake_exit0 "$fakebin" gh treehouse tmux node
+  fm_fake_exit0 "$fakebin" gh treehouse tmux node claude codex opencode grok gemini
 
   # The real launch leg, exactly as the parent invokes it after its own sync.
   launch_out=$(PATH="$fakebin:$BASE_PATH" \
