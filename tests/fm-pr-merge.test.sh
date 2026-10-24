@@ -3049,6 +3049,39 @@ test_unreadable_backlog_refuses_the_merge() {
   pass "fm-pr-merge refuses when the backlog exists but cannot be read"
 }
 
+test_held_pr_refuses_the_merge() {
+  local case_dir rc
+  case_dir=$(make_case held-pr-refuses)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 6767676767676767676767676767676767676767
+  : > "$case_dir/gh-axi.log"
+  FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-merge-hold.sh" hold https://github.com/example/repo/pull/67 \
+      --reason "captain review pending" >/dev/null \
+    || fail "held-pr-refuses: could not record the fixture hold"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/67 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "held-pr-refuses: a held pull request must refuse"
+  assert_grep 'is held for the captain' "$case_dir/stderr" \
+    "held-pr-refuses: the refusal did not name the hold"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "held-pr-refuses: the forge merge ran despite the hold"
+
+  FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-merge-hold.sh" release https://github.com/example/repo/pull/67 >/dev/null \
+    || fail "held-pr-refuses: could not release the fixture hold"
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/67 \
+    > "$case_dir/stdout2" 2> "$case_dir/stderr2" \
+    || fail "held-pr-refuses: the released pull request did not merge"
+  assert_logged_gh_merge "$case_dir" 67 example/repo --squash
+  pass "fm-pr-merge refuses a held pull request and merges it once released"
+}
+
 test_unreadable_backend_config_refuses_the_merge() {
   local case_dir rc
   case_dir=$(make_case unreadable-backend-config-refuses)
@@ -4689,6 +4722,7 @@ test_uncommitted_marker_retry_is_never_silent
 test_secondmate_without_parent_binding_is_loud
 test_absent_backlog_still_merges
 test_unreadable_backlog_refuses_the_merge
+test_held_pr_refuses_the_merge
 test_unreadable_backend_config_refuses_the_merge
 test_unreadable_user_backend_config_refuses_the_merge
 test_untraversable_user_backend_config_directory_refuses_the_merge

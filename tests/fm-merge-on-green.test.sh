@@ -217,6 +217,19 @@ test_captain_hold_and_open_decisions_stay_open() {
   pass "a captain-held task or one with an open decision stays open"
 }
 
+test_merge_hold_keeps_a_green_pull_request_open() {
+  local c
+  c=$(make_case merge-held)
+  run_in "$c" "$ROOT/bin/fm-merge-hold.sh" hold "$URL" --reason "captain review pending" >/dev/null \
+    || fail "merge-held: could not record the fixture hold"
+  expect_stays_open "$c" skip "held for the captain" merge-held
+  run_in "$c" "$ROOT/bin/fm-merge-hold.sh" release "$URL" >/dev/null \
+    || fail "merge-held: could not release the fixture hold"
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "merge-held: releasing the hold did not reopen the merge"
+  pass "a held pull request stays open through the real sweep, and release reopens the merge"
+}
+
 test_merge_waits_for_the_workers_done_report() {
   local c
   c=$(make_case no-done)
@@ -438,6 +451,7 @@ test_pending_and_unreported_checks_wait
 test_draft_and_conflicting_stay_open
 test_yolo_must_be_on_in_the_registry_and_the_task
 test_captain_hold_and_open_decisions_stay_open
+test_merge_hold_keeps_a_green_pull_request_open
 test_merge_waits_for_the_workers_done_report
 test_done_line_boundary_flag_stays_open
 test_boundary_diffs_stay_open
