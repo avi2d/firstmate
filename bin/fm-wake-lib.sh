@@ -366,7 +366,7 @@ fm_extension_pair_owns_supervision() {  # <state> <extension-dir> <source:marker
       fi
       fm_session_pid_valid "$session_pid" || return 1
       fm_harness_pid_alive "$session_pid"
-      return
+      return $?
       ;;
   esac
   fm_pid_alive "$session_pid"
@@ -649,14 +649,14 @@ fm_lock_remove_path() {
 fm_lock_mid_acquire_is_fresh() {
   local lockdir=$1 pid=$2 mid_acquire_stale
   case "$pid" in
-    ''|*[!0-9]*)
-      mid_acquire_stale=$FM_LOCK_STALE_AFTER
-      [ "$mid_acquire_stale" -lt 2 ] && mid_acquire_stale=2
-      [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
-      return
-      ;;
+    ''|*[!0-9]*) ;;
+    *) return 1 ;;
   esac
-  return 1
+  mid_acquire_stale=$FM_LOCK_STALE_AFTER
+  [ "$mid_acquire_stale" -lt 2 ] && mid_acquire_stale=2
+  # No bare return after this test: inside a trap handler bash 5 makes it
+  # return the pre-trap status, and exit paths call this lock code.
+  [ "$(fm_path_age "$lockdir")" -lt "$mid_acquire_stale" ]
 }
 
 fm_lock_recheck_stale_owner() {
