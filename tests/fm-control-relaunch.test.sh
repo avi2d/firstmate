@@ -1028,6 +1028,157 @@ test_claude_account_follows_a_same_profile_relaunch() {
   assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" "the new profile must launch without the account"
   pass "fm-control relaunch: the recorded Claude account follows a same-profile relaunch and refuses signed out before the stop"
 }
+
+# add_bridge_task <case-dir> <id> <model> [claude_account]: a running Pi ship on
+# <model>, in a home whose config/claude-accounts declares two signed-in accounts.
+add_bridge_task() {
+  local dir=$1 id=$2 model=$3 account=${4:-}
+  add_ship_task "$dir" "$id" pi
+  make_claude_auth_stub "$dir"
+  printf pi > "$dir/fake/command"
+  printf pi > "$dir/fake/becomes"
+  printf '#!/usr/bin/env bash\nprintf "Options: --tui-mode\\n"\n' > "$dir/fakebin/pi"
+  chmod +x "$dir/fakebin/pi"
+  sed "s|^model=default$|model=$model|" "$dir/home/state/$id.meta" > "$dir/home/state/$id.meta.tmp"
+  mv "$dir/home/state/$id.meta.tmp" "$dir/home/state/$id.meta"
+  [ -z "$account" ] || echo "claude_account=$account" >> "$dir/home/state/$id.meta"
+  mkdir -p "$dir/home/config" "$dir/main" "$dir/second"
+  : > "$dir/main/.credentials.json"
+  : > "$dir/second/.credentials.json"
+  printf 'main %s\nsecond %s\n' "$dir/main" "$dir/second" > "$dir/home/config/claude-accounts"
+}
+
+# assert_refused_before_stop <case-dir> <id> <out> <needle>
+assert_refused_before_stop() {
+  local dir=$1 id=$2 out=$3 needle=$4
+  assert_contains "$out" "$needle" "the refusal should say: $needle"
+  [ "$(cat "$dir/fake/command")" = pi ] || fail "a refused relaunch must leave the running agent alive"
+  [ ! -s "$dir/fake/literal" ] || fail "a refused relaunch must send no lifecycle input: $(cat "$dir/fake/literal")"
+  cmp -s "$dir/meta-before" "$dir/home/state/$id.meta" || fail "a refused relaunch must leave the task record untouched"
+}
+
+test_pi_claude_bridge_relaunch_keeps_or_takes_a_claude_account() {
+  local dir out rc id=rl-bridge-acct
+  dir=$(new_case bridge-acct "$id")
+  add_bridge_task "$dir" "$id" claude-bridge/claude-opus-5-5 second
+  out=$(run_control "$dir" "$id" relaunch --model claude-bridge/claude-sonnet-5-5 --note "lighter model"); rc=$?
+  expect_code 0 "$rc" "a bridge relaunch onto another bridge model should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" "$id" claude_account)" = second ] \
+    || fail "the recorded account should follow a relaunch onto another bridge model"
+  assert_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR='$dir/second'" \
+    "the replacement bridge should launch on the recorded account's login"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --claude-account main --note "switch account"); rc=$?
+  expect_code 0 "$rc" "a bridge relaunch naming another account should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" "$id" claude_account)" = main ] || fail "an explicit account should replace the recorded one"
+  [ "$(meta_field "$dir" "$id" model)" = claude-bridge/claude-sonnet-5-5 ] || fail "an account change must keep the model"
+  assert_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR='$dir/main'" \
+    "the replacement bridge should launch on the named account's login"
+  rm "$dir/main/.credentials.json"
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" "$id" relaunch --claude-account second --model openai-codex/gpt-6-luna --note "off the bridge"); rc=$?
+  expect_code 1 "$rc" "an explicit account on a non-bridge Pi model must refuse"
+  assert_refused_before_stop "$dir" "$id" "$out" "needs --model claude-bridge/<id>"
+  out=$(run_control "$dir" "$id" relaunch --note "signed out"); rc=$?
+  expect_code 1 "$rc" "a recorded account that is signed out must refuse"
+  assert_refused_before_stop "$dir" "$id" "$out" "maps account main to $dir/main, which is not signed in"
+  pass "fm-control relaunch: a Pi claude-bridge replacement keeps its recorded Claude account or takes --claude-account"
+}
+
+test_pi_claude_bridge_relaunch_without_an_account_refuses_before_stop() {
+  local dir out rc id=rl-bridge-none
+  dir=$(new_case bridge-none "$id")
+  add_bridge_task "$dir" "$id" claude-bridge/claude-opus-5-5
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+  out=$(run_control "$dir" "$id" relaunch --note "no account recorded"); rc=$?
+  expect_code 1 "$rc" "a bridge relaunch with no account must refuse where accounts are declared"$'\n'"$out"
+  assert_refused_before_stop "$dir" "$id" "$out" \
+    "--model claude-bridge/claude-opus-5-5 needs --claude-account <name> (declared: main second)"
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_spawn "$dir" "$id" --relaunch --model claude-bridge/claude-opus-5-5); rc=$?
+  expect_code 1 "$rc" "the launch owner must refuse the same unaccounted relaunch on its own"$'\n'"$out"
+  assert_contains "$out" "needs --claude-account <name>" "the launch owner should name the missing account"
+  [ ! -s "$dir/fake/literal" ] || fail "a refused launch owner must type no launch command: $(cat "$dir/fake/literal")"
+  printf pi > "$dir/fake/command"
+  out=$(run_control "$dir" "$id" relaunch --claude-account second --note "account named"); rc=$?
+  expect_code 0 "$rc" "the same relaunch naming an account should succeed"$'\n'"$out"
+  [ "$(meta_field "$dir" "$id" claude_account)" = second ] || fail "the named account should be recorded"
+  assert_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR='$dir/second'" \
+    "the replacement bridge should launch on the named account's login"
+
+  dir=$(new_case bridge-onto "$id")
+  add_bridge_task "$dir" "$id" openai-codex/gpt-6-luna
+  cp "$dir/home/state/$id.meta" "$dir/meta-before"
+  out=$(run_control "$dir" "$id" relaunch --model claude-bridge/claude-opus-5-5 --note "onto the bridge"); rc=$?
+  expect_code 1 "$rc" "a relaunch onto a bridge model with no account must refuse where accounts are declared"$'\n'"$out"
+  assert_refused_before_stop "$dir" "$id" "$out" "needs --claude-account <name>"
+
+  dir=$(new_case bridge-from-claude "$id")
+  add_bridge_task "$dir" "$id" claude-bridge/claude-opus-5-5
+  sed 's/^harness=pi$/harness=claude/; s|^model=claude-bridge/claude-opus-5-5$|model=opus|' \
+    "$dir/home/state/$id.meta" > "$dir/home/state/$id.meta.tmp"
+  mv "$dir/home/state/$id.meta.tmp" "$dir/home/state/$id.meta"
+  echo "claude_account=second" >> "$dir/home/state/$id.meta"
+  printf claude > "$dir/fake/command"
+  out=$(run_control "$dir" "$id" relaunch --harness pi --model claude-bridge/claude-opus-5-5 --note "claude to bridge"); rc=$?
+  expect_code 0 "$rc" "a relaunch from an accounted Claude worker onto the bridge should keep its account"$'\n'"$out"
+  [ "$(meta_field "$dir" "$id" claude_account)" = second ] || fail "the account should follow onto the bridge"
+  pass "fm-control relaunch: a Pi claude-bridge replacement with no account refuses before the old agent stops"
+}
+
+test_pi_claude_bridge_relaunch_without_an_account_is_unchanged_elsewhere() {
+  local dir out rc id=rl-bridge-kept
+  dir=$(new_case bridge-nomap "$id")
+  add_bridge_task "$dir" "$id" claude-bridge/claude-opus-5-5
+  rm "$dir/home/config/claude-accounts"
+  out=$(run_control "$dir" "$id" relaunch --note "no map"); rc=$?
+  expect_code 0 "$rc" "with no config/claude-accounts a bridge relaunch should launch as before"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" "an unaccounted relaunch must not pick a login"
+  printf '%s\n' '# no accounts yet' > "$dir/home/config/claude-accounts"
+  printf pi > "$dir/fake/command"
+  out=$(run_control "$dir" "$id" relaunch --note "empty map"); rc=$?
+  expect_code 0 "$rc" "a map declaring no account should leave a bridge relaunch as before"$'\n'"$out"
+
+  dir=$(new_case bridge-offmodel "$id")
+  add_bridge_task "$dir" "$id" openai-codex/gpt-6-luna
+  out=$(run_control "$dir" "$id" relaunch --note "another provider"); rc=$?
+  expect_code 0 "$rc" "a Pi model on another provider needs no Claude account"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" "a non-bridge relaunch must not pick a login"
+
+  dir=$(new_case bridge-claude "$id")
+  add_bridge_task "$dir" "$id" claude-bridge/claude-opus-5-5
+  sed 's/^harness=pi$/harness=claude/; s|^model=claude-bridge/claude-opus-5-5$|model=opus|' \
+    "$dir/home/state/$id.meta" > "$dir/home/state/$id.meta.tmp"
+  mv "$dir/home/state/$id.meta.tmp" "$dir/home/state/$id.meta"
+  echo "claude_account=second" >> "$dir/home/state/$id.meta"
+  printf claude > "$dir/fake/command"
+  printf claude > "$dir/fake/becomes"
+  out=$(run_control "$dir" "$id" relaunch --model sonnet --note "claude model change"); rc=$?
+  expect_code 0 "$rc" "a Claude relaunch onto another model should still drop its account"$'\n'"$out"
+  assert_no_grep "claude_account=" "$dir/home/state/$id.meta" "a Claude model change must not carry the account"
+
+  dir=$(new_case bridge-sm "$id")
+  add_bridge_task "$dir" "$id" claude-bridge/claude-haiku-5-5
+  mkdir -p "$dir/wt/state" "$dir/wt/data" "$dir/wt/bin"
+  printf '%s\n' "$id" > "$dir/wt/.fm-secondmate-home"
+  printf '# agents\n' > "$dir/wt/AGENTS.md"
+  printf '# charter\n' > "$dir/wt/data/charter.md"
+  printf 'pi claude-bridge/claude-haiku-5-5\n' > "$dir/home/config/secondmate-harness"
+  {
+    printf 'window=fmses:fm-%s\nendpoint_task_id=%s\n' "$id" "$id"
+    printf 'worktree=%s\nproject=%s\nhome=%s\n' "$dir/wt" "$dir/wt" "$dir/wt"
+    printf 'harness=pi\nkind=secondmate\nmode=secondmate\nyolo=off\nmodel=claude-bridge/claude-haiku-5-5\neffort=default\n'
+  } > "$dir/home/state/$id.meta"
+  out=$(run_control "$dir" "$id" relaunch); rc=$?
+  expect_code 0 "$rc" "a secondmate on a bridge model should relaunch as before"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" "an unaccounted secondmate must not pick a login"
+
+  out=$(run_control "$dir" "$id" exit --claude-account main); rc=$?
+  expect_code 1 "$rc" "--claude-account must refuse on a verb other than relaunch"
+  assert_contains "$out" "apply to 'relaunch' only" "the refusal should name the verb it belongs to"
+  pass "fm-control relaunch: an unaccounted relaunch is unchanged without declared accounts, off the bridge, on Claude, and for a secondmate"
+}
 test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop() {
   local dir out rc id=rl-sm-acct harness file variable pin
   for harness in claude pi; do
@@ -3148,6 +3299,9 @@ test_native_ultra_relaunch_preserves_profile_and_rejects_before_stop
 test_signed_out_worker_account_pin_refuses_before_stop
 test_worker_account_pin_follows_the_relaunch
 test_claude_account_follows_a_same_profile_relaunch
+test_pi_claude_bridge_relaunch_keeps_or_takes_a_claude_account
+test_pi_claude_bridge_relaunch_without_an_account_refuses_before_stop
+test_pi_claude_bridge_relaunch_without_an_account_is_unchanged_elsewhere
 test_secondmate_account_pin_follows_relaunch_and_refuses_before_stop
 test_pi_exclude_tools_follow_the_relaunch
 test_exclude_tools_refusals_happen_before_the_agent_stops
