@@ -164,73 +164,105 @@ cloud_push() {
   git -C "$clone" rev-parse HEAD
 }
 
-test_relay_reports_the_pull_request_and_forwards_steers() {
-  local dir="$TMP_ROOT/relay" state wt bare fakebin sha url=https://github.com/acme/widget/pull/7 relay_pid status gen out started until_epoch
-  state=$dir/state
-  wt=$dir/wt
-  bare=$dir/project.origin.git
-  mkdir -p "$state" "$dir/data/rt"
-  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$state" rt) || fail "could not arm the busy record"
+start_relay() {  # <dir> <id> <deadline-minutes> <pane-input>; sets STATE WT BARE STATUS RELAY_PID STARTED
+  local dir=$1 id=$2 gen fakebin
+  STATE=$dir/state
+  WT=$dir/wt
+  BARE=$dir/project.origin.git
+  STATUS=$STATE/$id.status
+  mkdir -p "$STATE" "$dir/data/$id"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$STATE" "$id") || fail "could not arm the busy record"
   fakebin=$(fm_fakebin "$dir/fake")
   make_relay_fakes "$fakebin" "$dir"
-  fm_git_worktree "$dir/project" "$wt" fm/rt
-  fm_test_spawn_brief "$dir" rt "Change the README"
-  status=$state/rt.status
-  mkfifo "$dir/pane"
-  exec 3<>"$dir/pane"
-  FM_TASK_INBOX=$state/rt.inbox PATH="$fakebin:$PATH" "$ROOT/bin/fm-cloud-claude-relay.sh" \
-    --task rt --worktree "$wt" --brief "$dir/data/rt/brief.md" --status "$status" \
-    --repo acme/widget --branch fm/rt --base main --deadline 0 --gen "$gen" --poll 1 <&3 >"$dir/pane.log" 2>&1 &
-  relay_pid=$!
-  started=$(date +%s)
+  fm_git_worktree "$dir/project" "$WT" "fm/$id"
+  fm_test_spawn_brief "$dir" "$id" "Change the README"
+  STARTED=$(date +%s)
+  FM_TASK_INBOX=$STATE/$id.inbox PATH="$fakebin:$PATH" "$ROOT/bin/fm-cloud-claude-relay.sh" \
+    --task "$id" --worktree "$WT" --brief "$dir/data/$id/brief.md" --status "$STATUS" \
+    --repo acme/widget --branch "fm/$id" --base main --deadline "$3" --gen "$gen" --poll 1 <"$4" >"$dir/pane.log" 2>&1 &
+  RELAY_PID=$!
+}
 
-  wait_for "$state/rt.cloud-session" session_01TESTRELAY "the session id record"
-  wait_for "$status" "paused [at=" "the declared cloud wait"
-  # The brief's wait contract: until is the start plus the timeout, rounded up to the minute.
-  until_epoch=$(bash -c '. "$1/bin/fm-classify-lib.sh" && status_paused_until "$(grep "^paused" "$2" | head -n 1)"' _ "$ROOT" "$status") ||
-    fail "the declared wait should carry a readable until time: $(cat "$status")"
-  [ "$until_epoch" -ge "$started" ] && [ "$until_epoch" -le $((started + 60)) ] ||
-    fail "a zero-minute deadline should declare the wait until the next minute after $started, got $until_epoch"
-  git -C "$bare" rev-parse --verify --quiet refs/heads/fm/rt >/dev/null || fail "the relay must push the task branch before the cloud session starts"
+stop_relay() {
+  kill "$RELAY_PID" 2>/dev/null
+  wait "$RELAY_PID" 2>/dev/null
+}
+
+test_relay_flags_the_deadline_and_reports_the_pull_request() {
+  local dir="$TMP_ROOT/relay" sha url=https://github.com/acme/widget/pull/7 out until_epoch seen latest
+  start_relay "$dir" rt 0 /dev/null
+
+  wait_for "$STATE/rt.cloud-session" session_01TESTRELAY "the session id record"
+  wait_for "$STATUS" "paused [at=" "the declared cloud wait"
+  seen=$(date +%s)
+  # The brief's wait contract: until is the wait's start plus the timeout, rounded up to
+  # the minute, and that start falls between the launch and the wait being seen.
+  latest=$(( (seen + 59) / 60 * 60 ))
+  until_epoch=$(bash -c '. "$1/bin/fm-classify-lib.sh" && status_paused_until "$(grep "^paused" "$2" | head -n 1)"' _ "$ROOT" "$STATUS") ||
+    fail "the declared wait should carry a readable until time: $(cat "$STATUS")"
+  [ "$until_epoch" -ge "$STARTED" ] && [ "$until_epoch" -le "$latest" ] && [ $((until_epoch % 60)) -eq 0 ] ||
+    fail "a zero-minute deadline should declare the wait until a whole minute between $STARTED and $latest, got $until_epoch"
+  git -C "$BARE" rev-parse --verify --quiet refs/heads/fm/rt >/dev/null || fail "the relay must push the task branch before the cloud session starts"
   assert_grep "Change the README" "$dir/create-args" "the cloud task should carry the captain's intent"
   assert_grep "fm/rt" "$dir/create-args" "the cloud session should run on the task branch"
-  wait_for "$status" "blocked [key=cloud-deadline]" "the deadline report"
-  wait_for "$state/rt.busy-state" "event=deadline" "the deadline busy event"
-  assert_equals "idle cloud-relay" "$(busy_verdict "$state" rt)" "a passed deadline should read idle so the blocker surfaces"
-  rm -f "$state/rt.turn-ended"
+  wait_for "$STATUS" "blocked [key=cloud-deadline]" "the deadline report"
+  wait_for "$STATE/rt.busy-state" "event=deadline" "the deadline busy event"
+  assert_equals "idle cloud-relay" "$(busy_verdict "$STATE" rt)" "a passed deadline should read idle so the blocker surfaces"
+  rm -f "$STATE/rt.turn-ended"
 
-  sha=$(cloud_push "$dir" "$bare" fm/rt first.txt)
+  sha=$(cloud_push "$dir" "$BARE" fm/rt first.txt)
   printf '%s\topen\tfalse\t%s\n' "$url" "$sha" > "$dir/pr-row"
-  wait_for "$status" "]: PR $url" "the done report"
-  assert_grep "resolved [key=cloud-deadline]" "$status" "a pull request should resolve the deadline report"
-  assert_equals "$sha" "$(git -C "$wt" rev-parse HEAD)" "the local copy should sit at the pull request head"
+  wait_for "$STATUS" "]: PR $url" "the done report"
+  assert_grep "resolved [key=cloud-deadline]" "$STATUS" "a pull request should resolve the deadline report"
+  assert_equals "$sha" "$(git -C "$WT" rev-parse HEAD)" "the local copy should sit at the pull request head"
   assert_grep "head=acme:fm/rt" "$dir/gh-calls" "the poll should ask for the task branch's pull request"
-  wait_for "$state/rt.busy-state" "event=pr-ready" "the pr-ready busy event"
-  assert_present "$state/rt.turn-ended" "a ready pull request should notify the watcher"
+  wait_for "$STATE/rt.busy-state" "event=pr-ready" "the pr-ready busy event"
+  assert_present "$STATE/rt.turn-ended" "a ready pull request should notify the watcher"
   out=$(bash -c '. "$1/bin/fm-dod-lib.sh" && fm_dod_accept_ship_done ship direct-PR "$2" "$3" "$(grep "^done" "$4" | tail -n 1)"' \
-    _ "$ROOT" "$wt" "$dir/project" "$status") || fail "the ship-done check should accept the relay's report: $out"
+    _ "$ROOT" "$WT" "$dir/project" "$STATUS") || fail "the ship-done check should accept the relay's report: $out"
+  stop_relay
+  pass "the relay flags a passed deadline and reports the pull request that resolves it"
+}
 
-  bash -c '. "$1/bin/fm-task-inbox-lib.sh" && rec=$(fm_task_inbox_write "$2" rt "please rename the heading") &&
-    fm_task_inbox_doorbell_line "$rec" && echo' _ "$ROOT" "$state" >&3 || fail "could not enqueue and ring a steer"
+# A deadline that cannot pass during the test keeps each busy event in place
+# until the next pull request head, which is the only thing that moves it.
+test_relay_forwards_steers_and_reports_the_follow_up() {
+  local dir="$TMP_ROOT/relay-steer" sha url=https://github.com/acme/widget/pull/7
+  mkdir -p "$dir"
+  mkfifo "$dir/pane"
+  exec 3<>"$dir/pane"
+  start_relay "$dir" rs 90 "$dir/pane"
+
+  wait_for "$STATUS" "paused [at=" "the declared cloud wait"
+  sha=$(cloud_push "$dir" "$BARE" fm/rs first.txt)
+  printf '%s\topen\tfalse\t%s\n' "$url" "$sha" > "$dir/pr-row"
+  wait_for "$STATUS" "]: PR $url" "the done report"
+  wait_for "$STATE/rs.busy-state" "event=pr-ready" "the pr-ready busy event"
+  assert_equals "idle cloud-relay" "$(busy_verdict "$STATE" rs)" "a ready pull request should read idle"
+
+  bash -c '. "$1/bin/fm-task-inbox-lib.sh" && rec=$(fm_task_inbox_write "$2" rs "please rename the heading") &&
+    fm_task_inbox_doorbell_line "$rec" && echo' _ "$ROOT" "$STATE" >&3 || fail "could not enqueue and ring a steer"
   wait_for "$dir/forwarded" "please rename the heading" "the forwarded steer"
-  [ -z "$(ls "$state/rt.inbox"/*.msg 2>/dev/null)" ] || fail "a forwarded steer should move to handled/"
+  wait_for "$STATE/rs.busy-state" "event=awaiting-pr" "the busy event after a steer"
+  [ -z "$(ls "$STATE/rs.inbox"/*.msg 2>/dev/null)" ] || fail "a forwarded steer should move to handled/"
   grep -qF 'Firstmate instruction waiting' "$dir/forwarded" && fail "the doorbell line itself must not be forwarded"
-  wait_for "$state/rt.busy-state" "event=awaiting-pr" "the busy event after a steer"
-  assert_equals "busy cloud-relay" "$(busy_verdict "$state" rt)" "a forwarded steer should read busy until the next push"
+  sleep 1.5
+  assert_equals "busy cloud-relay" "$(busy_verdict "$STATE" rs)" "a forwarded steer should still read busy after further polls with no new push"
+  assert_equals 2 "$(grep -c '^paused' "$STATUS")" "a forwarded steer should declare a fresh cloud wait"
 
-  sha=$(cloud_push "$dir" "$bare" fm/rt second.txt)
+  sha=$(cloud_push "$dir" "$BARE" fm/rs second.txt)
   printf '%s\topen\tfalse\t%s\n' "$url" "$sha" > "$dir/pr-row"
   for _ in $(seq 1 100); do
-    [ "$(grep -c "]: PR $url" "$status")" -ge 2 ] && break
+    [ "$(grep -c "]: PR $url" "$STATUS")" -ge 2 ] && break
     sleep 0.1
   done
-  [ "$(grep -c "]: PR $url" "$status")" -ge 2 ] || fail "the follow-up push should report done again: $(cat "$status")"
-  assert_equals "$sha" "$(git -C "$wt" rev-parse HEAD)" "the local copy should follow the follow-up push"
+  [ "$(grep -c "]: PR $url" "$STATUS")" -ge 2 ] || fail "the follow-up push should report done again: $(cat "$STATUS")"
+  assert_equals "$sha" "$(git -C "$WT" rev-parse HEAD)" "the local copy should follow the follow-up push"
+  assert_no_grep "cloud-deadline" "$STATUS" "a 90-minute deadline must not fire during the test"
 
-  kill "$relay_pid" 2>/dev/null
-  wait "$relay_pid" 2>/dev/null
+  stop_relay
   exec 3>&-
-  pass "the relay reports the pull request, flags the deadline, and forwards steers"
+  pass "the relay forwards steers, reads busy until the next push, and reports the follow-up"
 }
 
 test_relay_reports_a_draft_as_not_done() {
@@ -257,7 +289,8 @@ test_relay_reports_a_draft_as_not_done() {
 }
 
 test_direct_pr_ship_launches_the_relay_on_the_cloud_account
-test_relay_reports_the_pull_request_and_forwards_steers
+test_relay_flags_the_deadline_and_reports_the_pull_request
+test_relay_forwards_steers_and_reports_the_follow_up
 test_relay_reports_a_draft_as_not_done
 test_refusals_before_launch
 test_github_repo_forms
