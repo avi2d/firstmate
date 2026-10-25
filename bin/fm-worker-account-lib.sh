@@ -434,3 +434,15 @@ fm_claude_account_select() {
   }
   printf '%s\t%s\n' "$login" "$root"
 }
+
+# Without an account the bridge runs on the pane's ambient Claude login, which
+# clauth folder attach signs out; a home declaring no account has none to name.
+fm_claude_bridge_account_required() {
+  local harness=$1 config=$2 model=$3 entries
+  case "$harness" in pi | pi-signed) ;; *) return 0 ;; esac
+  case "$model" in claude-bridge/?*) ;; *) return 0 ;; esac
+  entries=$(fm_claude_accounts_read "$config") || return 1
+  [ -n "$entries" ] || return 0
+  echo "error: --model $model needs --claude-account <name> (declared: $(printf '%s\n' "$entries" | cut -f1 | paste -sd ' ' -)) because config/claude-accounts declares Claude accounts, and without one the worker would start on the terminal's ambient Claude login, which may be signed out: $config/claude-accounts" >&2
+  return 1
+}

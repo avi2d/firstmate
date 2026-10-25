@@ -435,6 +435,54 @@ test_claude_account_reaches_a_pi_claude_bridge_worker() {
   pass "--claude-account reaches a Pi claude-bridge worker through CLAUDE_CONFIG_DIR"
 }
 
+test_pi_claude_bridge_without_an_account_refuses_where_accounts_are_declared() {
+  local out rc id=cacct-bridge-none
+  new_case pi-bridge-no-account pi
+  signed_in_claude_root "$CASE/main"
+  signed_in_claude_root "$CASE/second"
+  printf '%s\n' '# clauth profile -> login' "main $CASE/main" "second $CASE/second" > "$HOME_DIR/config/claude-accounts"
+  out=$(spawn_ship "$id" --harness pi --model claude-bridge/claude-opus-5-5 --effort high); rc=$?
+  expect_code 1 "$rc" "a Pi claude-bridge ship with no account must refuse where accounts are declared: $out"
+  assert_refused_before_launch "$id" "$out" "--model claude-bridge/claude-opus-5-5 needs --claude-account <name> (declared: main second)"
+  WT="$CASE/wt-$id-scout"
+  git -C "$PROJ" worktree add --quiet -b "wt-$id-scout" "$WT" >/dev/null 2>&1 || fail "could not create a copy for the scout"
+  fm_test_spawn_brief "$HOME_DIR" "$id-scout"
+  : > "$CASE/launch.log"
+  out=$(FM_FAKE_LAUNCH_LOG="$CASE/launch.log" FM_TEST_CLAUDE_CONFIG_DIR="$CASE/ambient-claude" \
+    fm_test_run_spawn "$HOME_DIR" "$WT" "$FAKEBIN" "$id-scout" "$PROJ" --scout --harness pi --model claude-bridge/claude-opus-5-5); rc=$?
+  expect_code 1 "$rc" "a Pi claude-bridge scout with no account must refuse where accounts are declared: $out"
+  assert_refused_before_launch "$id-scout" "$out" "needs --claude-account <name>"
+  out=$(spawn_ship "$id-named" --harness pi --model claude-bridge/claude-opus-5-5 --effort high --claude-account main); rc=$?
+  expect_code 0 "$rc" "the same spawn naming an account should launch: $out"
+  run_pane
+  assert_grep "CLAUDE_CONFIG_DIR=$CASE/main" "$CASE/pi-worker" "the named account, not the pane's login, should reach the bridge"
+  pass "a Pi claude-bridge spawn with no account refuses before launch where config/claude-accounts declares accounts"
+}
+
+test_pi_claude_bridge_without_an_account_is_unchanged_elsewhere() {
+  local out rc id=cacct-bridge-kept sm
+  new_case pi-bridge-no-map pi
+  out=$(spawn_ship "$id-nomap" --harness pi --model claude-bridge/claude-opus-5-5); rc=$?
+  expect_code 0 "$rc" "with no config/claude-accounts a Pi claude-bridge spawn should launch as before: $out"
+  printf '%s\n' '# no accounts yet' > "$HOME_DIR/config/claude-accounts"
+  out=$(spawn_ship "$id-empty" --harness pi --model claude-bridge/claude-opus-5-5); rc=$?
+  expect_code 0 "$rc" "a map declaring no account should leave a Pi claude-bridge spawn as before: $out"
+  printf '%s\n' "main $CASE/main" > "$HOME_DIR/config/claude-accounts"
+  out=$(spawn_ship "$id-other" --harness pi --model openai-codex/gpt-6-luna); rc=$?
+  expect_code 0 "$rc" "a Pi model on another provider needs no Claude account: $out"
+  sm="$CASE/secondmate-home"
+  mkdir -p "$sm/bin" "$sm/data" "$sm/config"
+  git init -q -b main "$sm"
+  printf '# Firstmate\n' > "$sm/AGENTS.md"
+  printf '%s\n' "$id-sm" > "$sm/.fm-secondmate-home"
+  printf 'charter for %s\n' "$id-sm" > "$sm/data/charter.md"
+  : > "$CASE/launch.log"
+  out=$(FM_FAKE_LAUNCH_LOG="$CASE/launch.log" FM_TEST_CLAUDE_CONFIG_DIR="$CASE/ambient-claude" \
+    fm_test_run_spawn "$HOME_DIR" "$WT" "$FAKEBIN" "$id-sm" "$sm" --secondmate --harness pi --model claude-bridge/claude-haiku-5-5); rc=$?
+  expect_code 0 "$rc" "a local secondmate on a Pi claude-bridge model should launch as before: $out"
+  pass "a Pi claude-bridge spawn with no account is unchanged without declared accounts, off the bridge, and for a secondmate"
+}
+
 test_claude_account_ordinary_requires_clauth_to_report_it_active() {
   local out rc id=cacct-ordinary
   new_case ordinary-account claude
@@ -623,6 +671,8 @@ test_raw_claude_account_override_is_kept_without_a_pin
 test_local_secondmate_reads_the_launching_home_pin
 test_claude_account_launches_claude_on_its_mapped_login
 test_claude_account_reaches_a_pi_claude_bridge_worker
+test_pi_claude_bridge_without_an_account_refuses_where_accounts_are_declared
+test_pi_claude_bridge_without_an_account_is_unchanged_elsewhere
 test_claude_account_ordinary_requires_clauth_to_report_it_active
 test_claude_account_refusals
 test_claude_account_replaces_the_home_claude_pin_for_its_launch
