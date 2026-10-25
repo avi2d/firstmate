@@ -307,6 +307,14 @@ test_harness_invocations_stay_typed() {
   run_send "$dir" "$err" -- t1 '$no-mistakes' || fail "a codex \$skill send should succeed"
   assert_contains "$(cat "$dir/send.log")" '$no-mistakes' "the codex \$skill should be typed literally"
   [ ! -d "$dir/home/state/t1.inbox" ] || fail "a codex \$skill must not be routed to the inbox"
+  # A cloud-claude pane runs a relay with no parser, so its slash text is a steer.
+  dir=$(setup_case cloudslash cloud-claude)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- t1 "/review the diff" || fail "a cloud-claude slash send should succeed"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "a cloud-claude slash message should ride the inbox"
+  case "$(cat "$dir/send.log")" in
+  *'/review the diff'*) fail "a cloud-claude slash payload was typed" ;;
+  esac
   # The same `$` message to a non-codex harness is plain text: inbox plane.
   dir=$(setup_case dollartext claude)
   err="$dir/send.err"
@@ -315,7 +323,7 @@ test_harness_invocations_stay_typed() {
   case "$(cat "$dir/send.log")" in
   *'$5/month'*) fail "a non-codex \$-message payload was typed" ;;
   esac
-  pass "fm-send planes: slash and codex \$skill invocations stay typed; plain \$-text rides the inbox"
+  pass "fm-send planes: slash and codex \$skill invocations stay typed; cloud-claude slash text and plain \$-text ride the inbox"
 }
 
 test_explicit_target_stays_typed() {

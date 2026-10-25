@@ -375,7 +375,7 @@ fm_claude_accounts_json() {
 fm_claude_account_select() {
   local harness=$1 config=$2 model=$3 account=$4 raw=${5:-} entries login root status active
   case "$harness" in
-  claude) ;;
+  claude | cloud-claude) ;;
   pi | pi-signed)
     case "$model" in
     claude-bridge/?*) ;;
