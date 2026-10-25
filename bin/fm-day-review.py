@@ -1044,6 +1044,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .rec b{color:#1a4fb5}
 .improved{color:#1f6b3a}.worse{color:#a12a2a}
 .note{color:#6b7486;font-size:13px}
+main.wide{max-width:1500px}td.id{white-space:nowrap}
 @media (max-width:720px){.kpis,.grid2{grid-template-columns:minmax(0,1fr)}.bar{grid-template-columns:minmax(0,1fr) 80px}.track{display:none}}
 """
 
@@ -1061,11 +1062,12 @@ def esc(value) -> str:
     return html.escape(str(value), quote=True)
 
 
-def page(title: str, body: str) -> str:
+def page(title: str, body: str, wide: bool = False) -> str:
+    main = "<main class=\"wide\">" if wide else "<main>"
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        f"<title>{esc(title)}</title><style>{STYLE}</style></head><body><main>{body}</main></body></html>\n"
+        f"<title>{esc(title)}</title><style>{STYLE}</style></head><body>{main}{body}</main></body></html>\n"
     )
 
 
@@ -1147,19 +1149,26 @@ def render_board(numbers: dict) -> str:
 
 def render_full(numbers: dict) -> str:
     out = [f"<h1>Day review numbers, {esc(numbers['day'])}</h1>", f"<p class=\"sub\">{esc(window_sentence(numbers))} <a href=\"board.html\">Back to the board</a></p>"]
-    out.append("<h2>Finished tasks</h2><div class=\"card\"><table><tr><th>Task</th><th>Home</th>")
-    out.extend(f"<th class=\"n\">{esc(label)} min</th>" for _, label in SPLIT_TITLE)
-    out.append("<th class=\"n\">Restarts</th><th class=\"n\">Questions</th><th class=\"n\">Steers</th><th class=\"n\">Tokens</th><th class=\"n\">Price</th><th>Models</th><th class=\"n\">Review e/w/i</th><th>Fix rounds</th><th>PR</th></tr>")
+    def task_cell(t: dict) -> str:
+        title = f"<br><span class=\"note\">{esc(t['title'])}</span>" if t["title"] != t["id"] else ""
+        return f"<td class=\"id\">{esc(t['id'])}{title}</td><td class=\"id\">{esc(t['home'])}</td>"
+
+    out.append("<h2>Where the time went, in minutes</h2><div class=\"card\"><table><tr><th>Task</th><th>Home</th>")
+    out.extend(f"<th class=\"n\">{esc(label)}</th>" for _, label in SPLIT_TITLE)
+    out.append("<th class=\"n\">Restarts</th><th class=\"n\">Questions</th><th class=\"n\">Steers</th></tr>")
+    for t in numbers["tasks"]:
+        out.append("<tr>" + task_cell(t))
+        out.extend(f"<td class=\"n\">{t['minutes'][key]}</td>" for key, _ in SPLIT_TITLE)
+        out.append(f"<td class=\"n\">{t['restarts']}</td><td class=\"n\">{t['questions']}</td><td class=\"n\">{t['steers']}</td></tr>")
+    out.append("</table></div><h2>Price and quality</h2><div class=\"card\"><table><tr><th>Task</th><th>Home</th>")
+    out.append("<th class=\"n\">Tokens</th><th class=\"n\">Price</th><th>Models</th><th class=\"n\">Review errors, warnings, notes</th><th>Fix rounds</th><th>PR</th></tr>")
     for t in numbers["tasks"]:
         rounds = ", ".join(f"{step} {n}" for step, n in sorted(t["fixRounds"].items())) or "none"
         pr = f"<a href=\"{esc(t['pr'])}\">{esc(t['pr'].rsplit('/', 3)[-3] + ' ' + t['pr'].rsplit('/', 1)[-1])}</a>" if t["pr"].startswith("https://") else ""
         models = ", ".join(f"{short_model(k)} {money(v['usd']) if v['priced'] else 'unpriced'}" for k, v in sorted(t["models"].items()))
-        out.append(f"<tr><td>{esc(t['id'])}<br><span class=\"note\">{esc(t['title'])}</span></td><td>{esc(t['home'])}</td>")
-        out.extend(f"<td class=\"n\">{t['minutes'][key]}</td>" for key, _ in SPLIT_TITLE)
         out.append(
-            f"<td class=\"n\">{t['restarts']}</td><td class=\"n\">{t['questions']}</td><td class=\"n\">{t['steers']}</td>"
-            f"<td class=\"n\">{count_tokens(t['tokens'])}</td><td class=\"n\">{money(t['usd'])}</td><td>{esc(models) or 'no log'}</td>"
-            f"<td class=\"n\">{t['review']['error']}/{t['review']['warning']}/{t['review']['info']}</td><td>{esc(rounds)}</td><td>{pr}</td></tr>"
+            "<tr>" + task_cell(t) + f"<td class=\"n\">{count_tokens(t['tokens'])}</td><td class=\"n\">{money(t['usd'])}</td><td>{esc(models) or 'no log'}</td>"
+            f"<td class=\"n\">{t['review']['error']}, {t['review']['warning']}, {t['review']['info']}</td><td>{esc(rounds)}</td><td class=\"id\">{pr}</td></tr>"
         )
     out.append("</table></div><h2>Price by source</h2><div class=\"card\"><table><tr><th>Source</th><th>Home</th><th class=\"n\">Turns</th><th class=\"n\">Price</th></tr>")
     for row in numbers["priceRows"]:
@@ -1185,7 +1194,7 @@ def render_full(numbers: dict) -> str:
     out.append("<p class=\"note\">Durations come from task status records, merge times from the automatic merge log, tokens from worker and supervisor conversation logs and the validation pipeline database, prices from the list prices in bin/fm-day-review.py, and review and CI results from the validation pipeline database.</p>")
     out.extend(f"<p class=\"note\">{esc(gap)}</p>" for gap in numbers["gaps"])
     out.append("</div>")
-    return page(f"Day review numbers {numbers['day']}", "\n".join(out))
+    return page(f"Day review numbers {numbers['day']}", "\n".join(out), wide=True)
 
 
 def write_atomic(path: Path, text: str) -> None:
