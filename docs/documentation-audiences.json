@@ -34,6 +34,7 @@
     "docs/paseo-backend.md",
     "docs/rex-backend.md",
     "docs/t3code-backend.md",
+    "docs/tern-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -103,6 +104,10 @@
     },
     {
       "source": "docs/t3code-backend.md",
+      "target": "docs/verification/runtime-backends.md"
+    },
+    {
+      "source": "docs/tern-backend.md",
       "target": "docs/verification/runtime-backends.md"
     },
     {
@@ -205,6 +210,10 @@
     },
     {
       "path": ".agents/skills/harness-adapters/references/harness/commandcode.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/cortex.md",
       "audience": "agent-runtime"
     },
     {
@@ -337,6 +346,10 @@
     },
     {
       "path": "docs/cmux-backend.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/tern-backend.md",
       "audience": "operator-current"
     },
     {
@@ -573,6 +586,10 @@
     },
     {
       "path": "docs/verification/commandcode.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cortex.md",
       "audience": "maintainer-verification"
     },
     {
