@@ -885,7 +885,7 @@ else
       INBOX_PLANE=1
     else
       case "$RESOLVE_ANSWER_TEXT" in
-      /*) ;;
+      /*) [ "$TARGET_HARNESS" != cloud-claude ] || INBOX_PLANE=1 ;;
       \$*) [ "$TARGET_HARNESS" = codex ] || INBOX_PLANE=1 ;;
       *) INBOX_PLANE=1 ;;
       esac
