@@ -480,6 +480,45 @@ test_lock_reclaims_self_held_steal_mutex() {
   pass "a steal mutex abandoned by this process does not block its own reclaim"
 }
 
+test_lock_native_exit_trap_reclaims_self_held_steal_without_primary() {
+  # A native TERM inside a steal, after the dead primary was removed, leaves
+  # only this process's steal mutex for the EXIT path that re-acquires the lock.
+  # Bash 5 gives a bare return inside that trap the pre-trap status, so the
+  # empty-pid freshness check must not report the absent primary as fresh.
+  local dir state lockdir out rc
+  dir=$(make_case lock-native-exit-self-steal)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  out="$dir/exit-path.out"
+
+  rc=0
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    lock=$2 out=$3
+    exit_path() {
+      if fm_lock_acquire_wait_max "$lock" 2 \
+        && [ "$(cat "$lock/pid" 2>/dev/null)" = "${BASHPID:-$$}" ]; then
+        printf "acquired\n" > "$out"
+        fm_lock_release "$lock"
+      else
+        printf "timed out\n" > "$out"
+      fi
+    }
+    trap exit_path EXIT
+    trap - TERM
+    fm_lock_try_create "$lock.steal" || exit 7
+    kill -TERM "${BASHPID:-$$}"
+    exit 8
+  ' _ "$LIB" "$lockdir" "$out" || rc=$?
+  [ "$rc" -eq 143 ] || fail "native TERM did not end the steal holder (rc=$rc)"
+  [ "$(cat "$out" 2>/dev/null)" = acquired ] \
+    || fail "native TERM exit path could not re-acquire past its own steal mutex ($(cat "$out" 2>/dev/null))"
+  [ ! -e "$lockdir" ] && [ ! -L "$lockdir" ] || fail "native TERM exit path left the lock held"
+  [ ! -e "$lockdir.steal" ] && [ ! -L "$lockdir.steal" ] \
+    || fail "native TERM exit path left its own steal mutex linked"
+  pass "a native TERM exit path reclaims its own steal mutex when no primary remains"
+}
+
 test_lock_resumes_own_interrupted_steal_reap() {
   # A TERM that lands after this process renamed a dead steal owner to its own
   # tombstone, but before it unlinked the mutex, runs the EXIT path, which
@@ -1589,6 +1628,7 @@ test_lock_reclaims_dead_steal_owner_without_nested_markers
 test_lock_recovers_dead_nested_steal_chain
 test_lock_steal_reap_cannot_remove_successor
 test_lock_reclaims_self_held_steal_mutex
+test_lock_native_exit_trap_reclaims_self_held_steal_without_primary
 test_lock_resumes_own_interrupted_steal_reap
 test_lock_live_steal_mutex_is_not_reclaimed
 test_lock_does_not_steal_live_lock

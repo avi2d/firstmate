@@ -364,7 +364,7 @@ fm_harness_pid_alive() {
   if winpid=$(fm_win_untag_pid "$pid"); then
     comm=$(fm_win_command "$winpid") || return 1
     fm_harness_process_matches "$comm" "$comm"
-    return
+    return $?
   fi
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(fm_ps_comm "$pid") || return 1
