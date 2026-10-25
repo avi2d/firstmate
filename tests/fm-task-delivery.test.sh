@@ -444,9 +444,9 @@ test_promotion_persists_the_selected_ship_branch() {
 test_promotion_branch_command_is_shell_safe() {
   local home id prefix marker meta instructions command repo branch
   home="$TMP_ROOT/promote-branch-shell-safe/home"
-  marker="$TMP_ROOT/promote-branch-shell-safe-marker"
   id=promote-branch-safe-e3
-  prefix="\$(touch\${IFS}$marker)/"
+  # shellcheck disable=SC2016 # The prefix's command substitution must stay literal.
+  prefix='$(touch${IFS}shell-safe-marker)/'
   meta="$home/state/$id.meta"
   mkdir -p "$home/state"
   printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
@@ -462,6 +462,7 @@ test_promotion_branch_command_is_shell_safe() {
   command=$(sed -n 's/.*create your branch: `\(.*\)`\.$/\1/p' "$instructions")
   [ -n "$command" ] || fail "promotion instructions exposed no branch-creation command"
   repo="$TMP_ROOT/promote-branch-shell-safe-repo"
+  marker="$repo/shell-safe-marker"
   git init -q "$repo" || fail "could not initialize shell-safety fixture repository"
   ( cd "$repo" && eval "$command" ) || fail "promotion branch-creation command did not run"
   assert_absent "$marker" "promotion branch command executed the prefix's command substitution"
