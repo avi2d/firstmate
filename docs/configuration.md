@@ -1103,7 +1103,7 @@ With an override declaration, at most one non-empty, non-comment line without th
 Any number of override lines can pin named secondmates rather than the whole home:
 
 ```text
-mate <secondmate-id>: <harness> [<model>] [<effort>]
+mate <secondmate-id>: <harness> [<model>] [<effort>] [account=<clauth profile>]
 ```
 
 Override ids use letters, digits, dots, underscores, and hyphens, and matching is case-sensitive.
@@ -1111,7 +1111,7 @@ A mate line replaces the default line for that exact secondmate id, so raising t
 Precedence is the override for that mate's id, then the default line, then `config/crew-harness`, then the primary's own harness.
 An override whose harness token is `default` skips the file's default line and falls back to `config/crew-harness`, then the primary's own harness, contributing no model or effort.
 Blank lines and `#` comments stay legal anywhere, and a mate line is honored wherever it sits in the file.
-In a file that declares an override, a second default line, two overrides for one id, an override with no tokens or more than three, or a `mate` keyword naming an invalid secondmate id is an actionable error: resolution exits nonzero naming the file's line number and prints no token, so malformed pin config cannot resolve to a fallback in silence.
+In a file that declares an override, a second default line, two overrides for one id, an override with no tokens or more than three besides its account, or a `mate` keyword naming an invalid secondmate id is an actionable error: resolution exits nonzero naming the file's line number and prints no token, so malformed pin config cannot resolve to a fallback in silence.
 In a file that declares no override, none of that applies: the legacy first-line rule governs, so an existing, already-valid file is read exactly as it was before this grammar existed.
 
 A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
@@ -1124,6 +1124,13 @@ Every resolution site that knows which mate it is launching passes that id, so s
 `config/crew-harness` remains a bare adapter-name file and is never parsed for a model.
 Changing this pin affects the next secondmate spawn or control-plane relaunch; the relaunch profile rules are owned by [`docs/agent-control.md`](agent-control.md#transactional-relaunch).
 For a separate account choice for one local secondmate, see [per-secondmate account pins](#per-secondmate-account-pins).
+
+An `account=<clauth profile>` token on a mate line names the [Claude account](#claude-accounts-configclaude-accounts) that mate launches on, such as `mate win: pi claude-bridge/opus high account=main`.
+The token can sit anywhere after the colon, and a mate line without one launches with no account.
+The account is resolved on the host the mate runs on, through that home's own `config/claude-accounts`, so a remote mate's folder is mapped in its remote home and never in the primary.
+Every spawn, control-plane relaunch, secondmate restart, and automatic recovery of that mate applies the folder as `CLAUDE_CONFIG_DIR`, under the same checks and refusals as a worker's `--claude-account`.
+An account the host does not map, a folder that is missing or not signed in, or a runtime the account cannot reach refuses before the running agent stops.
+The token is per mate only, so the default line, a second token, or an empty `account=` is an actionable error.
 The regression coverage is in [`fm-secondmate-harness.test.sh`](../tests/fm-secondmate-harness.test.sh), [`fm-control-relaunch.test.sh`](../tests/fm-control-relaunch.test.sh), and [`fm-secondmate-restart.test.sh`](../tests/fm-secondmate-restart.test.sh).
 
 ### Per-launch overrides and inherited defaults
@@ -1436,7 +1443,7 @@ That check runs with the same cleared environment as the worker account pin chec
 The spawn prints and records `claude_account=<name>`.
 Once the map declares an account, a ship or scout spawn or relaunch on a Pi `claude-bridge/<id>` model that names no account refuses before any of those exist, or before the running worker stops, and names `--claude-account` and the declared accounts.
 Without an account the bridge would run on the terminal's ambient Claude login, which clauth folder attach signs out, so the worker would stop at its first turn.
-A secondmate agent, a raw launch command, and a home with no declared account still launch without an account.
+A secondmate agent without a [declared account](#choose-the-secondmate-harness), a raw launch command, and a home with no declared account still launch without an account.
 A relaunch that keeps the same harness and model, or lands on a Pi `claude-bridge/<id>` model, keeps the account under the same check before the running worker stops, and a relaunch onto another profile drops it.
 `fm-control.sh <id> relaunch --claude-account <name>` sets or replaces the account for the replacement.
 

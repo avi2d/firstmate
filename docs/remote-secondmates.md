@@ -132,6 +132,7 @@ It never touches a worker whose checkout still exists.
 
 - The remote account must provide the required toolchain, the selected worker runtime, the selected session backend, and credentials that work on that host.
 - A [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account) for the second mate or its workers lives in the remote home's own configuration on that host.
+- A second mate's [declared Claude account](configuration.md#choose-the-secondmate-harness) is named in the primary and mapped to its folder in the remote home's own `config/claude-accounts`.
 - The origin URL named for each project must be reachable from the remote account, because projects are cloned on that host rather than copied from the primary.
 
 ## Non-interactive tool contract
@@ -433,6 +434,20 @@ The primary then takes these steps:
 
 All remote secondmates on one host share `fm-remote` and retain separate `2ndmate-<id>` workspaces inside it.
 
+Remote placement ends at [`bin/fm-remote-secondmate-control.sh`](../bin/fm-remote-secondmate-control.sh) on the host.
+The second-mate agent always runs on the Herdr backend in `fm-remote`, so that host launch refuses any other selection rather than reading the home's `config/backend`.
+The interactive `default` session stays free for the user's own work.
+`fm-spawn`, `fm-send`, and `fm-teardown` own the local endpoint mechanics on the host, and the home's own workers keep their ordinary backend selection.
+[`bin/fm-remote-doctor.sh`](../bin/fm-remote-doctor.sh) owns the host's readiness for Herdr.
+A private `state/parent-route` directory in the remote home stores only the second mate's own endpoint record.
+The home's own `state/*.meta` stays reserved for the workers that second mate supervises.
+
+The optional launch traceparent is the per-task W3C trace-context carrier that the primary resolved for this second mate.
+The host only delivers it to the pane, and `fm-spawn` validates it through [`bin/fm-trace-context-lib.sh`](../bin/fm-trace-context-lib.sh).
+Omitting it is the default-off path.
+The route block that launch, relaunch, and `route` print echoes the carrier the endpoint actually holds, including for an already-alive endpoint that was not relaunched.
+So the primary records the identity the agent received rather than an intent.
+
 ### Refused and unsupported launches
 
 - An explicit request for any other backend is refused rather than honored, and the remote host refuses one too.
@@ -644,17 +659,24 @@ A live remote second mate is restarted with `relaunch`, which runs the ordinary 
 The endpoint record there was written by a host-local launch and carries no remote placement.
 So the transaction, its checkpoint, and its postconditions are the local ones.
 
-The primary passes `<harness> <model|default|-> <effort|default|->` explicitly, using `default` when an axis has no parent pin.
+The primary passes `<harness> <model|default|-> <effort|default|-> [<claude-account>]` explicitly, using `default` when an axis has no parent pin.
+It passes the account only when the mate declares one, and an omitted account keeps the account the host recorded for the same harness and model.
 It passes them explicitly because `config/secondmate-harness` is not inherited into a second mate's home, and the file on that host belongs to a different home.
 Letting the far side re-resolve it would silently move the mate onto another runtime.
 SSH exit 255 leaves completion unknown and the route preserved, exactly as every other verb here.
+The host's `relaunch` ends by printing the same route block that `route` prints, so a caller that invokes it directly still gets the confirmed identity.
 Move a live remote second mate onto a newly pinned harness, model, or effort with [`bin/fm-remote-secondmate-relaunch.sh`](../bin/fm-remote-secondmate-relaunch.sh) rather than calling `relaunch` through `fm-on.sh` directly: the host-local relaunch it drives can only rewrite the host's own endpoint record, so this wrapper reads the confirmed identity back from that record afterward and republishes the primary's own route metadata to match, the same way launch already records a fresh route.
+A failed or refused relaunch leaves the primary's record untouched.
 
 ### Firstmate code convergence
 
 Session start and every remote launch converge the persistent remote home on the primary's own default-branch commit rather than on the Firstmate copy that host keeps.
 The [`secondmate-provisioning` skill](../.agents/skills/secondmate-provisioning/SKILL.md) owns the guarded convergence contract, including the distinct `/updatefirstmate` behavior, and [`bin/fm-remote-secondmate-control.sh`](../bin/fm-remote-secondmate-control.sh) owns the commit-import mechanics.
 Neither session start nor launch moves the host's own Firstmate copy.
+The host's `sync <id> <parent-commit>` follows the commit the primary resolved on its own checkout, so a remote home tracks the primary exactly like a local one.
+Without a parent commit, `sync` targets the host's own code-root `HEAD`, which is what `/updatefirstmate` wants after it refreshes that code root from origin.
+The remote home is a standalone clone, so the host imports the target commit first.
+The fast-forward itself is the shared one in [`bin/fm-ff-lib.sh`](../bin/fm-ff-lib.sh), which owns the clean, ancestry, and branch guards.
 An unsafe or unavailable target is reported and left untouched.
 A completed sync reports which watched instruction paths its advance changed.
 The primary needs that fact because it cannot diff a checkout it cannot read.
@@ -696,6 +718,18 @@ The portable tests use these pieces:
 - A deterministic SSH boundary.
 - A stateful host-local Herdr CLI fixture.
 - A controlled account fixture for the readiness gate.
+
+The Herdr CLI fixture is [`remote-herdr-fixture.sh`](../tests/remote-herdr-fixture.sh), which a suite installs into the fake host's code root with `install_remote_herdr_fixture`.
+It keeps the workspace, tab, pane, and agent facts that [`bin/backends/herdr.sh`](../bin/backends/herdr.sh) reads in a JSON state file.
+It follows the same verified Herdr behaviors as the stateful fake in [`fm-backend-herdr.test.sh`](../tests/fm-backend-herdr.test.sh).
+Creating a workspace seeds one default tab and returns that tab and its root pane together.
+Closing a tab's only pane closes the tab.
+Reading the agent of a pane that no agent has registered on reports `agent_not_found`.
+A pane reports a registered agent once anything has been typed into it.
+Submitting starts one turn, so the next agent read reports working and the pane then settles back to idle.
+A pane reports its tab's creation directory as its foreground working directory.
+Its agent never exits on its exit command, so a relaunch test starts from an agent-free pane.
+Every call is appended verbatim to the suite's log file, so a test reads back what the remote pane received.
 
 [`fm-remote-job-launchagent.test.sh`](../tests/fm-remote-job-launchagent.test.sh) exercises the real worker with stubbed asynchronous `launchctl`, covering slow claim sweeps, missing readiness recovery during a sweep, stale readiness without reload, concurrent repair, untracked owners, interrupted repairs, and asynchronous service removal before bootstrap.
 The lifecycle test covers seeding a registered project that this machine has never cloned.

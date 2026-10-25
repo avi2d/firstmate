@@ -1424,6 +1424,55 @@ test_secondmate_relaunch_picks_up_the_configured_harness_pin() {
   pass "fm-control relaunch: a secondmate relaunch re-resolves its durable configured harness pin"
 }
 
+test_secondmate_relaunch_applies_the_declared_claude_account() {
+  local dir home out rc
+  dir=$(new_case smacct sm4)
+  home="$dir/home"
+  make_claude_auth_stub "$dir"
+  mkdir -p "$home/config" "$home/data/sm4" "$dir/main"
+  : > "$dir/main/.credentials.json"
+  printf 'main %s\n' "$dir/main" > "$home/config/claude-accounts"
+  printf 'codex some-model high\nmate sm4: claude opus account=main\n' > "$home/config/secondmate-harness"
+  printf '# secondmate brief\n' > "$home/data/sm4/brief.md"
+  fm_git_worktree "$dir/proj" "$dir/smhome" sm-branch
+  mkdir -p "$dir/smhome/state" "$dir/smhome/data" "$dir/smhome/bin"
+  printf 'sm4\n' > "$dir/smhome/.fm-secondmate-home"
+  printf '# agents\n' > "$dir/smhome/AGENTS.md"
+  {
+    echo "window=fmses:fm-sm4"
+    echo "endpoint_task_id=sm4"
+    echo "worktree=$dir/smhome"
+    echo "project=$dir/smhome"
+    echo "harness=claude"
+    echo "kind=secondmate"
+    echo "mode=secondmate"
+    echo "yolo=off"
+    echo "model=opus"
+    echo "effort=default"
+    echo "home=$dir/smhome"
+  } > "$home/state/sm4.meta"
+  printf '%s' "$dir/smhome" > "$dir/fake/cwd"
+  out=$(run_control "$dir" sm4 relaunch); rc=$?
+  expect_code 0 "$rc" "a secondmate with a declared account should relaunch"$'\n'"$out"
+  assert_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR='$dir/main'" \
+    "the declared account's folder should reach the launch"
+  [ "$(meta_field "$dir" sm4 claude_account)" = main ] || fail "the relaunched record should carry the declared account"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" sm4 relaunch --claude-account default); rc=$?
+  expect_code 0 "$rc" "an explicit default account should relaunch"$'\n'"$out"
+  assert_not_contains "$(cat "$dir/fake/literal")" "CLAUDE_CONFIG_DIR=" \
+    "an explicit default account must launch on the vendor default folder"
+  assert_no_grep "claude_account=" "$home/state/sm4.meta" "an explicit default account must clear the record"
+  rm "$dir/main/.credentials.json"
+  : > "$dir/fake/literal"
+  out=$(run_control "$dir" sm4 relaunch); rc=$?
+  expect_code 1 "$rc" "a declared account that is signed out must refuse"
+  assert_contains "$out" "maps account main to $dir/main, which is not signed in" \
+    "the refusal should name the declared account and its signed-out folder"
+  [ ! -s "$dir/fake/literal" ] || fail "a signed-out declared account must refuse before any lifecycle input is sent"
+  pass "fm-control relaunch: a secondmate relaunch applies the account its pin line declares"
+}
+
 # The relaunch half of the opt-in scope: a pin file that declares no
 # "mate <id>:" line is read exactly as it was before that grammar existed, so a
 # second default line and a fourth token must not stop the relaunch. The mate
@@ -3311,6 +3360,7 @@ test_prior_harness_turnend_registry_entry_is_cleared
 test_wiring_removal_failure_refuses_before_replacement_arm
 test_turnend_auth_paths_are_owned_by_the_control_adapter
 test_secondmate_relaunch_picks_up_the_configured_harness_pin
+test_secondmate_relaunch_applies_the_declared_claude_account
 test_secondmate_claude_relaunch_keeps_local_settings
 test_secondmate_relaunch_lands_on_the_per_mate_pin
 test_secondmate_relaunch_uses_the_default_for_an_unpinned_mate

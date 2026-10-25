@@ -1225,7 +1225,8 @@ FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$LOCAL_HOME" \
   || fail "local fixture did not publish its home ledger"
 remote_env "$ROOT/bin/fm-on.sh" ios fm-home-summary-refresh.sh >/dev/null \
   || fail "remote fixture did not publish its home ledger"
-SNAPSHOT=$(remote_env "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+# The default 5-second budget fails this source check on a loaded host.
+SNAPSHOT=$(FM_SNAPSHOT_BUDGET=60 remote_env "$ROOT/bin/fm-fleet-snapshot.sh" --json)
 if ! printf '%s' "$SNAPSHOT" | jq -e '.secondmate_current.records | any(.id == "ios" and .remote == true and .host == "remote-mac" and .provenance.selected == "structured-home")' >/dev/null; then
   printf 'secondmate projection:\n%s\n' "$(printf '%s' "$SNAPSHOT" | jq '.secondmate_current')" >&2
   fail "fleet snapshot did not select the remote structured-home projection"
@@ -1276,6 +1277,45 @@ cp "$TMP_ROOT/ios-before-relaunch.meta" "$RELAUNCH_ROUTE_META"
 [ "$(remote_env "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state ios)" = alive ] \
   || fail "a refused remote restart must leave the running agent untouched"
 pass "the remote restart verb delegates to the host-local control plane and refuses before stopping anything"
+
+# The host maps the account to a folder, so the folder appears only in the
+# launch command the host itself types.
+ACCOUNT_DIR="$TMP_ROOT/claude-accounts/main"
+mkdir -p "$ACCOUNT_DIR"
+printf 'main %s\n' "$ACCOUNT_DIR" > "$REMOTE_HOME/config/claude-accounts"
+# The fixture's agent never exits on its exit command, so each relaunch starts
+# from an agent-free pane and launches without stopping anything.
+relaunch_typed() {  # <relaunch args...>
+  local before out pane script
+  pane=$(sed -n 's/^herdr_pane_id=//p' "$REMOTE_HOME/state/parent-route/ios.meta")
+  jq --arg p "$pane" \
+    '.typed |= with_entries(select(.key != $p)) | .working |= with_entries(select(.key != $p))' \
+    "$HERDR_STATE" > "$TMP_ROOT/herdr-agent-free.json" && mv "$TMP_ROOT/herdr-agent-free.json" "$HERDR_STATE"
+  before=$(wc -l < "$HERDR_LOG")
+  out=$(remote_env env -u CLAUDE_CONFIG_DIR "$ROOT/bin/fm-remote-secondmate-relaunch.sh" "$@" 2>&1) \
+    || fail "remote relaunch $* failed: $out"
+  script=$(tail -n +"$((before + 1))" "$HERDR_LOG" \
+    | sed -n "s/^pane send-text [^ ]*  \. '\(.*\)' --session .*/\1/p" | tail -n 1)
+  [ -f "$script" ] || fail "remote relaunch $* typed no launch script: $(tail -n +"$((before + 1))" "$HERDR_LOG")"
+  cat "$script"
+}
+TYPED=$(relaunch_typed ios claude default default)
+assert_contains "$TYPED" ' claude ' "the undeclared relaunch typed no claude launch: $TYPED"
+assert_not_contains "$TYPED" 'CLAUDE_CONFIG_DIR' \
+  "a relaunch with no declared account must not choose a Claude config folder"
+! grep -q '^claude_account=' "$PARENT/state/ios.meta" \
+  || fail "a relaunch with no declared account recorded one: $(cat "$PARENT/state/ios.meta")"
+TYPED=$(relaunch_typed ios claude default default main)
+assert_contains "$TYPED" "CLAUDE_CONFIG_DIR='$ACCOUNT_DIR'" \
+  "the declared account's folder did not reach the host's launch command: $TYPED"
+grep -qx 'claude_account=main' "$PARENT/state/ios.meta" \
+  || fail "the parent route record did not record the account the host confirmed: $(cat "$PARENT/state/ios.meta")"
+TYPED=$(relaunch_typed ios codex default default)
+assert_not_contains "$TYPED" 'CLAUDE_CONFIG_DIR' \
+  "a Claude config folder outlived the move off the declared account"
+! grep -q '^claude_account=' "$PARENT/state/ios.meta" \
+  || fail "the parent route record kept an account the host no longer runs: $(cat "$PARENT/state/ios.meta")"
+pass "a remote relaunch launches with CLAUDE_CONFIG_DIR only for a declared account"
 
 
 rm -f "$TMP_ROOT/doctor.repaired"
