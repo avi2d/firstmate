@@ -32,8 +32,23 @@ TMPDIR_WORK="${TMPDIR:-/tmp}/fm-tasks-report-$$"
 mkdir -p "$TMPDIR_WORK"
 trap 'rm -rf "$TMPDIR_WORK"' EXIT
 
-meta_last() {
-  grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true
+read_meta() {
+  local line
+  m_kind='' m_mode='' m_branch='' m_project='' m_spawn_gen='' m_first_spawn_gen='' m_worktree='' m_remote_host=''
+  [ -r "$1" ] || return 0
+  # The last line for a key wins.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      kind=*) m_kind=${line#kind=} ;;
+      mode=*) m_mode=${line#mode=} ;;
+      branch=*) m_branch=${line#branch=} ;;
+      project=*) m_project=${line#project=} ;;
+      spawn_gen=*) m_spawn_gen=${line#spawn_gen=} ;;
+      first_spawn_gen=*) m_first_spawn_gen=${line#first_spawn_gen=} ;;
+      worktree=*) m_worktree=${line#worktree=} ;;
+      remote_host=*) m_remote_host=${line#remote_host=} ;;
+    esac
+  done <"$1"
 }
 
 planned_section_ids() {
@@ -44,95 +59,74 @@ planned_section_ids() {
   ' "$1"
 }
 
-planned_show_field() {
-  sed -n "s/^  $2: //p" "$1" | head -1
-}
-
-planned_value() {
-  local v
-  v=$(cat)
-  # The star stays unquoted: a quoted star matches literally.
-  case "$v" in '"'*'"') v=${v#\"}; v=${v%\"} ;; esac
-  if [ "$v" = "-" ] || [ "$v" = "none" ] || [ "$v" = "" ]; then printf ''; return 0; fi
-  printf '%s' "$v"
-}
-
-planned_title() {
-  local v
-  v=$(cat)
-  # The star stays unquoted: a quoted star matches literally.
-  case "$v" in '"'*'"') v=${v#\"}; v=${v%\"} ;; esac
-  printf '%s' "$v"
+planned_row() {
+  local home=$1 name=$2 id=$3 out=$4
+  FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" show "$id" --full >"$out.show" 2>/dev/null || return 0
+  jq -R -n --arg id "$id" --arg home "$name" '
+    [inputs] as $lines
+    | def field($k): ("  " + $k + ": ") as $p
+        | first($lines[] | select(startswith($p)) | .[($p | length):]) // "";
+      def unquote: if length >= 2 and startswith("\"") and endswith("\"") then .[1:-1] else . end;
+      def value: unquote | if . == "-" or . == "none" then "" else . end;
+      (field("title") | unquote) as $title
+    | (field("repo") | value) as $repo
+    | (field("kind") | value) as $kind
+    | (field("created") | value) as $created
+    | (field("blocked_by") | value) as $blocked_by
+    | (field("held") | value) as $held
+    | (field("hold_reason") | value) as $hold_reason
+    | (field("hold_kind") | value) as $hold_kind
+    | (field("blocked") | value) as $blocked
+    | (($repo | split("/") | last) // "" | if . == "" then "?" else . end) as $project
+    | {
+      group: (if $held == "yes" then "held" elif $blocked == "yes" then "blocked" else "other" end),
+      row: {id: $id, title: $title, project: $project, kind: $kind, home: $home,
+        queuedOn: (if $created == "" then null else $created end),
+        hold: (if $held == "yes"
+          then {kind: (if $hold_kind == "captain" or $hold_kind == "external" then $hold_kind else "unstated" end), reason: $hold_reason}
+          else null end),
+        after: ($blocked_by | if . == "" then [] else split(",") end)}
+    }' <"$out.show" >"$out.json" || rm -f "$out.json"
 }
 
 collect_home_planned() {
   local home=$1 out=$2 tag=$3
-  local name ready_f queued_f show_f rows_f groups_f emitted_f ordered_f
-  local ready_ids queued_ids id title repo project kind created blocked_by blocked held hold_reason hold_kind group pass
+  local name work ready_ids queued_ids id unique_ids pids="" batch=0 p
   printf '[]' >"$out"
   name=$(basename "$home")
-  ready_f="$TMPDIR_WORK/planned-$tag.ready"
-  queued_f="$TMPDIR_WORK/planned-$tag.queued"
-  show_f="$TMPDIR_WORK/planned-$tag.show"
-  rows_f="$TMPDIR_WORK/planned-$tag.rows"
-  groups_f="$TMPDIR_WORK/planned-$tag.groups"
-  emitted_f="$TMPDIR_WORK/planned-$tag.emitted"
-  ordered_f="$TMPDIR_WORK/planned-$tag.ordered"
-  mkdir -p "$rows_f"
-  : >"$groups_f"
-  : >"$emitted_f"
-  : >"$ordered_f"
-  FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" ready >"$ready_f" 2>/dev/null || return 0
-  FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" list --state queued >"$queued_f" 2>/dev/null || return 0
-  ready_ids=$(planned_section_ids "$ready_f" ready)
-  queued_ids=$(planned_section_ids "$queued_f" tasks)
+  work="$TMPDIR_WORK/planned-$tag"
+  mkdir -p "$work/rows"
+  FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" ready >"$work/ready" 2>/dev/null || return 0
+  FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" list --state queued >"$work/queued" 2>/dev/null || return 0
+  ready_ids=$(planned_section_ids "$work/ready" ready)
+  queued_ids=$(planned_section_ids "$work/queued" tasks)
   [ -n "$queued_ids" ] || return 0
-  for id in $queued_ids; do
-    FM_HOME="$home" "$SCRIPT_DIR/fm-tasks-axi.sh" show "$id" --full >"$show_f" 2>/dev/null || continue
-    title=$(planned_show_field "$show_f" title | planned_title)
-    repo=$(planned_show_field "$show_f" repo | planned_value)
-    kind=$(planned_show_field "$show_f" kind | planned_value)
-    created=$(planned_show_field "$show_f" created | planned_value)
-    blocked_by=$(planned_show_field "$show_f" blocked_by | planned_value)
-    held=$(planned_show_field "$show_f" held | planned_value)
-    hold_reason=$(planned_show_field "$show_f" hold_reason | planned_value)
-    hold_kind=$(planned_show_field "$show_f" hold_kind | planned_value)
-    blocked=$(planned_show_field "$show_f" blocked | planned_value)
-    if [ "$held" = yes ]; then group=held
-    elif [ "$blocked" = yes ]; then group=blocked
-    else group=other; fi
-    printf '%s %s\n' "$id" "$group" >>"$groups_f"
-    project=${repo##*/}
-    [ -n "$project" ] || project="?"
-    case "$hold_kind" in captain) ;; external) ;; *) hold_kind=unstated ;; esac
-    jq -n --arg id "$id" --arg title "$title" --arg project "$project" --arg kind "$kind" \
-      --arg home "$name" --arg created "$created" --arg held "$held" \
-      --arg hold_kind "$hold_kind" --arg hold_reason "$hold_reason" --arg blocked_by "$blocked_by" \
-      '($blocked_by | if . == "" then [] else split(",") end) as $after
-      | {id: $id, title: $title, project: $project, kind: $kind, home: $home,
-        queuedOn: (if $created == "" then null else $created end),
-        hold: (if $held == "yes" then {kind: $hold_kind, reason: $hold_reason} else null end),
-        after: $after}' >"$rows_f/$id.json" || continue
+  for id in $ready_ids; do printf '%s\n' "$id"; done >"$work/ready.ids"
+  for id in $queued_ids; do printf '%s\n' "$id"; done >"$work/queued.ids"
+  unique_ids=$(awk '!seen[$0]++' "$work/queued.ids")
+  # Each show starts its own tasks-axi, so the reads run side by side.
+  for id in $unique_ids; do
+    planned_row "$home" "$name" "$id" "$work/rows/$id" &
+    pids="$pids $!"
+    batch=$((batch + 1))
+    if [ "$batch" -ge "$READ_CONCURRENCY" ]; then
+      for p in $pids; do wait "$p" || true; done
+      pids=""
+      batch=0
+    fi
   done
-  for id in $ready_ids; do
-    [ -f "$rows_f/$id.json" ] || continue
-    grep -qxF "$id" "$emitted_f" 2>/dev/null && continue
-    printf '%s\n' "$id" >>"$ordered_f"
-    printf '%s\n' "$id" >>"$emitted_f"
-  done
-  for pass in held blocked other; do
-    for id in $queued_ids; do
-      grep -qxF "$id" "$emitted_f" 2>/dev/null && continue
-      awk -v id="$id" -v want="$pass" '$1 == id && $2 == want { found = 1 } END { exit !found }' "$groups_f" || continue
-      printf '%s\n' "$id" >>"$ordered_f"
-      printf '%s\n' "$id" >>"$emitted_f"
-    done
-  done
-  [ -s "$ordered_f" ] || return 0
-  while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    cat "$rows_f/$id.json"
-  done <"$ordered_f" | jq -s '.' >"$out"
+  for p in $pids; do wait "$p" || true; done
+  for id in $unique_ids; do
+    [ -f "$work/rows/$id.json" ] && cat "$work/rows/$id.json"
+  done | jq -s --rawfile ready "$work/ready.ids" --rawfile queued "$work/queued.ids" '
+    (map({key: .row.id, value: .}) | from_entries) as $rec
+    | ($ready | split("\n") | map(select(. != ""))) as $r
+    | ($queued | split("\n") | map(select(. != ""))) as $q
+    | [($r[] | select($rec[.] != null)),
+       (("held", "blocked", "other") as $pass | $q[] | select($rec[.].group == $pass))]
+    | reduce .[] as $id ({seen: {}, ids: []};
+        if .seen[$id] then . else .seen[$id] = true | .ids += [$id] end)
+    | [.ids[] | $rec[.].row]' >"$out"
 }
 
 discover_homes() {
@@ -219,10 +213,54 @@ observe_remote_stub() {
     '{id:$id,state:"unknown",detail:"remote endpoint liveness not probed by this report",blocked:($blocked == 1)}' >>"$out"
 }
 
+pipeline_folders() {  # <home> <id> <branch> <worktree>
+  local home=$1 id=$2 branch=$3 worktree=$4
+  local nm_out block_id block_status block_branch runs line run run_branch folder
+  [ -d "$worktree" ] || return 0
+  nm_out=$(cd "$worktree" 2>/dev/null && no-mistakes axi status 2>/dev/null || true)
+  [ -n "$nm_out" ] || return 0
+  block_id=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*id: "([A-Z0-9]+)".*/\1/p' | head -1)
+  block_status=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*status: ([A-Za-z]+).*/\1/p' | head -1)
+  block_branch=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*branch: ([^[:space:]]+).*/\1/p' | head -1)
+  runs=$(printf '%s' "$nm_out" | grep -E '^[[:space:]]*"[A-Z0-9]+",[^,]+,(running|fixing),' || true)
+  if [ -n "$block_id" ] && { [ "$block_status" = running ] || [ "$block_status" = fixing ]; }; then
+    runs=$(printf '  "%s",%s,%s,\n%s' "$block_id" "$block_branch" "$block_status" "$runs")
+  fi
+  [ -n "$runs" ] || return 0
+  while IFS= read -r line; do
+    run=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*"([A-Z0-9]+)".*/\1/')
+    run_branch=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*"[A-Z0-9]+",([^,]+),.*/\1/')
+    [ -n "$run" ] || continue
+    [ "$run_branch" = "$branch" ] || continue
+    for folder in "$HOME"/.no-mistakes/worktrees/*/"$run"; do
+      [ -d "$folder" ] || continue
+      printf '%s\x1f%s\t%s\n' "$home" "$id" "$folder"
+    done
+  done <<<"$runs"
+}
+
+collect_home_pipelines() {  # <home> <work>
+  local home=$1 work=$2 id branch worktree n=0 pids="" batch=0 p
+  mkdir -p "$work/pipes"
+  # The unit separator keeps an empty branch as its own field, which a tab would collapse.
+  while IFS=$'\x1f' read -r id branch worktree; do
+    n=$((n + 1))
+    pipeline_folders "$home" "$id" "$branch" "$worktree" >"$work/pipes/$n.tsv" &
+    pids="$pids $!"
+    batch=$((batch + 1))
+    if [ "$batch" -ge "$READ_CONCURRENCY" ]; then
+      for p in $pids; do wait "$p" || true; done
+      pids=""
+      batch=0
+    fi
+  done <"$work/pipes.in"
+  for p in $pids; do wait "$p" || true; done
+}
+
 collect_home_snapshot() {
   local home=$1 snap_bin=$2 out=$3
   local snap_dir crew_state work meta id kind mode branch project spawn_gen first_spawn_gen worktree present remote_host
-  local pids="" batch=0 rc=0 contrib_pid=""
+  local pids="" batch=0 rc=0 contrib_pid="" pipes_pid=""
   snap_dir=$(dirname "$snap_bin")
   crew_state="$snap_dir/fm-crew-state.sh"
   [ -x "$crew_state" ] || crew_state="$SCRIPT_DIR/fm-crew-state.sh"
@@ -231,6 +269,7 @@ collect_home_snapshot() {
   : >"$work/base.jsonl"
   : >"$work/obs.jsonl"
   : >"$work/live.tsv"
+  : >"$work/pipes.in"
   if command -v timeout >/dev/null 2>&1; then
     FM_HOME="$home" timeout 120 "$snap_bin" --contribution-input >"$work/contrib.json" 2>"$work/contrib.err" &
   else
@@ -239,22 +278,25 @@ collect_home_snapshot() {
   contrib_pid=$!
   for meta in "$home"/state/*.meta; do
     [ -e "$meta" ] || continue
-    id=$(basename "$meta" .meta)
-    kind=$(meta_last "$meta" kind)
+    id=${meta##*/}
+    id=${id%.meta}
+    read_meta "$meta"
+    kind=$m_kind
     [ -n "$kind" ] || kind=ship
-    mode=$(meta_last "$meta" mode)
-    branch=$(meta_last "$meta" branch)
-    project=$(meta_last "$meta" project)
-    spawn_gen=$(meta_last "$meta" spawn_gen)
-    first_spawn_gen=$(meta_last "$meta" first_spawn_gen)
-    worktree=$(meta_last "$meta" worktree)
+    mode=$m_mode
+    branch=$m_branch
+    project=$m_project
+    spawn_gen=$m_spawn_gen
+    first_spawn_gen=$m_first_spawn_gen
+    worktree=$m_worktree
     present=false
     if [ -n "$worktree" ] && [ -e "$worktree" ]; then present=true; fi
     jq -n --arg id "$id" --arg kind "$kind" --arg mode "$mode" --arg branch "$branch" --arg project "$project" \
       --arg spawn_gen "$spawn_gen" --arg first_spawn_gen "$first_spawn_gen" \
       --arg worktree "$worktree" --argjson worktree_present "$present" \
       '{id:$id,kind:$kind,mode:$mode,branch:$branch,project:$project,spawn_gen:$spawn_gen,first_spawn_gen:$first_spawn_gen,worktree:$worktree,worktree_present:$worktree_present}' >>"$work/base.jsonl"
-    remote_host=$(meta_last "$meta" remote_host)
+    [ "$present" = false ] || printf '%s\x1f%s\x1f%s\n' "$id" "$branch" "$worktree" >>"$work/pipes.in"
+    remote_host=$m_remote_host
     if [ -n "$remote_host" ]; then
       # An observation only surfaces for a live task, and reading a status
       # file walks it line by line, which costs seconds on large secondmate logs.
@@ -263,6 +305,10 @@ collect_home_snapshot() {
     fi
     printf '%s\t%s\t%s\n' "$id" "$kind" "$home/state/$id.status" >>"$work/live.tsv"
   done
+  if [ "$HAVE_NO_MISTAKES" = 1 ]; then
+    collect_home_pipelines "$home" "$work" &
+    pipes_pid=$!
+  fi
   while IFS="$TAB" read -r id kind status_path; do
     [ -n "${id:-}" ] || continue
     observe_task "$crew_state" "$home" "$id" "$kind" "$status_path" "$work/obs.jsonl" &
@@ -275,6 +321,7 @@ collect_home_snapshot() {
     fi
   done <"$work/live.tsv"
   for p in $pids; do wait "$p" || rc=1; done
+  [ -z "$pipes_pid" ] || wait "$pipes_pid" || true
   [ "$rc" -eq 0 ] || return 1
   wait "$contrib_pid" || {
     echo "error: fleet snapshot failed for $home: $(head -c 300 "$work/contrib.err")" >&2
@@ -312,6 +359,8 @@ collect_home_snapshot() {
 }
 
 TAB=$(printf '\t')
+HAVE_NO_MISTAKES=0
+if command -v no-mistakes >/dev/null 2>&1; then HAVE_NO_MISTAKES=1; fi
 
 HOMES_FILE="$TMPDIR_WORK/homes"
 discover_homes >"$HOMES_FILE" || exit 1
@@ -320,10 +369,8 @@ discover_homes >"$HOMES_FILE" || exit 1
   exit 1
 }
 
-ORCH_VERSION="unknown"
-if git -C "$SCRIPT_DIR" rev-parse --short HEAD >/dev/null 2>&1; then
-  ORCH_VERSION=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)
-fi
+ORCH_VERSION=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null) || ORCH_VERSION=""
+[ -n "$ORCH_VERSION" ] || ORCH_VERSION="unknown"
 GENERATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 TODAY=$(date -u +%F)
 YESTERDAY=$(jq -n --arg d "$TODAY" '$d | strptime("%Y-%m-%d") | mktime - 86400 | strftime("%Y-%m-%d")' -r)
@@ -338,8 +385,23 @@ while IFS= read -r home; do
   N=$((N + 1))
   snap="$home/bin/fm-fleet-snapshot.sh"
   [ -x "$snap" ] || snap="$SCRIPT_DIR/fm-fleet-snapshot.sh"
-  collect_home_planned "$home" "$PLANNED_DIR/$N.json" "$N"
-  collect_home_snapshot "$home" "$snap" "$SNAPS_DIR/$N.json" "$N" || exit 1
+  collect_home_snapshot "$home" "$snap" "$SNAPS_DIR/$N.json" "$N" 2>"$TMPDIR_WORK/snap-$N.err" &
+  SNAP_PIDS[N]=$!
+  collect_home_planned "$home" "$PLANNED_DIR/$N.json" "$N" 2>"$TMPDIR_WORK/planned-$N.err" &
+  PLANNED_PIDS[N]=$!
+done <"$HOMES_FILE"
+# Homes are read side by side, and the first failing home in discovery order is the one named.
+N=0
+while IFS= read -r home; do
+  [ -n "$home" ] || continue
+  N=$((N + 1))
+  rc=0
+  wait "${PLANNED_PIDS[N]}" || rc=1
+  cat "$TMPDIR_WORK/planned-$N.err" >&2
+  [ "$rc" -eq 0 ] || exit 1
+  wait "${SNAP_PIDS[N]}" || rc=1
+  cat "$TMPDIR_WORK/snap-$N.err" >&2
+  [ "$rc" -eq 0 ] || exit 1
   jq -e '.schema == "fm-fleet-snapshot.v1"' "$SNAPS_DIR/$N.json" >/dev/null || {
     echo "error: unexpected snapshot schema for $home" >&2
     exit 1
@@ -347,40 +409,8 @@ while IFS= read -r home; do
 done <"$HOMES_FILE"
 
 PIPES="$TMPDIR_WORK/pipes.json"
-echo '{}' >"$PIPES"
-if command -v no-mistakes >/dev/null 2>&1; then
-  while IFS= read -r row; do
-    home=${row%%$'\t'*}
-    rest=${row#*$'\t'}
-    id=${rest%%$'\t'*}
-    rest=${rest#*$'\t'}
-    branch=${rest%%$'\t'*}
-    worktree=${rest#*$'\t'}
-    [ -d "$worktree" ] || continue
-    nm_out=$(cd "$worktree" 2>/dev/null && no-mistakes axi status 2>/dev/null || true)
-    [ -n "$nm_out" ] || continue
-    block_id=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*id: "([A-Z0-9]+)".*/\1/p' | head -1)
-    block_status=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*status: ([A-Za-z]+).*/\1/p' | head -1)
-    block_branch=$(printf '%s' "$nm_out" | sed -n -E 's/^[[:space:]]*branch: ([^[:space:]]+).*/\1/p' | head -1)
-    runs=$(printf '%s' "$nm_out" | grep -E '^[[:space:]]*"[A-Z0-9]+",[^,]+,(running|fixing),' || true)
-    if [ -n "$block_id" ] && { [ "$block_status" = running ] || [ "$block_status" = fixing ]; }; then
-      runs=$(printf '  "%s",%s,%s,\n%s' "$block_id" "$block_branch" "$block_status" "$runs")
-    fi
-    [ -n "$runs" ] || continue
-    while IFS= read -r line; do
-      run=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*"([A-Z0-9]+)".*/\1/')
-      run_branch=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*"[A-Z0-9]+",([^,]+),.*/\1/')
-      [ -n "$run" ] || continue
-      [ "$run_branch" = "$branch" ] || continue
-      for folder in "$HOME"/.no-mistakes/worktrees/*/"$run"; do
-        [ -d "$folder" ] || continue
-        key="$home"$'\x1f'"$id"
-        jq --arg k "$key" --arg f "$folder" '.[$k] += [$f]' "$PIPES" >"$PIPES.new"
-        mv "$PIPES.new" "$PIPES"
-      done
-    done <<<"$runs"
-  done < <(jq -n -r '[inputs | .fm_home as $h | .tasks[]? | select(.paths.worktree.present == true) | (.branch // "") as $b | "\($h)\t\(.id)\t\($b)\t\(.paths.worktree.path)" ] | .[]' "$SNAPS_DIR"/*.json)
-fi
+cat "$TMPDIR_WORK"/home-*/pipes/*.tsv 2>/dev/null | jq -R -n '
+  reduce (inputs | split("\t") | [.[0], (.[1:] | join("\t"))]) as [$k, $f] ({}; .[$k] += [$f])' >"$PIPES"
 
 jq -s 'add // []' "$PLANNED_DIR"/*.json >"$TMPDIR_WORK/planned.json"
 
