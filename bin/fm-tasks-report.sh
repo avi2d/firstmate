@@ -213,6 +213,37 @@ observe_remote_stub() {
     '{id:$id,state:"unknown",detail:"remote endpoint liveness not probed by this report",blocked:($blocked == 1)}' >>"$out"
 }
 
+stream_span() {  # <status-file> -> span_start span_end
+  local line verb at last=''
+  span_start='' span_end=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    _fm_status_at_epoch "$line" at || continue
+    if [ -z "$span_start" ] || [ "$at" -lt "$span_start" ]; then span_start=$at; fi
+    last=$at
+    status_line_verb "$line" verb
+    case "$verb" in done|failed) span_end=$at ;; esac
+  done <"$1"
+  [ -n "$span_end" ] || span_end=$last
+}
+
+collect_home_spans() {  # <home> <work>
+  local home=$1 work=$2 id f
+  : >"$work/spans.tsv"
+  while IFS= read -r id; do
+    case "$id" in ''|*/*|.*) continue ;; esac
+    for f in "$home/state/status-archive/$id"/*.status "$home/data/$id"/status.log "$home/data/$id"/status.[0-9]*.log; do
+      [ -f "$f" ] || continue
+      stream_span "$f"
+      [ -z "$span_end" ] || printf 'archived\t%s\t%s\t%s\n' "$id" "$span_start" "$span_end" >>"$work/spans.tsv"
+    done
+  done < <(jq -r '.backlog.records[]? | select(.state == "done") | .id' "$work/contrib.json")
+  while IFS= read -r id; do
+    [ -f "$home/state/$id.status" ] || continue
+    stream_span "$home/state/$id.status"
+    [ -z "$span_end" ] || printf 'live\t%s\t%s\t%s\n' "$id" "$span_start" "$span_end" >>"$work/spans.tsv"
+  done < <(jq -r 'select(.state == "done") | .id' "$work/obs.jsonl")
+}
+
 pipeline_folders() {  # <home> <id> <branch> <worktree>
   local home=$1 id=$2 branch=$3 worktree=$4
   local nm_out block_id block_status block_branch runs line run run_branch folder
@@ -327,10 +358,12 @@ collect_home_snapshot() {
     echo "error: fleet snapshot failed for $home: $(head -c 300 "$work/contrib.err")" >&2
     return 1
   }
+  collect_home_spans "$home" "$work"
   jq -n --arg fm_home "$home" \
     --slurpfile base "$work/base.jsonl" \
     --slurpfile obs "$work/obs.jsonl" \
-    --slurpfile contrib "$work/contrib.json" '
+    --slurpfile contrib "$work/contrib.json" \
+    --rawfile spans "$work/spans.tsv" '
     ($contrib[0].backlog) as $backlog
     | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
       ($obs | map({key:.id, value:.}) | from_entries) as $o
@@ -338,6 +371,9 @@ collect_home_snapshot() {
       schema: "fm-fleet-snapshot.v1",
       fm_home: $fm_home,
       backlog: $backlog,
+      spans: (reduce ($spans | split("\n")[] | select(. != "") | split("\t")) as [$where, $id, $start, $end] ({live: {}, archived: {}};
+        ({start: ($start | tonumber), end: ($end | tonumber)}) as $span
+        | if (.[$where][$id].end // -1) < $span.end then .[$where][$id] = $span else . end)),
       tasks: ([$base[]
         | .id as $id
         | ($o[$id] // {}) as $ob
@@ -423,6 +459,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
       elif $kind == "ship" and $mode == "local-only" then "local only"
       elif $kind == "scout" then "scout"
       else $kind end;
+    def iso: if . == null then null else strftime("%Y-%m-%dT%H:%M:%SZ") end;
     (map(
     . as $snap | ($snap.fm_home // "?") as $home
     | ([$snap.tasks[]? | .id]) as $live
@@ -450,7 +487,7 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           detail: ((($t.current_state.detail // "") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
           startedAt: $started,
           firstStartedAt: ($first // $started),
-          endedAt: (if $st == "done" then $generated_at else null end),
+          endedAt: (if $st == "done" then ($snap.spans.live[$t.id].end | iso) // $generated_at else null end),
           folders: ([($t.paths.worktree.path // null) | select(. != null and . != "")] + $extra | unique),
           branches: ([($t.branch // "") | select(. != "")])
         }],
@@ -459,7 +496,9 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
         | select((.id as $id | $live | index($id) | not))
         | select((.completion.date // "") >= $yesterday)
         | . as $r
-        | $generated_at as $ended
+        | ($snap.spans.archived[$r.id] // null) as $span
+        | (($span.end | iso) // $generated_at) as $ended
+        | (($span.start | iso) // $ended) as $started
         | {
           id: $r.id,
           title: ((($r.title // $r.id) | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
@@ -467,8 +506,8 @@ jq -c -s --arg generated_at "$GENERATED_AT" --arg yesterday "$YESTERDAY" \
           kind: stage_kind((($r.kind // "") | tostring); ""),
           state: "done",
           detail: ((($r.completion.verb // "done") | tostring) | gsub("[\u0000-\u001f]"; " ") | if length > 300 then .[:297] + "..." else . end),
-          startedAt: $ended,
-          firstStartedAt: $ended,
+          startedAt: $started,
+          firstStartedAt: $started,
           endedAt: $ended,
           folders: [],
           branches: ["fm/" + $r.id]
