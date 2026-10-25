@@ -3290,7 +3290,7 @@ CLAUDE_ACCOUNT_ROOT=
 if [ -n "$CLAUDE_ACCOUNT" ]; then
   CLAUDE_ACCOUNT_SELECTION=$(fm_claude_account_select "$HARNESS" "$CONFIG" "$MODEL" "$CLAUDE_ACCOUNT" "$RAW_COMMAND") || exit 1
   CLAUDE_ACCOUNT_ROOT=${CLAUDE_ACCOUNT_SELECTION#*$'\t'}
-elif [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -z "$RAW_COMMAND" ]; then
+elif [ "$KIND" != secondmate ] && [ -z "$RAW_COMMAND" ]; then
   fm_claude_bridge_account_required "$HARNESS" "$CONFIG" "$MODEL" || exit 1
 fi
 WORKER_ACCOUNT_MATE=
