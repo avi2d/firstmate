@@ -26,6 +26,12 @@ SPAWN_E=$((NOW_EPOCH - 3600))
 FIRST_E=$((NOW_EPOCH - 7200))
 SPAWN_T=$(jq -n --argjson e "$SPAWN_E" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")')
 FIRST_T=$(jq -n --argjson e "$FIRST_E" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")')
+iso() { jq -n --argjson e "$1" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")'; }
+ARCH_START=$((NOW_EPOCH - 5400))
+ARCH_DONE=$((NOW_EPOCH - 1800))
+LOG_START=$((NOW_EPOCH - 4000))
+LOG_DONE=$((NOW_EPOCH - 2500))
+LIVE_DONE=$((NOW_EPOCH - 900))
 
 WT_A="$TMP_ROOT/wt-a"
 WT_B="$TMP_ROOT/wt-b"
@@ -108,6 +114,7 @@ cat > "$ALPHA_SNAP" <<JSON
   ],
   "backlog": {"records": [
     {"id": "alpha-done-recent", "title": "Recent done", "repo": "tui-dash", "kind": "ship", "state": "done", "done": null, "hold_until": null, "hold_reason": null, "since": null, "completion": {"date": "$TODAY", "verb": "merged"}, "body_lines": ["SECRET-MARKER-BODY"]},
+    {"id": "alpha-done-archived", "title": "Archived done", "repo": "checks", "kind": "ship", "state": "done", "done": null, "hold_until": null, "hold_reason": null, "since": null, "completion": {"date": "$TODAY", "verb": "merged"}},
     {"id": "alpha-done-old", "title": "Old done", "repo": "tui-dash", "kind": "ship", "state": "done", "done": null, "hold_until": null, "hold_reason": null, "since": null, "completion": {"date": "$MINUS3", "verb": "merged"}},
     {"id": "alpha-hold", "title": "Held", "repo": "checks", "kind": "ship", "state": "queued", "done": null, "hold_until": "$PLUS7", "hold_reason": "revisit", "since": "$TODAY", "completion": {"date": null, "verb": null}}
   ]}
@@ -143,7 +150,9 @@ cat > "$BETA_SNAP" <<JSON
       "backlog": {"title": "Beta livedone", "since": null, "completion": {"date": "$TODAY", "verb": "merged"}}
     }
   ],
-  "backlog": {"records": []}
+  "backlog": {"records": [
+    {"id": "beta-done-logged", "title": "Logged done", "repo": "website", "kind": "scout", "state": "done", "done": null, "hold_until": null, "hold_reason": null, "since": null, "completion": {"date": "$TODAY", "verb": "reported"}}
+  ]}
 }
 JSON
 write_snap "$ALPHA" "$ALPHA_SNAP"
@@ -186,6 +195,21 @@ write_meta "$BETA" beta-livedone ship fm/beta-livedone /w/skills "s${SPAWN_E}.6.
 write_crew_stub "$ALPHA"
 write_crew_stub "$BETA"
 printf '%s\n' "blocked [key=net] [at=$NOW_EPOCH]: CI runner unreachable" > "$BETA/state/beta-blocked.status"
+printf '%s\n' "working [at=$SPAWN_E]: setup done" "done [at=$LIVE_DONE]: landed" > "$BETA/state/beta-livedone.status"
+mkdir -p "$ALPHA/state/status-archive/alpha-done-archived"
+printf '%s\n' "working [at=$((NOW_EPOCH - 900000))]: setup done" "done [at=$((NOW_EPOCH - 899000))]: PR https://example.invalid/pr/1" \
+  > "$ALPHA/state/status-archive/alpha-done-archived/$((NOW_EPOCH - 898000)).111.status"
+printf '%s\n' "working [at=$ARCH_START]: setup done" \
+  "blocked [key=ci] [at=$((ARCH_START + 60))]: runner quotes [at=1]" \
+  "resolved [key=ci] [at=$((ARCH_START + 120))]: runner back" \
+  "done [at=$ARCH_DONE]: PR https://example.invalid/pr/2" \
+  "working [at=$((ARCH_DONE + 300))]: answering a follow-up" \
+  > "$ALPHA/state/status-archive/alpha-done-archived/$((ARCH_DONE + 600)).222.status"
+mkdir -p "$BETA/data/beta-done-logged"
+printf '%s\n' "working [at=$((NOW_EPOCH - 800000))]: setup done" "done [at=$((NOW_EPOCH - 799000))]: report ready" \
+  > "$BETA/data/beta-done-logged/status.log"
+printf '%s\n' "working [at=$LOG_START]: setup done" "done [at=$LOG_DONE]: report ready" \
+  > "$BETA/data/beta-done-logged/status.1.log"
 
 OUT="$TMP_ROOT/out.json"
 bash "$REPORT" >"$OUT" 2>"$TMP_ROOT/stderr.log" || { cat "$TMP_ROOT/stderr.log"; fail "report exits non-zero"; }
@@ -216,7 +240,9 @@ jq -e '.tasks[] | select(.id == "alpha-parked") | .state == "parked" and .folder
 jq -e '.tasks[] | select(.id == "alpha-paused") | .state == "waiting"' "$OUT" >/dev/null || fail "paused maps to waiting"
 jq -e '.tasks[] | select(.id == "beta-wait") | .state == "waiting"' "$OUT" >/dev/null || fail "unknown maps to waiting"
 jq -e '.tasks[] | select(.id == "beta-blocked") | .state == "blocked"' "$OUT" >/dev/null || fail "blocked event escalates to blocked"
-jq -e --arg start "${SPAWN_T}" '.tasks[] | select(.id == "beta-livedone") | .state == "done" and .startedAt == $start and .firstStartedAt == $start and .startedAt < .endedAt' "$OUT" >/dev/null || fail "live done task starts at spawn and ends at the read"
+jq -e --arg start "${SPAWN_T}" --arg end "$(iso "$LIVE_DONE")" '.tasks[] | select(.id == "beta-livedone") | .state == "done" and .startedAt == $start and .firstStartedAt == $start and .endedAt == $end' "$OUT" >/dev/null || fail "live done task starts at spawn and ends at its recorded done line"
+jq -e --arg start "$(iso "$ARCH_START")" --arg end "$(iso "$ARCH_DONE")" '.tasks[] | select(.id == "alpha-done-archived") | .startedAt == $start and .firstStartedAt == $start and .endedAt == $end' "$OUT" >/dev/null || fail "archived done task spans its latest archived status stream, first line to done line"
+jq -e --arg start "$(iso "$LOG_START")" --arg end "$(iso "$LOG_DONE")" '.tasks[] | select(.id == "beta-done-logged") | .startedAt == $start and .firstStartedAt == $start and .endedAt == $end' "$OUT" >/dev/null || fail "done task spans its latest status log under data"
 jq -e '.tasks[] | select(.id == "alpha-done-recent") | .startedAt == .endedAt and .firstStartedAt == .endedAt' "$OUT" >/dev/null || fail "finished record without launch instants reads start as end"
 jq -e '.tasks[] | select(.id == "alpha-done-recent") | .state == "done" and .branches == ["fm/alpha-done-recent"] and .folders == []' "$OUT" >/dev/null || fail "recent done keeps branch, drops folders"
 jq -e --arg at "${PLUS7}T00:00:00Z" '.schedules == [{name: "alpha-hold", at: $at, detail: "revisit"}]' "$OUT" >/dev/null || fail "dated hold listed as schedule"
