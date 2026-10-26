@@ -208,6 +208,14 @@ case "${1:-} ${2:-}" in
         fi
         exit 0
         ;;
+      *baseRefName*)
+        if [ -f "${FM_TEST_GH_VIEW_JSON%.json}-classify.json" ]; then
+          cat "${FM_TEST_GH_VIEW_JSON%.json}-classify.json"
+        else
+          jq -c '{headRefOid, baseRefName}' "$FM_TEST_GH_VIEW_JSON"
+        fi
+        exit 0
+        ;;
       *headRefOid*)
         cat "$FM_TEST_GH_HEAD"
         exit 0
@@ -773,6 +781,183 @@ test_pr_metadata_is_recorded_before_the_forge_call() {
   assert_grep 'pr=https://github.com/example/repo/pull/62' "$case_dir/meta-at-merge" \
     "records-ahead-of-forge-call: the merge ran before pr= was recorded"
   pass "fm-pr-merge records pr= before the forge call can land the merge"
+}
+
+# Pull request 9 merges the upstream head into the fork's main with a merge
+# commit, the shape the fork-drift-sync skill produces; pull request 10 is fork
+# work that merged the fork's own main back into its branch. Args: case_dir
+make_fork_fixture() {
+  local case_dir=$1 up=$1/upstream fork=$1/fork
+  fm_git_init_commit "$up"
+  git clone -q "$up" "$fork"
+  git -C "$fork" commit -q --allow-empty -m 'fork work'
+  git -C "$up" commit -q --allow-empty -m 'upstream work'
+
+  git -C "$fork" checkout -q -b sync main
+  git -C "$fork" fetch -q "$up" main
+  git -C "$fork" merge -q --no-ff -m 'Merge upstream main into fork main' FETCH_HEAD
+  git -C "$fork" update-ref refs/pull/9/head HEAD
+
+  git -C "$fork" checkout -q -b feature main~1
+  git -C "$fork" commit -q --allow-empty -m 'feature work'
+  git -C "$fork" merge -q --no-ff -m 'Merge main into feature' main
+  git -C "$fork" update-ref refs/pull/10/head HEAD
+  git -C "$fork" checkout -q main
+
+  printf '%s\n' '{"forks":[{"project":"repo","fork":"example/repo","upstream":"upstream-org/repo","trigger":"upstream-head"}]}' \
+    > "$case_dir/home/config/fork-upstream.json"
+}
+
+# fm-pr-merge.sh fetches example/repo and upstream-org/repo from github.com;
+# git's own insteadOf rewrite serves them from the fixture repositories.
+# Args: case_dir args...
+run_fork_merge() {
+  local case_dir=$1
+  GIT_CONFIG_COUNT=2 \
+  GIT_CONFIG_KEY_0="url.$case_dir/fork.insteadOf" GIT_CONFIG_VALUE_0=https://github.com/example/repo.git \
+  GIT_CONFIG_KEY_1="url.$case_dir/upstream.insteadOf" GIT_CONFIG_VALUE_1=https://github.com/upstream-org/repo.git \
+    run_pr_merge "$@"
+}
+
+test_upstream_sync_merges_as_a_merge_commit() {
+  local case_dir rc
+  case_dir=$(make_case upstream-sync-default)
+  make_fork_fixture "$case_dir"
+  add_gh_mocks "$case_dir" "$(git -C "$case_dir/fork" rev-parse refs/pull/9/head)"
+
+  set +e
+  run_fork_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "upstream-sync-default: an upstream sync should merge"
+  assert_grep 'is an upstream sync' "$case_dir/stderr" \
+    "upstream-sync-default: the sync was not classified as one"
+  assert_logged_gh_merge "$case_dir" 9 example/repo --merge
+  assert_no_grep ' --squash' "$case_dir/gh.log" \
+    "upstream-sync-default: an upstream sync was squashed"
+  pass "fm-pr-merge merges an upstream sync with a merge commit by default"
+}
+
+test_upstream_sync_refuses_squash_and_rebase() {
+  local case_dir rc method method_args
+  for method in --squash --rebase '--method squash' --method=rebase; do
+    read -r -a method_args <<< "$method"
+    case_dir=$(make_case "upstream-sync-refuses-${method//[^a-z]/}")
+    make_fork_fixture "$case_dir"
+    add_gh_mocks "$case_dir" "$(git -C "$case_dir/fork" rev-parse refs/pull/9/head)"
+
+    set +e
+    run_fork_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 -- "${method_args[@]}" \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+
+    expect_code 1 "$rc" "upstream-sync $method: a squash or rebase of an upstream sync should be refused"
+    assert_grep 'an upstream sync lands only as a merge commit' "$case_dir/stderr" \
+      "upstream-sync $method: the refusal did not name the rule"
+    assert_no_grep 'pr merge ' "$case_dir/gh.log" \
+      "upstream-sync $method: the forge was asked to merge"
+    assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" \
+      "upstream-sync $method: the refused merge recorded pr="
+  done
+
+  case_dir=$(make_case upstream-sync-explicit-merge)
+  make_fork_fixture "$case_dir"
+  add_gh_mocks "$case_dir" "$(git -C "$case_dir/fork" rev-parse refs/pull/9/head)"
+  set +e
+  run_fork_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 -- --merge \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "upstream-sync-explicit-merge: an explicit --merge should merge"
+  assert_logged_gh_merge "$case_dir" 9 example/repo --merge
+  pass "fm-pr-merge refuses to squash or rebase an upstream sync and accepts --merge"
+}
+
+# A merge commit alone is not a sync: ordinary fork work that merged the fork's
+# own main keeps the squash default, and so does a pull request on a repository
+# the fork registry does not list.
+test_non_sync_pull_requests_keep_the_squash_default() {
+  local case_dir rc
+  case_dir=$(make_case fork-feature-squashes)
+  make_fork_fixture "$case_dir"
+  add_gh_mocks "$case_dir" "$(git -C "$case_dir/fork" rev-parse refs/pull/10/head)"
+  set +e
+  run_fork_merge "$case_dir" task-x1 https://github.com/example/repo/pull/10 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "fork-feature-squashes: ordinary fork work should merge"
+  assert_logged_gh_merge "$case_dir" 10 example/repo --squash
+  assert_no_grep 'upstream sync' "$case_dir/stderr" \
+    "fork-feature-squashes: ordinary fork work was classified as an upstream sync"
+
+  case_dir=$(make_case unlisted-repo-squashes)
+  make_fork_fixture "$case_dir"
+  add_gh_mocks "$case_dir" deadbeefcafefeed0000000000000000deadbeef
+  set +e
+  run_fork_merge "$case_dir" task-x1 https://github.com/example/other/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "unlisted-repo-squashes: a repository outside the fork registry should merge"
+  assert_logged_gh_merge "$case_dir" 9 example/other --squash
+  pass "fm-pr-merge keeps the squash default for every pull request that is not an upstream sync"
+}
+
+# An unreadable history must not fall through to a squash that would drop the
+# upstream parent of a sync it failed to recognise.
+test_unclassifiable_fork_pull_request_refuses_unless_merged() {
+  local case_dir rc
+  case_dir=$(make_case fork-unreadable-refuses)
+  make_fork_fixture "$case_dir"
+  add_gh_mocks "$case_dir" "$(git -C "$case_dir/fork" rev-parse refs/pull/9/head)"
+  rm -rf "$case_dir/upstream"
+  set +e
+  run_fork_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "fork-unreadable-refuses: an unclassifiable fork pull request should be refused"
+  assert_grep 'whether it is an upstream sync could not be told' "$case_dir/stderr" \
+    "fork-unreadable-refuses: the refusal did not say why"
+  assert_no_grep 'pr merge ' "$case_dir/gh.log" \
+    "fork-unreadable-refuses: the forge was asked to merge"
+
+  : > "$case_dir/gh.log"
+  set +e
+  run_fork_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 -- --merge \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "fork-unreadable-refuses: an explicit --merge needs no classification"
+  assert_logged_gh_merge "$case_dir" 9 example/repo --merge
+  pass "fm-pr-merge refuses a fork pull request it cannot classify unless asked for a merge commit"
+}
+
+# A push after the classification read could turn the head into a sync the
+# squash default would then flatten, so the classified head must be the one
+# merged.
+test_head_moved_after_classification_refuses() {
+  local case_dir rc classified
+  case_dir=$(make_case fork-head-moved)
+  make_fork_fixture "$case_dir"
+  classified=$(git -C "$case_dir/fork" rev-parse refs/pull/10/head)
+  add_gh_mocks "$case_dir" "$(git -C "$case_dir/fork" rev-parse refs/pull/9/head)"
+  printf '{"headRefOid":"%s","baseRefName":"main"}\n' "$classified" > "$case_dir/github-view-classify.json"
+  set +e
+  run_fork_merge "$case_dir" task-x1 https://github.com/example/repo/pull/10 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "fork-head-moved: a head that moved after classification should be refused"
+  assert_grep "its head moved from $classified" "$case_dir/stderr" \
+    "fork-head-moved: the refusal did not name the moved head"
+  assert_no_grep 'pr merge ' "$case_dir/gh.log" \
+    "fork-head-moved: the forge was asked to merge an unclassified head"
+  pass "fm-pr-merge refuses to merge a fork pull request whose head moved after classification"
 }
 
 test_merge_failure_propagates_after_recording() {
@@ -2939,6 +3124,11 @@ test_github_agreeing_queue_rules_keep_retry_guidance
 test_github_conflicting_queue_rules_report_ambiguity
 test_verified_merge_records_pr_and_head
 test_pr_metadata_is_recorded_before_the_forge_call
+test_upstream_sync_merges_as_a_merge_commit
+test_upstream_sync_refuses_squash_and_rebase
+test_non_sync_pull_requests_keep_the_squash_default
+test_unclassifiable_fork_pull_request_refuses_unless_merged
+test_head_moved_after_classification_refuses
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses
 test_github_mergeable_unknown_retries_then_succeeds

@@ -2289,6 +2289,18 @@ Arm the check once per home with `bin/fm-fork-drift-check.sh arm`.
 - A `fork drift:` wake names the project, the counts, and the upstream head or tag.
   Load the `fork-drift-sync` skill to dispatch the merge-commit sync ship, merge the green pull request, and run that project's existing rollout.
 
+**Upstream sync merges**
+
+`bin/fm-pr-merge.sh` reads this file to keep an upstream sync from being squashed.
+
+- A GitHub pull request is an upstream sync when its repository is a fork listed here and its head carries commits of that fork's upstream branch that the pull request's base branch lacks.
+  For a `release` trigger, the upstream's tags count as upstream history too.
+- The branch name and title play no part, because sync pull requests have used several of each.
+- The script reads both histories from a commits-only fetch at merge time.
+- An upstream sync merges as a merge commit when no method is named, and an explicit squash or rebase is refused before anything is recorded.
+- A pull request into a listed fork whose histories cannot be read is refused unless `--merge` is passed.
+- Every other pull request keeps the script's default merge method.
+
 ## Daily session reset
 
 Supervisor sessions accumulate context, so the fleet resets them once a day.
