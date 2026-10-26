@@ -831,7 +831,7 @@ test_stale_diagnostic_wedge_survives_busy_housekeeping() {
     case "$case_name" in
       working) status_line='working: building' ;;
       prior-terminal) status_line='done: already surfaced' ;;
-      paused) status_line='paused: awaiting an external dependency' ;;
+      paused) status_line='paused: awaiting an external dependency | owner=ci | recheck=2099-01-01' ;;
     esac
     printf '%s\n' "$status_line" > "$state/$task.status"
     printf 'Working...\n' > "$pane"
@@ -895,7 +895,7 @@ test_enriched_wedge_under_declared_wait_uses_pause_cadence() {
   task=paused-wedge-w1; win="sess:fm-$task"; pane="$dir/pane.txt"
   key=$(printf '%s' "$task" | tr ':/.' '___')
   fm_write_meta "$state/$task.meta" "window=$win" "backend=tmux"
-  printf 'working: dispatching the long audit\npaused: the audit engine is running to completion\n' \
+  printf 'working: dispatching the long audit\npaused: the audit engine is running to completion | owner=ci | recheck=2099-01-01\n' \
     > "$state/$task.status"
   printf 'idle prompt $\n' > "$pane"
   case "$(FM_STATE_OVERRIDE="$state" classify_stale "$win" "$state")" in
@@ -1329,7 +1329,7 @@ test_housekeeping_busy_declared_wait_matures_its_window() {
     state="$dir/state"; fakebin="$dir/fakebin"
     task="held-w12b-$case_name"; win="sess:fm-$task"; pane="$dir/pane.txt"
     case "$case_name" in
-      paused) printf 'paused: the audit engine is running to completion\n' > "$state/$task.status"
+      paused) printf 'paused: the audit engine is running to completion | owner=ci | recheck=2099-01-01\n' > "$state/$task.status"
               digest="awaiting external" ;;
       captain-held) printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$state/$task.status"
               digest="awaiting the captain" ;;
@@ -1411,14 +1411,14 @@ test_housekeeping_declared_time_controls_pause_recheck() {
     distant=$(date -u -d "@$((now + 31536000))" +%Y-%m-%dT%H:%M:%SZ)
     past=$(date -u -d "@$((now - 120))" +%Y-%m-%dT%H:%M:%SZ)
   fi
-  printf 'paused: waiting for release until %s\n' "$future" > "$state/$task.status"
+  printf 'paused: waiting for release until %s | owner=release-bot | recheck=2099-01-01\n' "$future" > "$state/$task.status"
   echo $((now - 60)) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
   [ ! -s "$state/.subsuper-escalations" ] \
     || fail "a near-future declared time was rechecked before that time"
 
-  printf 'paused: waiting for release until %s\n' "$distant" > "$state/$task.status"
+  printf 'paused: waiting for release until %s | owner=release-bot | recheck=2099-01-01\n' "$distant" > "$state/$task.status"
   echo $((now - 300)) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
@@ -1429,7 +1429,7 @@ test_housekeeping_declared_time_controls_pause_recheck() {
   grep -F 'declared clearing time has passed' "$state/.subsuper-escalations" >/dev/null \
     && fail "the bounded daemon recheck falsely claimed the future declared time passed"
 
-  printf 'paused: waiting for release until %s\n' "$past" > "$state/$task.status"
+  printf 'paused: waiting for release until %s | owner=release-bot | recheck=2099-01-01\n' "$past" > "$state/$task.status"
   date +%s > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
@@ -1484,7 +1484,7 @@ test_housekeeping_stale_marker_transitions_to_pause() {
   local dir state fakebin win pane key
   dir=$(make_supercase stale-to-paused)
   state="$dir/state"; fakebin="$dir/fakebin"; win="sess:fm-held-w14"; pane="$dir/pane.txt"
-  printf 'paused: awaiting the upstream tool release\n' > "$state/held-w14.status"
+  printf 'paused: awaiting the upstream tool release | owner=ci | recheck=2099-01-01\n' > "$state/held-w14.status"
   printf 'idle prompt $\n' > "$pane"
   key=$(printf '%s' "held-w14" | tr ':/.' '___')
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-stale-$key"

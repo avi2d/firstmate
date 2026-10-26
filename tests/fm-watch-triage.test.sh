@@ -2576,7 +2576,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   statusf="$state/held.status"
   # A DECLARED pause (not captain-relevant), .seen-* primed so the signal scan does
   # not pre-empt the stale path.
-  printf 'paused: holding for the upstream tool release\n' > "$statusf"
+  printf 'paused: holding for the upstream tool release | owner=ci | recheck=2099-01-01\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle, holding for upstream")
@@ -3032,7 +3032,7 @@ test_live_paused_until_controls_recheck_time() {
   window="test:fm-parked"
   printf 'window=%s\nkind=ship\nharness=grok\nbackend=tmux\n' "$window" > "$state/parked.meta"
   future=$(iso_utc_at "$(( $(date +%s) + 7200 ))")
-  printf 'paused: rate limit until %s\n' "$future" > "$statusf"
+  printf 'paused: rate limit until %s | owner=ci | recheck=2099-01-01\n' "$future" > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   printf 'parked, elapsed 1s' > "$capture_file"
@@ -3048,7 +3048,7 @@ test_live_paused_until_controls_recheck_time() {
   [ "$wakes" -eq 0 ] || fail "a live worker produced $wakes wakes before its declared time"
 
   past=$(iso_utc_at "$(( $(date +%s) - 120 ))")
-  printf 'paused: rate limit until %s\n' "$past" >> "$statusf"
+  printf 'paused: rate limit until %s | owner=ci | recheck=2099-01-01\n' "$past" >> "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-parked_status"
   printf 'parked, elapsed 3s' > "$capture_file"
   parked_watch_round "$state" "$fakebin" "$out" "$capture_file" "$window" exit \
@@ -3175,7 +3175,7 @@ test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict() {
   local working='state: working · source: run-step · ci running'
 
   dir=$(wedge_threshold_fixture declared-wait-working \
-    'paused: final validation at step 6/6 - clean whole-assembly baseline (~20 min)' 0)
+    'paused: final validation at step 6/6 - clean whole-assembly baseline (~20 min) | owner=ci | recheck=2099-01-01' 0)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
   n=1
@@ -3196,7 +3196,7 @@ test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict() {
   # down. So the recheck is governed by how old the declaration is, and the age
   # it publishes is that declaration's age, named as the declaration it is.
   dir=$(wedge_threshold_fixture declared-wait-aged \
-    'paused: waiting on the upstream release cut' 2000)
+    'paused: waiting on the upstream release cut | owner=ci | recheck=2099-01-01' 2000)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   FM_TEST_PAUSE_RESURFACE=240 wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
     || fail "a declaration older than the recheck cadence was never rechecked: $(cat "$out")"
@@ -3222,7 +3222,7 @@ test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict() {
   # so the exemption ends exactly where the declaration does - as long as nothing
   # ELSE accounts for the quiet.
   past=$(iso_utc_at "$(( $(date +%s) - 7200 ))")
-  dir=$(wedge_threshold_fixture declared-wait-elapsed "paused: waiting on the build queue until $past" 0)
+  dir=$(wedge_threshold_fixture declared-wait-elapsed "paused: waiting on the build queue until $past | owner=ci | recheck=2099-01-01" 0)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
     || fail "a declared wait whose own clearing time had passed stayed silent"
@@ -3258,7 +3258,7 @@ test_wedge_threshold_keeps_a_wait_past_a_default_key_answer() {
   local working='state: working · source: run-step · ci running'
 
   dir=$(wedge_threshold_fixture default-answer-after-wait \
-    "$(printf 'needs-decision: which color\npaused: waiting on the vendor release\nresolved [key=default]: answered: blue')" 0)
+    "$(printf 'needs-decision: which color\npaused: waiting on the vendor release | owner=ci | recheck=2099-01-01\nresolved [key=default]: answered: blue')" 0)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   window="test:fm-wedge"; key=$(printf '%s' "$window" | tr ':/.' '___')
   n=1
@@ -3273,7 +3273,7 @@ test_wedge_threshold_keeps_a_wait_past_a_default_key_answer() {
     || fail "a default-key answer let a waiting lane count $(cat "$state/.wedge-escalations-$key") wedge escalation(s)"
 
   dir=$(wedge_threshold_fixture keyless-retraction \
-    "$(printf 'paused: waiting on the vendor release\nresolved: the vendor shipped')" 0)
+    "$(printf 'paused: waiting on the vendor release | owner=ci | recheck=2099-01-01\nresolved: the vendor shipped')" 0)
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
     || fail "a worker's own keyless resolved line did not retract its wait: $(cat "$out")"
@@ -3431,7 +3431,7 @@ test_wedge_threshold_defers_to_a_backlog_captain_hold() {
   # hold the worker's line never shows still bounds the ladder.
   past=$(iso_utc_at "$(( $(date +%s) - 7200 ))")
   dir=$(backlog_hold_wedge_fixture backlog-hold-elapsed-pause 0 '' \
-    "paused: waiting on the build queue until $past") \
+    "paused: waiting on the build queue until $past | owner=ci | recheck=2099-01-01") \
     || fail "could not build a backlog captain-hold wedge fixture"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   FM_HOME="$dir" FM_DATA_OVERRIDE="$dir/data" \
@@ -3791,7 +3791,7 @@ test_wedge_threshold_defers_to_a_worker_blocker() {
 
   dir=$(wedge_threshold_fixture worker-blocker-fresh \
     'working: wiring the client
-blocked: need the API key for the staging account' 0 600)
+blocked: need the API key for the staging account | owner=ci | recheck=2099-01-01' 0 600)
   arm_worker_wait "$dir"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   n=1
@@ -3807,7 +3807,7 @@ blocked: need the API key for the staging account' 0 600)
 
   # The deferral is bounded: once the blocker is older than the cadence it
   # re-surfaces once, aged from the line, naming firstmate and the clearing action.
-  dir=$(wedge_threshold_fixture worker-blocker-aged 'blocked: need the API key for the staging account' 2000 600)
+  dir=$(wedge_threshold_fixture worker-blocker-aged 'blocked: need the API key for the staging account | owner=ci | recheck=2099-01-01' 2000 600)
   arm_worker_wait "$dir"
   state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
   wedge_threshold_round "$state" "$fakebin" "$out" "$capture" "$window" "$working" exit \
@@ -3840,12 +3840,12 @@ blocked: need the API key for the staging account' 0 600)
   # a newer worker line, a resolved line, a supervisor-reserved key, and an inbox
   # record the worker acknowledged after writing the blocker.
   for case_log in \
-    'blocked: need the API key for the staging account
+    'blocked: need the API key for the staging account | owner=ci | recheck=2099-01-01
 working: resumed without it' \
-    'blocked: need the API key for the staging account
+    'blocked: need the API key for the staging account | owner=ci | recheck=2099-01-01
 resolved: firstmate supplied the key' \
-    'blocked [key=remote-reply-continuity-mate1]: the remote reply mirror stopped' \
-    'blocked: need the API key for the staging account|handled'; do
+    'blocked [key=remote-reply-continuity-mate1]: the remote reply mirror stopped | owner=ci | recheck=2099-01-01' \
+    'blocked: need the API key for the staging account | owner=ci | recheck=2099-01-01|handled'; do
     dir=$(wedge_threshold_fixture worker-blocker-ended "${case_log%|handled}" 2000 600)
     arm_worker_wait "$dir"
     state="$dir/state"; fakebin="$dir/fakebin"; out="$dir/watch.out"; capture="$dir/pane.txt"
@@ -4760,7 +4760,7 @@ test_stale_churn_without_a_captain_call_still_alarms() {
     || { echo "skip: tasks-axi not found (unheld stale alarm)"; return 0; }
   for spec in \
     'unheld-delivery|done: PR https://example.invalid/pull/1 checks green' \
-    'unheld-blocker|blocked: cannot reach the release host' \
+    'unheld-blocker|blocked: cannot reach the release host | owner=ci | recheck=2099-01-01' \
     'unheld-worker-line|working: still tidying the branch'
   do
     name=${spec%%|*}; line=${spec#*|}
@@ -4982,7 +4982,7 @@ test_nonterminal_stale_pause_transitions_reclassify_unchanged_hash() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-transition"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/transition.meta"
-  printf 'paused: awaiting the upstream release\n' > "$state/transition.status"
+  printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/transition.status"
   sig=$(seen_sig "$state/transition.status"); printf '%s' "$sig" > "$state/.seen-transition_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
@@ -5039,7 +5039,7 @@ test_nonterminal_paused_rechecks_authoritative_state() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-pause-recheck"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/pause-recheck.meta"
-  printf 'paused: awaiting the upstream release\n' > "$state/pause-recheck.status"
+  printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/pause-recheck.status"
   sig=$(seen_sig "$state/pause-recheck.status"); printf '%s' "$sig" > "$state/.seen-pause-recheck_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
@@ -5069,7 +5069,7 @@ test_paused_unchanged_across_polls_skips_its_recheck() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-quiet"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-quiet.meta"
-  printf 'paused: awaiting the upstream release\n' > "$state/paused-quiet.status"
+  printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-quiet.status"
   sig=$(seen_sig "$state/paused-quiet.status"); printf '%s' "$sig" > "$state/.seen-paused-quiet_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
@@ -5129,7 +5129,7 @@ test_paused_live_agent_unchanged_across_polls_skips_its_recheck() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-live"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-live.meta"
-  printf 'paused: awaiting the upstream release\n' > "$state/paused-live.status"
+  printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-live.status"
   sig=$(seen_sig "$state/paused-live.status"); printf '%s' "$sig" > "$state/.seen-paused-live_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
@@ -5248,7 +5248,7 @@ test_paused_untagged_signature_record_is_a_cache_miss() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-untag"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-untag.meta"
-  printf 'paused: awaiting the upstream release\n' > "$state/paused-untag.status"
+  printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-untag.status"
   sig=$(seen_sig "$state/paused-untag.status"); printf '%s' "$sig" > "$state/.seen-paused-untag_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
@@ -5357,7 +5357,7 @@ test_paused_status_change_rechecks_before_the_slow_interval() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-shift"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-shift.meta"
-  printf 'paused: awaiting the upstream release\n' > "$state/paused-shift.status"
+  printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-shift.status"
   sig=$(seen_sig "$state/paused-shift.status"); printf '%s' "$sig" > "$state/.seen-paused-shift_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
@@ -5393,7 +5393,7 @@ SH
   crew_before=$(wc -l < "$FM_FAKE_CREW_STATE_LOG" 2>/dev/null || echo 0)
   # The worker names a new wait while the slow interval is still far away: the
   # next polls must reconcile it at once, not when the interval elapses.
-  printf 'paused: the release slipped, now waiting on Thursday\n' >> "$state/paused-shift.status"
+  printf 'paused: the release slipped, now waiting on Thursday | owner=ci | recheck=2099-01-01\n' >> "$state/paused-shift.status"
   sig=$(seen_sig "$state/paused-shift.status"); printf '%s' "$sig" > "$state/.seen-paused-shift_status"
   wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited after a paused status change: $(cat "$out")"; }
   wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "watcher exited after a paused status change: $(cat "$out")"; }
@@ -5413,7 +5413,7 @@ test_paused_authoritative_working_preserves_wedge_timer() {
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-paused-working"
   printf 'idle awaiting external\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/paused-working.meta"
-  printf 'paused: awaiting the upstream release\n' > "$state/paused-working.status"
+  printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-working.status"
   sig=$(seen_sig "$state/paused-working.status"); printf '%s' "$sig" > "$state/.seen-paused-working_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle awaiting external")
@@ -6086,7 +6086,7 @@ test_busy_declared_pause_is_rechecked_not_wedge_escalated() {
   printf 'Working... (7200.4s) lavish-axi poll' > "$capture_file"
   printf 'window=%s\nkind=scout\nharness=pi\n' "$window" > "$state/review-scout.meta"
   record_pi_busy "$state" review-scout
-  printf 'paused: hosting the Lavish review, awaiting captain feedback\n' > "$statusf"
+  printf 'paused: hosting the Lavish review, awaiting captain feedback | owner=captain | recheck=2099-01-01\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-review-scout_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   # No completed turn for hours (the single blocking poll call): age the spawn
@@ -6193,7 +6193,7 @@ test_afk_busy_declared_pause_hands_off_plain_stale() {
   printf 'Working... (7200.4s) lavish-axi poll' > "$capture_file"
   printf 'window=%s\nkind=scout\nharness=pi\n' "$window" > "$state/afk-review-scout.meta"
   record_pi_busy "$state" afk-review-scout
-  printf 'paused: hosting the Lavish review, awaiting captain feedback\n' > "$statusf"
+  printf 'paused: hosting the Lavish review, awaiting captain feedback | owner=captain | recheck=2099-01-01\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-review-scout_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   touch -t 200001010000 "$state/afk-review-scout.meta"
@@ -6298,7 +6298,7 @@ SH
   chmod +x "$fakebin/tmux"
   printf 'window=%s\nkind=scout\nharness=pi\n' "$window" > "$state/afk-ticking-scout.meta"
   record_pi_busy "$state" afk-ticking-scout
-  printf 'paused: hosting the Lavish review, awaiting captain feedback\n' > "$statusf"
+  printf 'paused: hosting the Lavish review, awaiting captain feedback | owner=captain | recheck=2099-01-01\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-ticking-scout_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   touch -t 200001010000 "$state/afk-ticking-scout.meta"
@@ -7353,7 +7353,7 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   printf 'idle, awaiting upstream\n' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/afk-held.meta"
   statusf="$state/afk-held.status"
-  printf 'paused: awaiting the upstream tool release\n' > "$statusf"
+  printf 'paused: awaiting the upstream tool release | owner=ci | recheck=2099-01-01\n' > "$statusf"
   back=$(( $(date +%s) - 500 ))
   if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
   else touch -m -d "@$back" "$statusf"; fi
@@ -7594,7 +7594,7 @@ paused_until_fixture() {  # <name> <until-epoch> <status-age-secs>
   statusf="$state/until.status"
   printf 'idle, waiting for the reset\n' > "$dir/pane.txt"
   printf 'window=%s\nkind=secondmate\n' "$window" > "$state/until.meta"
-  printf 'paused: rate limit resets, until %s, then resuming\n' "$(iso_utc_at "$until")" > "$statusf"
+  printf 'paused: rate limit resets, until %s, then resuming | owner=ci | recheck=2099-01-01\n' "$(iso_utc_at "$until")" > "$statusf"
   back=$(( $(date +%s) - age ))
   if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
   else touch -m -d "@$back" "$statusf"; fi
@@ -7711,14 +7711,14 @@ test_paused_bg_job_until_timeout_rechecks_after_the_job_ends() {
   local dir state started
   started=$(date +%s)
   dir=$(bg_job_paused_case bg-job-until-running \
-    "paused [key=nightly-build] [at=$started]: nightly build (background job, 600s timeout); resume when it ends, until $(iso_utc_at "$(( started + 600 ))")")
+    "paused [key=nightly-build] [at=$started]: nightly build (background job, 600s timeout); resume when it ends, until $(iso_utc_at "$(( started + 600 ))") | owner=ci | recheck=2099-01-01")
   state="$dir/state"
   parked_watch_round "$state" "$dir/fakebin" "$dir/watch.out" "$dir/pane.txt" test:fm-parked absorb \
     || fail "a worker paused on its running background job woke before the job's timeout"
   [ "$(bg_job_stale_wakes "$state")" -eq 0 ] || fail "the running job surfaced before its timeout"
   started=$(( $(date +%s) - 180 ))
   dir=$(bg_job_paused_case bg-job-until \
-    "paused [key=nightly-build] [at=$started]: nightly build (background job, 120s timeout); resume when it ends, until $(iso_utc_at "$(( started + 120 ))")")
+    "paused [key=nightly-build] [at=$started]: nightly build (background job, 120s timeout); resume when it ends, until $(iso_utc_at "$(( started + 120 ))") | owner=ci | recheck=2099-01-01")
   state="$dir/state"
   printf '[bg failed] nightly build - Exited with code 1' > "$dir/pane.txt"
   parked_watch_round "$state" "$dir/fakebin" "$dir/watch.out" "$dir/pane.txt" test:fm-parked exit \
