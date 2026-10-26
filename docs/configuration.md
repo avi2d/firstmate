@@ -2301,6 +2301,46 @@ Arm the check once per home with `bin/fm-fork-drift-check.sh arm`.
 - A pull request into a listed fork whose histories cannot be read is refused unless `--merge` is passed.
 - Every other pull request keeps the script's default merge method.
 
+## Local copy drift
+
+[`bin/fm-copy-drift-check.sh`](../bin/fm-copy-drift-check.sh) checks, once a day, the local copies this machine runs: the firstmate code root and every clone directly under this home's `projects/`.
+It needs no configuration file, and each home checks only its own copies.
+
+It reports two conditions per copy in one `copy drift:` line:
+
+- `<copy> is <n> commits behind origin/<default>` means origin's default branch has commits the local default branch lacks.
+  A copy that is only ahead of origin is not reported.
+- `<copy> has an uncommitted change <n> days old: <file>` means the copy holds uncommitted tracked or untracked work whose oldest modified file is more than a day old.
+  Ignored files do not count, and a younger change is not reported.
+
+A copy that cannot be compared, for example because its fetch failed or it has no local default branch, is reported as such rather than read as current.
+A copy without an `origin` remote is checked only for stale uncommitted work.
+A current, clean copy raises nothing.
+
+The check fetches each origin and changes nothing else in the copy: it never pulls, resets, stashes, or checks out.
+Acting on a report is a separate decision.
+A clone can be brought current through `bin/fm-fleet-sync.sh`, and uncommitted work belongs to whoever made it, so it is never discarded to quiet the report.
+
+**Arm and disarm**
+
+Arm the check once per home with `bin/fm-copy-drift-check.sh arm`.
+
+- That writes `state/copy-drift.check.sh` and binds its bytes with `bin/fm-check-register.sh`, so the existing watcher polls it on its normal cadence and turns its one line into a `check:` wake.
+- `bin/fm-copy-drift-check.sh disarm` removes the shim, its trust binding, and the record.
+
+**Timing**
+
+`state/.copy-drift` records when the last sweep ran, and a sweep runs once its interval has passed.
+Every sweep that finds drift reports it again, so a copy left behind or dirty is raised each day until it is resolved.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `FM_COPY_DRIFT_INTERVAL` | 86400 seconds | Time between sweeps. `0` sweeps on every run. |
+| `FM_COPY_DRIFT_FETCH_SECS` | 15 | Bounds the fetches, which run in parallel, one per repository. |
+
+The whole sweep must finish inside `FM_CHECK_TIMEOUT`, which defaults to 30, so a fetch bound that leaves less than five seconds for the local comparisons is cut down to fit.
+A sweep that runs out of time reports the copy it did not reach.
+
 ## Daily session reset
 
 Supervisor sessions accumulate context, so the fleet resets them once a day.
