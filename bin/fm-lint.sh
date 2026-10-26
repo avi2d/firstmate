@@ -1,120 +1,14 @@
 #!/usr/bin/env bash
 # fm-lint.sh - the single owner of firstmate's lint definition.
 #
-# Runs its file set with ShellCheck's default severity, extended analysis,
-# ambient configuration disabled, and one exact ShellCheck version. CI selects
-# canonical partitions; no-mistakes invokes the context-selected default, so
-# both use this owner without duplicating lint configuration.
-# The explicit --fast mode is local-only and disables ShellCheck's extended
-# dataflow analysis while preserving ordinary shell lint checks and source
-# following. CI, main, and merge-base-less runs attempt --norc
-# --external-sources with full dataflow for each canonical root. An ordinary
-# local branch (changed-file mode, including the no-mistakes lint step) drops
-# --external-sources, keeps dataflow, and excludes SC1091, SC2034, SC2153,
-# and SC2329, the codes that need library context. CI checks those codes
-# on source-following attempts (see the memory fallback below). Explicit
-# paths attempt --external-sources with the selected dataflow mode.
-# Tests stop source analysis at imported production modules because CI analyzes
-# every production shell separately as a canonical, source-aware root.
-# The default (no explicit-path) path also runs bin/fm-lint-workflows.sh so a
-# malformed GitHub workflow, including a self-broken ci.yml, fails locally
-# before merge instead of only failing to run as CI.
-#
-# With no explicit paths, the file set and source-following posture depend
-# on context:
-#   - In CI (GITHUB_ACTIONS=true or CI=true), on the main branch, or when no
-#     merge-base against origin/main (or local main) can be found, it lints
-#     the full canonical set: bin/*.sh bin/backends/*.sh tests/*.sh, with
-#     --external-sources and full dataflow first. CI coverage never depends
-#     on a local diff; memory failures may take the narrower retry below.
-#   - Otherwise (an ordinary local branch with a real merge-base) it lints
-#     only the canonical-set files changed since that merge-base, including
-#     uncommitted local edits, via plain local `git diff` (no network, no
-#     `gh`). That local pass drops --external-sources and excludes SC1091,
-#     SC2034, SC2153, and SC2329. A branch with zero matching changed files
-#     skips ShellCheck and prints a "no changed lint targets" note, then
-#     still runs the backend-purity check and validates workflows.
-# Explicit paths always bypass this file-set selection and lint exactly the
-# given paths, matching the same config, without the workflow YAML check.
-# Explicit core bin/ and bin/backends/ scripts still receive the
-# backend-purity check. The backend-purity check rejects direct Beads CLI
-# invocations in the core bin/ and bin/backends/ scripts so every configured
-# backlog backend follows the same tasks-axi lifecycle path.
-#
-# Lint defaults to two concurrency-limited workers over two stable logical
-# shards, and each worker runs ONE canonical root per ShellCheck process, so a
-# run holds at most JOBS concurrent ShellCheck processes. Diagnostics replay
-# in stable shard/root order. FM_LINT_JOBS=1 changes concurrency, not diagnostics
-# or exit selection.
-# --partition 1of2/2of2 splits the entire canonical inventory across
-# two CI runners, each with those same concurrency-limited workers.
-# Partitions are complete, disjoint, and byte-weight balanced; --list-files
-# exposes their actual roots.
-# Partition mode starts with full source-aware analysis, never changed-only
-# or --fast, and does not accept explicit paths. Each partition also runs
-# workflow lint and backend-purity checks, keeping either invocation
-# independently useful.
-#
-# With FM_LINT_REQUIRE_BOUNDS=1, which CI sets, every per-root ShellCheck
-# process runs under an enforced envelope: a wall deadline
-# (FM_LINT_ROOT_SECONDS, default 1200), a terminate-then-kill cleanup grace
-# (FM_LINT_ROOT_GRACE, default 5), and a per-process address-space limit
-# (FM_LINT_ROOT_MEMORY_KIB, default 12582912 = 12 GiB of virtual address
-# space per analysis process). The sizing rationale and RSS reduction threshold
-# live beside ROOT_MEMORY_KIB below. This is not a resident-memory ceiling;
-# check aggregate runner RSS in CI. The watchdog uses the shared
-# bin/fm-timeout-lib.sh group-kill pattern, so a deadline or an interrupt
-# removes the owned process group. Bounds mode proves the watchdog can
-# actually bound a probe command and that the host accepts the memory limit
-# BEFORE any root starts; when either check fails the run refuses with a
-# named error, so a required-bounds run never lints uncapped. Without
-# FM_LINT_REQUIRE_BOUNDS (a local developer lint, where hosts like macOS
-# cannot apply the address-space limit at all) each root still runs in its
-# own ShellCheck process with identical diagnostics, just unbounded.
-#
-# If a source-following root exits with a memory failure, it is retried once
-# without --external-sources under the same memory limit and only the time
-# left in that root's original deadline; with under a second left, the
-# memory failure stands without a retry. A clean retry passes
-# with an explicit memory-fallback reason and warning; only the same
-# cross-file-dependent codes omitted in local no-source lint are excluded.
-# Other findings and failed retries still fail lint. The retry's diagnostics
-# replace the failed attempt's output; peak RSS is the maximum of both attempts.
-#
-# Per-root evidence is incremental: workers append begin/end records (root,
-# mode, shard, start, end, duration, final exit status, reason, peak RSS when
-# measured, and whether the final attempt followed sources) to a roots log
-# as each root completes, so a mid-run kill still leaves the completed record
-# and names the root in flight as begun-but-unfinished. With --telemetry the
-# log is retained at
-# <telemetry-without-.tsv>.roots.tsv (or <telemetry>.roots.tsv if there is no
-# .tsv suffix); otherwise it lives only in the
-# run's scratch dir. Reason values are ok, findings, memory-fallback,
-# timeout, memory, signal:<sig>, limit-unavailable, or error:<rc>.
-# Memory requires process-level evidence (a GHC exhaustion status or runtime
-# error on stderr), not an echoed source excerpt or an OOM phrase in a
-# filename. In partition mode begin/end
-# lines also stream to stderr, and an abnormal root end is always reported
-# there.
-#
-# Optional quiet telemetry writes one bounded TSV snapshot of content and source
-# graph identity, wall/CPU/RSS, shard load, and competing ShellCheck processes.
-# source_followed_directives counts directives only for roots whose final
-# attempt followed sources, not roots that passed or failed a no-source retry.
-#
-# Usage:
-#   fm-lint.sh                         lint the context-selected file set (see above)
-#   fm-lint.sh --fast [path]...       local lint with extended analysis disabled
-#   fm-lint.sh <path>...               lint explicit roots with the same config
-#   fm-lint.sh --jobs <1|2> [path]...  override concurrent worker count
-#   fm-lint.sh --partition <1of2|2of2> lint one canonical CI partition (see fallback above)
-#   fm-lint.sh --telemetry <path> ...  write a quiet metrics snapshot
-#   fm-lint.sh --required-version      print the ShellCheck pin
-#   fm-lint.sh --list-files            print the file set that would be linted
-#   fm-lint.sh --help                  print this usage
+# Runs ShellCheck at default severity with extended analysis, ambient configuration
+# disabled, and one exact ShellCheck version. CI selects canonical partitions;
+# no-mistakes invokes the context-selected default.
 set -u
 
 REQUIRED_SHELLCHECK=0.11.0
+# ci.yml's lint matrix must list every index 1..PARTITION_COUNT.
+PARTITION_COUNT=12
 # Cross-file codes that need --external-sources. No-source checks (local
 # changed-file mode and memory fallback) cannot judge them.
 LOCAL_NOX_EXCLUDE=SC1091,SC2034,SC2153,SC2329
@@ -489,11 +383,20 @@ if [ "${1:-}" = "--required-version" ]; then
 fi
 
 fm_lint_usage() {
-  awk '
-    NR == 1 { next }
-    /^#/ { sub(/^# ?/, ""); print; next }
-    { exit }
-  ' "$SELF"
+  cat <<'USAGE'
+Usage:
+  fm-lint.sh                         lint the context-selected file set
+  fm-lint.sh --fast [path]...       local lint with extended analysis disabled
+  fm-lint.sh <path>...               lint explicit roots with the same config
+  fm-lint.sh --jobs <1|2> [path]...  override concurrent worker count
+  fm-lint.sh --partition <K>of12     lint one canonical CI partition
+  fm-lint.sh --telemetry <path> ...  write a quiet metrics snapshot
+  fm-lint.sh --required-version      print the ShellCheck pin
+  fm-lint.sh --list-files            print the file set that would be linted
+  fm-lint.sh --help                  print this usage
+
+Local changed-file lint drops --external-sources and excludes SC1091,SC2034,SC2153,SC2329.
+USAGE
 }
 
 # Default no-args lint also validates GitHub workflows. Explicit paths stay a
@@ -765,7 +668,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --partition)
-      [ "$#" -ge 2 ] || { printf 'fm-lint.sh: --partition requires 1of2 or 2of2.\n' >&2; exit 2; }
+      [ "$#" -ge 2 ] || { printf 'fm-lint.sh: --partition requires KofN.\n' >&2; exit 2; }
       PARTITION=$2
       PARTITION_REQUESTED=1
       shift 2
@@ -808,17 +711,21 @@ esac
 case "$PARTITION" in
   '')
     if [ "$PARTITION_REQUESTED" -eq 1 ]; then
-      printf 'fm-lint.sh: --partition requires 1of2 or 2of2.\n' >&2
+      printf 'fm-lint.sh: --partition requires KofN with N=%s.\n' "$PARTITION_COUNT" >&2
       exit 2
     fi
     ;;
-  1of2|2of2)
+  *)
+    partition_index=${PARTITION%%of*}
+    if [ "${PARTITION#*of}" != "$PARTITION_COUNT" ] || ! [ "$partition_index" -ge 1 ] 2>/dev/null || [ "$partition_index" -gt "$PARTITION_COUNT" ]; then
+      printf 'fm-lint.sh: --partition must be KofN with N=%s, got %s.\n' "$PARTITION_COUNT" "$PARTITION" >&2
+      exit 2
+    fi
     if [ "$FAST" -eq 1 ] || [ "$#" -gt 0 ]; then
       printf 'fm-lint.sh: --partition requires full canonical lint; omit --fast and explicit paths.\n' >&2
       exit 2
     fi
     ;;
-  *) printf 'fm-lint.sh: --partition must be 1of2 or 2of2, got %s.\n' "$PARTITION" >&2; exit 2 ;;
 esac
 
 if [ "$SKILLS_MODE" -eq 1 ]; then
@@ -945,8 +852,8 @@ if [ -n "$PARTITION" ]; then
   partition_weights=$(fm_lint_root_weights) || exit $?
   while IFS="$TAB" read -r index path; do
     PARTITION_ROOTS+=("$path")
-  done < <(printf '%s\n' "$partition_weights" | LC_ALL=C sort -t "$TAB" -k1,1nr -k2,2n | awk -F '\t' -v want="${PARTITION%%of*}" '
-    { shard=(load[2] < load[1]) ? 2 : 1; load[shard]+=$1; if (shard == want) print $2 "\t" $3 }
+  done < <(printf '%s\n' "$partition_weights" | LC_ALL=C sort -t "$TAB" -k1,1nr -k2,2n | awk -F '\t' -v want="${PARTITION%%of*}" -v bins="$PARTITION_COUNT" '
+    { shard=1; for (b = 2; b <= bins; b++) if (load[b] < load[shard]) shard = b; load[shard]+=$1; if (shard == want) print $2 "\t" $3 }
   ' | LC_ALL=C sort -t "$TAB" -k1,1n)
   ROOTS=("${PARTITION_ROOTS[@]}")
 fi

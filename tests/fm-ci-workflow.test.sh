@@ -1,22 +1,6 @@
 #!/usr/bin/env bash
-# Contract tests for .github/workflows/ci.yml's runner-spend safeguards.
-#
-# Origin: the 2026-09-12 GitHub Actions starvation incident. firstmate CI had no
-# concurrency deduplication, so every superseded PR head kept its full job
-# fan-out, and four jobs carried no timeout at all. These tests hold both
-# safeguards: PR runs supersede within one PR while main pushes are never
-# cancelled, and every CI job carries a finite hang tripwire drawn from the
-# three-tier timeout policy that docs/fm-test-portable-shards.md "Timeouts"
-# owns (fast, normal, heavy), so no job drifts back to a one-off number.
-#
-# They also hold the fork opt-out: the repository variables FM_CI_SKIP_PUSH and
-# FM_CI_SKIP_MACOS let a fork skip the push run and the macOS job through a
-# job-level condition, while with neither set every job runs exactly as before.
-#
-# The workflow is parsed as YAML and its concurrency and job-level `if`
-# expressions are resolved against simulated pull_request and push contexts,
-# so the assertions describe what GitHub would do, not how the file happens
-# to be spelled.
+# Contract tests for .github/workflows/ci.yml: the PR gate is static and capped,
+# the full suite runs daily, and every job carries a finite timeout.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -199,8 +183,9 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-FAST_TIER_JOBS='test-coverage invariants tests-timing-aggregate'
-NORMAL_TIER_JOBS='lint tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
+PR_TIER_JOBS='lint invariants'
+FAST_TIER_JOBS='test-coverage tests-timing-aggregate daily-test-issue'
+NORMAL_TIER_JOBS='tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr'
 
 # Print the one timeout every listed job shares; fail on any disagreement.
@@ -272,21 +257,20 @@ end
   pass "every ci.yml job carries a finite timeout"
 }
 
-# Every job sits in exactly one tier, and the workflow carries exactly three
+# Every job sits in exactly one tier, and the workflow carries exactly four
 # distinct job-level timeouts: one per tier, no one-off numbers.
 test_every_job_belongs_to_exactly_one_timeout_tier() {
   local expected actual distinct
-  # shellcheck disable=SC2086
-  expected=$(printf '%s\n' $FAST_TIER_JOBS $NORMAL_TIER_JOBS $HEAVY_TIER_JOBS | LC_ALL=C sort)
+  expected=$(printf '%s\n' "$PR_TIER_JOBS $FAST_TIER_JOBS $NORMAL_TIER_JOBS $HEAVY_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
   [ "$(printf '%s\n' "$expected" | LC_ALL=C sort -u)" = "$expected" ] \
     || fail "a job is listed in more than one timeout tier:"$'\n'"$expected"
   actual=$(workflow_jobs | LC_ALL=C sort) || fail "could not list ci.yml jobs"
   [ "$actual" = "$expected" ] \
     || fail "ci.yml jobs and the timeout tiers disagree; every job must join one tier"$'\n'"workflow: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"tiers: $(printf '%s' "$expected" | tr '\n' ' ')"
-  distinct=$(for job in $expected; do job_timeout "$job"; done | LC_ALL=C sort -u | wc -l | tr -d ' ')
-  [ "$distinct" = 3 ] \
-    || fail "ci.yml must carry exactly three distinct job timeouts (fast, normal, heavy), got $distinct"
-  pass "every ci.yml job belongs to one of the three timeout tiers"
+  distinct=$(printf '%s\n' "$expected" | while read -r job; do job_timeout "$job"; done | LC_ALL=C sort -u | wc -l | tr -d ' ')
+  [ "$distinct" = 4 ] \
+    || fail "ci.yml must carry exactly four distinct job timeouts (pr, fast, normal, heavy), got $distinct"
+  pass "every ci.yml job belongs to one of the four timeout tiers"
 }
 
 # Fast tier: seconds-long checks share one short tripwire in the 5-10 minute band.
@@ -345,36 +329,87 @@ puts steps[index].fetch("timeout-minutes", "none")
   pass "Herdr keeps a $step minute step tripwire under a $heavy minute job backstop"
 }
 
-# The fork opt-out is opt-in: with neither variable set every job runs on both
-# events, FM_CI_SKIP_PUSH=1 empties only the push run, and FM_CI_SKIP_MACOS=1
-# removes only the macOS job. A "-" in the table means the variable is unset.
+# The fork opt-out is opt-in: with neither variable set, pull request and push
+# runs carry only the static gate and the daily run carries every other job.
+# FM_CI_SKIP_PUSH=1 empties only the push run, and FM_CI_SKIP_MACOS=1 removes
+# only the macOS job from the daily run. A "-" in the table means unset.
 test_fork_skip_variables_are_opt_in() {
-  local all event skip_push skip_macos expected want actual
-  all=$(workflow_jobs) || fail "could not list ci.yml jobs"
+  local all pr daily event skip_push skip_macos expected want actual
+  all=$(workflow_jobs | LC_ALL=C sort) || fail "could not list ci.yml jobs"
+  pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
+  daily=$(comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$pr"))
   printf '%s\n' "$all" | grep -qx macos-stock-bash \
     || fail "the macOS job is missing from ci.yml, so the table below would prove nothing"
   while read -r event skip_push skip_macos expected; do
     [ "$skip_push" != - ] || skip_push=
     [ "$skip_macos" != - ] || skip_macos=
     case $expected in
-      all) want=$all ;;
+      pr) want=$pr ;;
+      daily) want=$daily ;;
+      daily-but-macos) want=$(printf '%s\n' "$daily" | grep -vx macos-stock-bash) ;;
       none) want= ;;
-      all-but-macos) want=$(printf '%s\n' "$all" | grep -vx macos-stock-bash) ;;
       *) fail "unknown expectation $expected" ;;
     esac
-    actual=$(jobs_running_under "$event" "$skip_push" "$skip_macos") \
+    actual=$(jobs_running_under "$event" "$skip_push" "$skip_macos" | LC_ALL=C sort) \
       || fail "could not resolve the job conditions for $event FM_CI_SKIP_PUSH=$skip_push FM_CI_SKIP_MACOS=$skip_macos"
-    [ "$actual" = "$want" ] \
+    [ "$actual" = "$(printf '%s' "$want")" ] \
       || fail "$event with FM_CI_SKIP_PUSH=$skip_push FM_CI_SKIP_MACOS=$skip_macos must run $expected jobs"$'\n'"ran: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"wanted: $(printf '%s' "$want" | tr '\n' ' ')"
   done <<'TABLE'
-push         - - all
-pull_request - - all
-push         1 - none
-pull_request 1 - all
-pull_request - 1 all-but-macos
-push         - 1 all-but-macos
+push                - - pr
+pull_request        - - pr
+push                1 - none
+pull_request        1 - pr
+pull_request        - 1 pr
+push                - 1 pr
+schedule            - - daily
+workflow_dispatch   - - daily
+schedule            - 1 daily-but-macos
+workflow_dispatch   - 1 daily-but-macos
 TABLE
   pass "the fork skip variables change nothing unless set, and each skips only its own run or job"
+}
+
+# Pull request and push runs carry only the static gate, each capped at 10 minutes.
+test_pull_request_and_push_runs_carry_only_the_capped_static_gate() {
+  local pr event actual job
+  pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
+  for event in pull_request push; do
+    actual=$(jobs_running_under "$event" '' '' | LC_ALL=C sort) || fail "could not resolve the jobs $event runs"
+    [ "$actual" = "$pr" ] || fail "$event must run only the static gate ($(printf '%s' "$pr" | tr '\n' ' ')), ran: $(printf '%s' "$actual" | tr '\n' ' ')"
+  done
+  while read -r job; do
+    [ "$(job_timeout "$job")" = 10 ] \
+      || fail "$job must cap at 10 minutes on a pull request or push run, got $(job_timeout "$job")"
+  done <<<"$pr"
+  pass "pull request and push runs carry only the static gate, each capped at 10 minutes"
+}
+
+# Only the failure issue job may write issues, and it must need every other daily
+# job so its outcome reflects the whole daily run.
+test_daily_run_reports_failures_through_one_issue_job() {
+  local needs daily event result expected actual
+  ruby -ryaml -e '
+writers = YAML.load_file(ARGV[0]).fetch("jobs").select { |_, job| (job["permissions"] || {})["issues"] == "write" }.keys
+raise "only daily-test-issue may write issues, got #{writers.inspect}" unless writers == ["daily-test-issue"]
+' "$CI_WORKFLOW" || fail "ci.yml grants issue write outside the daily failure job"
+  needs=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0]).fetch("jobs").fetch("daily-test-issue").fetch("needs").sort' "$CI_WORKFLOW") \
+    || fail "could not read the daily-test-issue needs"
+  daily=$(jobs_running_under schedule '' '' | grep -vx daily-test-issue | LC_ALL=C sort)
+  [ "$needs" = "$daily" ] \
+    || fail "daily-test-issue must need every other daily job"$'\n'"needs: $(printf '%s' "$needs" | tr '\n' ' ')"$'\n'"daily: $(printf '%s' "$daily" | tr '\n' ' ')"
+  while read -r event result expected; do
+    actual=$(job_runs_under daily-test-issue "$event" '' '' "$result") \
+      || fail "could not resolve the daily-test-issue condition for $event"
+    [ "$actual" = "$expected" ] \
+      || fail "daily-test-issue on $event after a $result must resolve $expected, got $actual"
+  done <<'TABLE'
+schedule           failure true
+schedule           success true
+workflow_dispatch  failure true
+pull_request       failure false
+push               failure false
+TABLE
+  pass "the daily failure issue runs after the daily run only and is the sole job granted issue writes"
 }
 
 # Print true or false: whether one job's job-level `if` resolves true under
@@ -391,22 +426,22 @@ puts Expression.condition(YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1])["
 ' "$CI_WORKFLOW" "$@"
 }
 
-# The aggregate must keep running after a failed lane so its timing summary
-# still lands, while the push skip still removes it from a skipped push run.
+# The aggregate summarizes the daily lanes and must still run after a failed lane
+# so its summary lands; pull request and push runs never carry it.
 test_timing_aggregate_still_runs_after_a_failed_lane() {
-  local event skip_push expected actual
-  while read -r event skip_push expected; do
-    [ "$skip_push" != - ] || skip_push=
-    actual=$(job_runs_under tests-timing-aggregate "$event" "$skip_push" '' failure) \
-      || fail "could not resolve the aggregate condition for $event FM_CI_SKIP_PUSH=$skip_push"
+  local event expected actual
+  while read -r event expected; do
+    actual=$(job_runs_under tests-timing-aggregate "$event" '' '' failure) \
+      || fail "could not resolve the aggregate condition for $event"
     [ "$actual" = "$expected" ] \
-      || fail "after a failed lane, the aggregate on $event with FM_CI_SKIP_PUSH=$skip_push must resolve $expected, got $actual"
+      || fail "after a failed lane, the aggregate on $event must resolve $expected, got $actual"
   done <<'TABLE'
-pull_request - true
-push         - true
-push         1 false
+schedule           true
+workflow_dispatch  true
+pull_request       false
+push               false
 TABLE
-  pass "the timing aggregate still runs after a failed lane unless the push run is skipped"
+  pass "the timing aggregate runs after a failed daily lane and never on pull request or push runs"
 }
 
 test_ci_matrices_match_executable_partitions() {
@@ -444,6 +479,8 @@ test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
 test_fork_skip_variables_are_opt_in
+test_pull_request_and_push_runs_carry_only_the_capped_static_gate
+test_daily_run_reports_failures_through_one_issue_job
 test_timing_aggregate_still_runs_after_a_failed_lane
 test_every_job_has_a_finite_timeout
 test_every_job_belongs_to_exactly_one_timeout_tier

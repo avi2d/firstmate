@@ -38,8 +38,9 @@ Add required status checks with `strict_required_status_checks_policy: false`; a
 Bind the checks to the GitHub Actions app already producing them, rather than accepting the same context from any integration.
 No new app installation or manual runner setup is needed for that setting.
 
-Require the actual job contexts: `Lint 1`, `Lint 2`, `Test coverage guard`, `Repo invariants`, `Stock macOS Bash snapshot compatibility`, `Behavior portable parallel 1`, `Behavior portable parallel 2`, `Behavior portable serial 1` through `Behavior portable serial 10`, `Behavior tests (Herdr)`, and `Behavior timing aggregate`.
-The timing aggregate is not a substitute for individual jobs because it can succeed while collecting evidence from a failed run.
+Require the pull-request job contexts: `Lint 1` through `Lint 12` and `Repo invariants`.
+The daily jobs run on a schedule and never on pull requests, so they are not required checks.
+A failing daily run opens or updates the issue titled `Daily test suite failing`, labelled `daily-tests`, and a green daily run closes it.
 
 Apply the approved rule change only after the corresponding workflow is green and landed, confirming exact names and the Actions integration id from real checks first.
 Snapshot the current ruleset, amend that same rule with the authenticated GitHub API or settings UI, and read back both the ruleset and effective branch rules.
