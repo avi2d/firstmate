@@ -3903,6 +3903,22 @@ EOF
 $stalled_items
 EOF
     fi
+    wait_items=$(scan_wait_declarations "$STATE") || {
+      triage_log "declared-wait owner/recheck scan failed; continuing without it"
+      wait_items=
+    }
+    if [ -n "$wait_items" ]; then
+      while IFS= read -r wait_item || [ -n "$wait_item" ]; do
+        [ -n "$wait_item" ] || continue
+        reason="check: wait-declaration: $(wait_declaration_item_reason "$wait_item")" || continue
+        fm_wake_append check wait-declaration "$reason" || exit 1
+        wait_declaration_record_raised "$STATE" "$wait_item" || exit 1
+        touch "$STATE/.last-check"
+        wake "$reason"
+      done <<EOF
+$wait_items
+EOF
+    fi
     touch "$STATE/.last-check"
     if [ -n "$contribution_check_output" ]; then
       wake "$contribution_check_output"

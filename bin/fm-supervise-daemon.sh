@@ -1524,6 +1524,7 @@ housekeeping() {  # <state>
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
     local event record rest endpoint ident rc exclude stalled_items stalled_item stalled_reason
+    local wait_items wait_item wait_reason
     exclude=$(status_scan_parent_channel_exclude "$state")
     for f in "$state"/*.status; do
       [ -e "$f" ] || [ -L "$f" ] || continue
@@ -1565,6 +1566,19 @@ housekeeping() {  # <state>
       fi
     done <<EOF
 $stalled_items
+EOF
+    wait_items=$(scan_wait_declarations "$state") || {
+      log "declared-wait owner/recheck scan failed; continuing without it"
+      wait_items=
+    }
+    while IFS= read -r wait_item || [ -n "$wait_item" ]; do
+      [ -n "$wait_item" ] || continue
+      wait_reason=$(wait_declaration_item_reason "$wait_item") || continue
+      if escalate_add "$state" "$wait_reason"; then
+        wait_declaration_record_raised "$state" "$wait_item" || log "a declared-wait flag could not be recorded; it will re-fire"
+      fi
+    done <<EOF
+$wait_items
 EOF
   fi
 }
