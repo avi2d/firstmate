@@ -1241,6 +1241,91 @@ METHODS
   fi
 }
 
+security_paths_file() {
+  local override="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/security-paths"
+  if [ -e "$override" ]; then
+    printf '%s\n' "$override"
+  else
+    printf '%s\n' "$SCRIPT_DIR/fm-security-paths.default"
+  fi
+}
+
+# Status 2 means the pattern does not compile; the caller must fail on it, not read it as no match.
+regex_match() { [[ $1 =~ $2 ]]; }
+
+security_path_hits() {
+  local list=$1 path pattern status
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    while IFS= read -r pattern || [ -n "$pattern" ]; do
+      case "$pattern" in ''|'#'*) continue ;; esac
+      status=0
+      regex_match "$path" "$pattern" || status=$?
+      case $status in
+        0) printf '%s\n' "$path"; break ;;
+        1) ;;
+        *) return 1 ;;
+      esac
+    done < "$list"
+  done
+}
+
+# A page that is not a JSON array fails the read, so an error is never taken for an empty diff.
+pr_changed_paths() {
+  local page=1 body count names filter encoded
+  case "$PROVIDER" in
+    github|forgejo) filter='.[] | .filename, (.previous_filename // empty)' ;;
+    gitlab) filter='.[] | .old_path, .new_path' ;;
+    *) return 1 ;;
+  esac
+  while :; do
+    [ "$page" -le 100 ] || return 1
+    case "$PROVIDER" in
+      github)
+        body=$(gh api "repos/$PR_OWNER/$PR_REPO/pulls/$PR_NUMBER/files?per_page=100&page=$page" 2>/dev/null)
+        ;;
+      gitlab)
+        encoded=$(jq -rn --arg p "$PR_PATH" '$p | @uri') || return 1
+        body=$(GITLAB_HOST="$FM_PR_HOST" glab api "projects/$encoded/merge_requests/$PR_NUMBER/diffs?per_page=100&page=$page" 2>/dev/null)
+        ;;
+      forgejo)
+        body=$(tea api --login "$FORGEJO_LOGIN" --repo "$PR_OWNER/$PR_REPO" \
+          "/repos/{owner}/{repo}/pulls/$PR_NUMBER/files?limit=100&page=$page" 2>/dev/null)
+        ;;
+    esac || return 1
+    count=$(printf '%s' "$body" | jq -e 'if type == "array" then length else error("not a list") end' 2>/dev/null) || return 1
+    [ "$count" -gt 0 ] || break
+    names=$(printf '%s' "$body" | jq -r "$filter" 2>/dev/null) || return 1
+    printf '%s\n' "$names"
+    page=$((page + 1))
+  done
+}
+
+# Must run after the head is verified, so the merge binds to the head whose paths were judged.
+autonomous_security_path_gate() {
+  local list changed hits
+  [ "$ATTENDED_OVERRIDE" = false ] || return 0
+  list=$(security_paths_file)
+  if [ ! -r "$list" ] || ! grep -q -v -E '^[[:space:]]*(#|$)' "$list"; then
+    echo "error: PR merge refused - the security path list $list cannot be read or has no entries; nothing was merged" >&2
+    return 1
+  fi
+  if ! changed=$(pr_changed_paths); then
+    echo "error: PR merge refused - the changed files of $URL could not be read to check for security-sensitive paths; nothing was merged" >&2
+    return 1
+  fi
+  if ! hits=$(printf '%s\n' "$changed" | security_path_hits "$list"); then
+    echo "error: PR merge refused - the security path list $list has a pattern that does not compile; nothing was merged" >&2
+    return 1
+  fi
+  if [ -n "$hits" ]; then
+    echo "error: PR merge refused - $URL changes security-sensitive paths:" >&2
+    printf '%s\n' "$hits" | sed 's/^/  /' >&2
+    echo "error: this needs the captain's explicit word, so nothing was merged; merge attended with --attended-override only after the captain names it" >&2
+    return 1
+  fi
+}
+
 record_pr_metadata() {
   if ! FM_PR_CHECK_MERGE=1 "$SCRIPT_DIR/fm-pr-check.sh" "$ID" "$URL"; then
     return 1
@@ -1750,6 +1835,7 @@ case "$PROVIDER" in
       fi
       exit 1
     fi
+    autonomous_security_path_gate || exit 1
     if [ -n "$UPSTREAM_SYNC_HEAD" ] && [ "$UPSTREAM_SYNC_HEAD" != "$FM_PR_MERGE_HEAD" ]; then
       printf 'error: refusing to merge %s: its head moved from %s, whose upstream sync classification was read, to %s; retry so the new head is classified\n' \
         "$URL" "$UPSTREAM_SYNC_HEAD" "$FM_PR_MERGE_HEAD" >&2
@@ -1806,6 +1892,7 @@ case "$PROVIDER" in
     ;;
   gitlab)
     gitlab_verify_mergeable || exit 1
+    autonomous_security_path_gate || exit 1
     # --sha binds the merge to the head this run verified, so a push that lands
     # in between is refused by GitLab instead of merged unverified. --yes only
     # skips the interactive confirmation, which no supervised run can answer;
@@ -1842,6 +1929,7 @@ case "$PROVIDER" in
     forgejo_method=$(caller_merge_method "$@")
     [ -n "$forgejo_method" ] || forgejo_method=$(forgejo_default_merge_style) || exit 1
     forgejo_verify_mergeable || exit 1
+    autonomous_security_path_gate || exit 1
     # The away record is locked first, so this last presence and authority
     # read and the forge command below share one live-owner critical section.
     hold_away_record_for_merge || exit 1

@@ -276,6 +276,14 @@ case "${1:-} ${2:-}" in
     # The required-check reads: the branch itself, and its rules read without
     # the merge-queue filter the queue reader below applies.
     case " $* " in
+      *" repos/"*"/pulls/"*"/files"*)
+        [ ! -e "$FM_TEST_GH_FILES_FAIL" ] || exit 1
+        case "$*" in
+          *"&page=1") cat "$FM_TEST_GH_FILES" 2>/dev/null || printf '[]\n' ;;
+          *) printf '[]\n' ;;
+        esac
+        exit 0
+        ;;
       *" repos/"*"/commits/"*"/check-runs"*)
         case "$*" in
           *"/commits/$(cat "$FM_TEST_GH_HEAD")/check-runs"*) ;;
@@ -385,6 +393,14 @@ case "${1:-} ${2:-}" in
     fi
     exit 0
     ;;
+  "api "*)
+    [ ! -e "$FM_TEST_GLAB_DIFFS_FAIL" ] || exit 1
+    case "$*" in
+      *"&page=1") cat "$FM_TEST_GLAB_DIFFS" 2>/dev/null || printf '[]\n' ;;
+      *) printf '[]\n' ;;
+    esac
+    exit 0
+    ;;
   "mr merge")
     [ ! -e "$case_dir/glab-merge-fails" ] || { echo "error: mr merge failed" >&2 ; exit 1 ; }
     : > "$case_dir/glab-merge-called"
@@ -483,6 +499,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$endpoint" in
+  */files|*/files\?*)
+    [ ! -e "$log_dir/tea-files-fail" ] || { printf '%s\n' '{"message":"not found"}'; exit 0; }
+    page=1
+    case "$endpoint" in
+      *page=*) page=${endpoint##*page=}; page=${page%%&*} ;;
+    esac
+    if [ "$page" = 1 ] && [ -f "$log_dir/tea-files.json" ]; then cat "$log_dir/tea-files.json"; else printf '[]\n'; fi
+    exit 0
+    ;;
   */status|*/status\?*)
     [ ! -e "$log_dir/tea-status-fails" ] || exit 1
     page=1
@@ -712,6 +737,10 @@ run_pr_merge() {
   FM_TEST_AWAY_WORDS_AT_MERGE="$case_dir/away-words-at-merge" \
   FM_TEST_REAL_MV="$REAL_MV" \
   FM_TEST_GLAB_LOG="$case_dir/glab.log" \
+  FM_TEST_GLAB_DIFFS="$case_dir/gitlab-diffs.json" \
+  FM_TEST_GLAB_DIFFS_FAIL="$case_dir/gitlab-diffs-fail" \
+  FM_TEST_GH_FILES="$case_dir/github-files.json" \
+  FM_TEST_GH_FILES_FAIL="$case_dir/github-files-fail" \
   FM_TEST_GLAB_JSON="$case_dir/mr.json" \
   FM_TEST_TEA_LOG="$case_dir/tea.log" \
   HOME="${FM_TEST_USER_HOME:-$case_dir/user-home}" \
@@ -5133,3 +5162,192 @@ test_allow_red_refused_on_forgejo
 test_allow_missing_refused_on_forgejo
 test_allow_no_pipeline_merges_only_a_null_head_pipeline
 test_allow_no_pipeline_is_attended_only_and_gitlab_only
+
+test_yolo_merge_refuses_a_security_path_diff() {
+  local case_dir rc
+  case_dir=$(make_case yolo-security-path-refused)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  printf '%s\n' '[{"filename":".github/workflows/ci.yml"}]' > "$case_dir/github-files.json"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/52 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "yolo-security-path-refused: a security-path diff must not merge without the captain's word"
+  assert_grep "needs the captain's explicit word" "$case_dir/stderr" \
+    "yolo-security-path-refused: the refusal did not say the captain's word is needed"
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "yolo-security-path-refused: gh was asked to merge"
+  pass "a yolo merge of a PR touching a CI workflow is refused and never sent to the forge"
+}
+
+test_yolo_merge_proceeds_when_no_path_is_security_sensitive() {
+  local case_dir rc
+  case_dir=$(make_case yolo-plain-diff)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  printf '\nyolo=on\n' >> "$case_dir/state/task-x1.meta"
+  printf '%s\n' '[{"filename":"docs/readme.md"}]' > "$case_dir/github-files.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/53 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "yolo-plain-diff: a diff with no security-sensitive path should merge"
+  [ -n "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "yolo-plain-diff: the merge never reached the forge"
+  pass "a yolo merge whose diff touches no security-sensitive path still merges"
+}
+
+test_attended_override_merges_a_security_path_diff() {
+  local case_dir rc
+  case_dir=$(make_case attended-security-path)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  printf '%s\n' '[{"filename":".github/workflows/ci.yml"}]' > "$case_dir/github-files.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/54 --attended-override \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "attended-security-path: an attended merge with the captain's override should merge"
+  [ -n "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "attended-security-path: the merge never reached the forge"
+  pass "--attended-override merges a PR that touches a security-sensitive path"
+}
+
+test_security_path_rename_source_is_refused() {
+  local case_dir rc
+  case_dir=$(make_case yolo-security-rename)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  printf '%s\n' '[{"filename":"docs/ci.yml","previous_filename":".github/workflows/ci.yml"}]' \
+    > "$case_dir/github-files.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/55 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "yolo-security-rename: a rename away from a security path must be refused"
+  assert_grep "needs the captain's explicit word" "$case_dir/stderr" \
+    "yolo-security-rename: the refusal did not say the captain's word is needed"
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "yolo-security-rename: the merge reached the forge"
+  pass "a rename away from a security-sensitive path is still refused"
+}
+
+test_unreadable_changed_files_fail_closed() {
+  local case_dir rc
+  case_dir=$(make_case yolo-files-unreadable)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  : > "$case_dir/github-files-fail"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/56 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "yolo-files-unreadable: an unreadable diff must refuse, not pass as empty"
+  assert_grep "could not be read to check for security-sensitive paths" "$case_dir/stderr" \
+    "yolo-files-unreadable: the refusal did not name the unreadable diff"
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "yolo-files-unreadable: the merge reached the forge"
+  pass "an unreadable changed-file list refuses the yolo merge instead of passing"
+}
+
+test_uncompilable_security_path_pattern_fails_closed() {
+  local case_dir rc
+  case_dir=$(make_case yolo-bad-pattern)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  printf '%s\n' '(' > "$case_dir/home/config/security-paths"
+  printf '%s\n' '[{"filename":"docs/readme.md"}]' > "$case_dir/github-files.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/57 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "yolo-bad-pattern: a pattern that does not compile must refuse"
+  assert_grep "does not compile" "$case_dir/stderr" \
+    "yolo-bad-pattern: the refusal did not name the bad pattern"
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "yolo-bad-pattern: the merge reached the forge"
+  pass "a security path list that does not compile refuses the yolo merge"
+}
+
+test_config_security_paths_replace_the_default_list() {
+  local case_dir rc
+  case_dir=$(make_case yolo-config-replaces)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  printf '%s\n' '^docs/' > "$case_dir/home/config/security-paths"
+  printf '%s\n' '[{"filename":".github/workflows/ci.yml"}]' > "$case_dir/github-files.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/58 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "yolo-config-replaces: a config list replaces the default, so a workflow diff not on it merges"
+  [ -n "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "yolo-config-replaces: the merge never reached the forge"
+  pass "config/security-paths replaces the tracked default list"
+}
+
+test_gitlab_security_path_diff_is_refused() {
+  local case_dir rc
+  case_dir=$(make_gitlab_case gitlab-security-path-refused)
+  printf '%s\n' '[{"old_path":"docs/ci.yml","new_path":".github/workflows/ci.yml"}]' \
+    > "$case_dir/gitlab-diffs.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "gitlab-security-path-refused: a merge request touching a security path must refuse"
+  assert_grep "needs the captain's explicit word" "$case_dir/stderr" \
+    "gitlab-security-path-refused: the refusal did not say the captain's word is needed"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-security-path-refused: glab was asked to merge"
+  pass "a GitLab merge request touching a security-sensitive path is refused before glab merges it"
+}
+
+test_forgejo_security_path_diff_is_refused() {
+  local case_dir rc
+  case_dir=$(make_forgejo_case forgejo-security-path-refused)
+  printf '%s\n' '[{"filename":".github/workflows/ci.yml"}]' > "$case_dir/tea-files.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$FJ_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "forgejo-security-path-refused: a pull request touching a security path must refuse"
+  assert_grep "needs the captain's explicit word" "$case_dir/stderr" \
+    "forgejo-security-path-refused: the refusal did not say the captain's word is needed"
+  [ -z "$(tea_merge_line "$case_dir/tea.log")" ] \
+    || fail "forgejo-security-path-refused: tea was asked to merge"
+  pass "a Forgejo pull request touching a security-sensitive path is refused before tea merges it"
+}
+
+test_yolo_merge_refuses_a_security_path_diff
+test_yolo_merge_proceeds_when_no_path_is_security_sensitive
+test_attended_override_merges_a_security_path_diff
+test_security_path_rename_source_is_refused
+test_unreadable_changed_files_fail_closed
+test_uncompilable_security_path_pattern_fails_closed
+test_config_security_paths_replace_the_default_list
+test_gitlab_security_path_diff_is_refused
+test_forgejo_security_path_diff_is_refused
