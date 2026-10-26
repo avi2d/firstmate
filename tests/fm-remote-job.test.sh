@@ -1566,7 +1566,7 @@ pass "barely healthy worker failures remain bounded by the restart guard"
 # A serve child that finds a live lock owner it cannot match must retire, not
 # spin to loop exhaustion and report cannot-acquire. The supervisor restarts a
 # failed child up to FM_REMOTE_JOB_SUPERVISOR_MAX_RESTARTS, so the old result
-# turned one duplicate start into minutes of competing workers (the winwsl
+# turned one duplicate start into minutes of competing workers (the same-host
 # storm). A heartbeat that stays fresh past the loop window can only come from
 # a live owner, so the contender retires through the same path it uses when the
 # owner matches.

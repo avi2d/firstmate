@@ -161,8 +161,8 @@ test_remote_secondmate_meta_alone_releases() {
   hold_session
   holder=$HOLDER
   printf '%s\n' "$holder" > "$state/.lock"
-  printf 'kind=secondmate\nmode=secondmate\nremote_host=winbox\n' > "$state/winbox.meta"
-  printf 'kind=secondmate\nmode=secondmate\nremote_host=winbox-ru\n' > "$state/winbox-ru.meta"
+  printf 'kind=secondmate\nmode=secondmate\nremote_host=linux\n' > "$state/linux.meta"
+  printf 'kind=secondmate\nmode=secondmate\nremote_host=linux-b\n' > "$state/linux-b.meta"
   FM_MAC_KEEPAWAKE_UNAME=Darwin "$KEEPAWAKE" sync --state "$state" || { stop_pid "$holder"; fail "sync failed with only remote metas present"; }
   sleep 1
   [ ! -e "$home/caffeinate.calls" ] || { stop_pid "$holder"; fail "remote secondmate metas alone took a Mac assertion"; }

@@ -599,7 +599,7 @@ test_matrix_codex_idle_starfield_furniture() {
   # placed a bright cell BETWEEN the glyph and the placeholder.
   glyph2="${ESC}[0m${ESC}[1m${bg}›${ESC}[0m$(codex_cell 138 ⠁)${ESC}[2m${bg}Ask Codex to do anything${ESC}[0m$(codex_cell 163 ⡀)${bg}  ${ESC}[0m$(codex_cell 132 ⠈)"
   below="${ESC}[0m${bg}        ${ESC}[0m$(codex_cell 101 ⠐)${bg}    ${ESC}[0m$(codex_cell 111 ⠄)${bg}   ${ESC}[0m$(codex_cell 165 ⠠)${bg}  ${ESC}[0m$(codex_cell 121 ⢀)$(codex_cell 122 ⠠)$(codex_cell 81 ⡀)$(codex_cell 150 ⠄⠂)"
-  footer="  ${ESC}[0m${ESC}[38;2;246;226;183mgpt-6-astra high fast${ESC}[0m${ESC}[2m · ${ESC}[0m${ESC}[38;2;171;223;167m~/Projects/purser${ESC}[0m${ESC}[2m · ${ESC}[0m${ESC}[38;2;156;222;211mLaunch Purser desk brief${ESC}[0m"
+  footer="  ${ESC}[0m${ESC}[38;2;246;226;183mgpt-6-astra high fast${ESC}[0m${ESC}[2m · ${ESC}[0m${ESC}[38;2;171;223;167m~/example${ESC}[0m${ESC}[2m · ${ESC}[0m${ESC}[38;2;156;222;211mLaunch Example desk brief${ESC}[0m"
   screen=$'transcript line\n\n'"$above"$'\n'"$glyph"$'\n'"$below"$'\n'"$footer"
   screen2=$'transcript line\n\n'"$above"$'\n'"$glyph2"$'\n'"$below"$'\n'"$footer"
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
@@ -622,7 +622,7 @@ test_matrix_codex_idle_starfield_furniture() {
     || fail "the row below the glyph must keep starfield cells after ghost stripping"
   _fm_composer_row_is_braille_furniture "$stripped" \
     || fail "the row below the glyph must be recognized as braille furniture"
-  fm_composer_row_has_edge '  gpt-6-astra high fast · ~/Projects/purser · Launch Purser desk brief' \
+  fm_composer_row_has_edge '  gpt-6-astra high fast · ~/example · Launch Example desk brief' \
     && fail "fixture drift: the footer must carry no structural edge, or the boundary rule is untested"
 
   # The verdicts: empty wherever styling can prove the placeholder ghost, on

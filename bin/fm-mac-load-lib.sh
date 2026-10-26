@@ -86,8 +86,8 @@ fm_mac_load_config() {  # <config-dir>
   FM_MAC_LOAD_ERROR=
   heavy_day=3 heavy_night=4
   if [ "$(uname -s)" = Linux ]; then
-    # A Linux host can also run the winbox gate, so this gate borrows the
-    # winbox budget there instead of refusing what that gate admits.
+    # A Linux host can also run the linux gate, so this gate borrows the
+    # linux budget there instead of refusing what that gate admits.
     FM_MAC_LOAD_LIMIT=16
     heavy_day=4 heavy_night=6
   fi
@@ -193,58 +193,58 @@ fm_mac_heavy_count() {  # <first-state> <own-id>
   return 0
 }
 
-# The winbox load gate extends the Mac gate to a Linux host that two Firstmate
+# The linux load gate extends the Mac gate to a Linux host that two Firstmate
 # homes share without a common local root. Each home lists the other in
-# config/winbox-load-siblings, so a heavy start waits while the five-minute
+# config/linux-load-siblings, so a heavy start waits while the five-minute
 # average is high or the standing heavy cap for the hour, four by day and six
 # by night, already runs across both homes.
 
 # shellcheck disable=SC2034 # read by bin/fm-spawn.sh after sourcing.
-FM_WINBOX_LOAD_DEFER_EXIT=75
-FM_WINBOX_LOAD_LIMIT=16
-FM_WINBOX_HEAVY_LIMIT=6
+FM_LINUX_LOAD_DEFER_EXIT=75
+FM_LINUX_LOAD_LIMIT=16
+FM_LINUX_HEAVY_LIMIT=6
 
-fm_winbox_load_config() {  # <config-dir>
-  FM_WINBOX_LOAD_LIMIT=16
-  FM_WINBOX_HEAVY_LIMIT=6
-  FM_WINBOX_LOAD_ERROR=
+fm_linux_load_config() {  # <config-dir>
+  FM_LINUX_LOAD_LIMIT=16
+  FM_LINUX_HEAVY_LIMIT=6
+  FM_LINUX_LOAD_ERROR=
   if ! fm_machine_load_heavy_default 4 6; then
-    FM_WINBOX_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
+    FM_LINUX_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
     return 1
   fi
   if ! fm_machine_load_config 16 "$FM_MACHINE_HEAVY_DEFAULT" "${1:-}"; then
-    FM_WINBOX_LOAD_LIMIT=$FM_MACHINE_LOAD_LIMIT
-    FM_WINBOX_HEAVY_LIMIT=$FM_MACHINE_HEAVY_LIMIT
-    FM_WINBOX_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
+    FM_LINUX_LOAD_LIMIT=$FM_MACHINE_LOAD_LIMIT
+    FM_LINUX_HEAVY_LIMIT=$FM_MACHINE_HEAVY_LIMIT
+    FM_LINUX_LOAD_ERROR=$FM_MACHINE_LOAD_ERROR
     return 1
   fi
-  FM_WINBOX_LOAD_LIMIT=$FM_MACHINE_LOAD_LIMIT
-  FM_WINBOX_HEAVY_LIMIT=$FM_MACHINE_HEAVY_LIMIT
+  FM_LINUX_LOAD_LIMIT=$FM_MACHINE_LOAD_LIMIT
+  FM_LINUX_HEAVY_LIMIT=$FM_MACHINE_HEAVY_LIMIT
   return 0
 }
 
-fm_winbox_load_gate_active() {  # [config-dir]
+fm_linux_load_gate_active() {  # [config-dir]
   [ "$(uname -s)" = Linux ] || return 1
-  [ "${FM_WINBOX_LOAD_GATE_FORCE:-0}" = 1 ] && return 0
+  [ "${FM_LINUX_LOAD_GATE_FORCE:-0}" = 1 ] && return 0
   [ -n "${1:-}" ] || return 1
-  [ -e "$1/winbox-load-siblings" ] || [ -L "$1/winbox-load-siblings" ]
+  [ -e "$1/linux-load-siblings" ] || [ -L "$1/linux-load-siblings" ]
 }
 
-fm_winbox_load_high() {  # <five-minute-average>
-  awk -v avg="$1" -v limit="$FM_WINBOX_LOAD_LIMIT" 'BEGIN { exit !(avg + 0 >= limit + 0) }'
+fm_linux_load_high() {  # <five-minute-average>
+  awk -v avg="$1" -v limit="$FM_LINUX_LOAD_LIMIT" 'BEGIN { exit !(avg + 0 >= limit + 0) }'
 }
 
-# Every line of <config-dir>/winbox-load-siblings names one sibling Firstmate
+# Every line of <config-dir>/linux-load-siblings names one sibling Firstmate
 # home by absolute path. A missing file lists no siblings, while an unreadable
 # or malformed one refuses rather than undercounts.
-fm_winbox_sibling_homes() {  # <config-dir>
-  local file=${1:-}/winbox-load-siblings line
-  FM_WINBOX_SIBLINGS=()
-  FM_WINBOX_SIBLING_ERROR=
+fm_linux_sibling_homes() {  # <config-dir>
+  local file=${1:-}/linux-load-siblings line
+  FM_LINUX_SIBLINGS=()
+  FM_LINUX_SIBLING_ERROR=
   [ -n "${1:-}" ] || return 0
   if [ ! -e "$file" ] && [ ! -L "$file" ]; then return 0; fi
   if [ ! -f "$file" ] || [ -L "$file" ] || [ ! -r "$file" ]; then
-    FM_WINBOX_SIBLING_ERROR="$file is not a readable regular file"
+    FM_LINUX_SIBLING_ERROR="$file is not a readable regular file"
     return 1
   fi
   while IFS= read -r line || [ -n "$line" ]; do
@@ -257,45 +257,45 @@ fm_winbox_sibling_homes() {  # <config-dir>
     case "$line" in
       /*) ;;
       *)
-        FM_WINBOX_SIBLING_ERROR="$file names a home that is not an absolute path: $line"
+        FM_LINUX_SIBLING_ERROR="$file names a home that is not an absolute path: $line"
         return 1
         ;;
     esac
     if [ ! -d "$line" ]; then
-      FM_WINBOX_SIBLING_ERROR="$file names an unavailable home: $line"
+      FM_LINUX_SIBLING_ERROR="$file names an unavailable home: $line"
       return 1
     fi
-    FM_WINBOX_SIBLINGS+=("$line")
+    FM_LINUX_SIBLINGS+=("$line")
   done < "$file"
 }
 
 # Every ship or scout holds a place across the sibling homes, except one that
 # is only waiting; the record this start replaces does not.
-fm_winbox_heavy_count() {  # <first-state> <own-id> <config-dir>
+fm_linux_heavy_count() {  # <first-state> <own-id> <config-dir>
   local first=$1 self=$2 config=${3:-} state meta kind id label
   local saved_home sib sib_state known existing
   local -a all_states sib_states
-  FM_WINBOX_HEAVY_COUNT=0
-  FM_WINBOX_HEAVY_IDS=
-  FM_WINBOX_LOAD_ERROR=
+  FM_LINUX_HEAVY_COUNT=0
+  FM_LINUX_HEAVY_IDS=
+  FM_LINUX_LOAD_ERROR=
   fm_local_firstmate_state_dirs "$first" || {
-    FM_WINBOX_LOAD_ERROR=$FM_LOCAL_FIRSTMATE_ERROR
+    FM_LINUX_LOAD_ERROR=$FM_LOCAL_FIRSTMATE_ERROR
     return 1
   }
   all_states=("${FM_LOCAL_FIRSTMATE_STATES[@]}")
-  if ! fm_winbox_sibling_homes "$config"; then
-    FM_WINBOX_LOAD_ERROR=$FM_WINBOX_SIBLING_ERROR
+  if ! fm_linux_sibling_homes "$config"; then
+    FM_LINUX_LOAD_ERROR=$FM_LINUX_SIBLING_ERROR
     return 1
   fi
-  for sib in ${FM_WINBOX_SIBLINGS[@]+"${FM_WINBOX_SIBLINGS[@]}"}; do
+  for sib in ${FM_LINUX_SIBLINGS[@]+"${FM_LINUX_SIBLINGS[@]}"}; do
     sib=$(CDPATH='' cd -- "$sib" 2>/dev/null && pwd -P) || {
-      FM_WINBOX_LOAD_ERROR="sibling Firstmate home is unavailable: $sib"
+      FM_LINUX_LOAD_ERROR="sibling Firstmate home is unavailable: $sib"
       return 1
     }
     saved_home=${FM_HOME:-}
     FM_HOME=$sib
     if ! fm_local_firstmate_state_dirs "$sib/state"; then
-      FM_WINBOX_LOAD_ERROR=$FM_LOCAL_FIRSTMATE_ERROR
+      FM_LINUX_LOAD_ERROR=$FM_LOCAL_FIRSTMATE_ERROR
       FM_HOME=$saved_home
       return 1
     fi
@@ -313,14 +313,14 @@ fm_winbox_heavy_count() {  # <first-state> <own-id> <config-dir>
   done
   for state in ${all_states[@]+"${all_states[@]}"}; do
     if [ -e "$state" ] && { [ ! -d "$state" ] || [ ! -r "$state" ] || [ ! -x "$state" ]; }; then
-      FM_WINBOX_LOAD_ERROR="local Firstmate state directory $state cannot be read"
+      FM_LINUX_LOAD_ERROR="local Firstmate state directory $state cannot be read"
       return 1
     fi
     for meta in "$state"/*.meta; do
       [ -f "$meta" ] && [ ! -L "$meta" ] || continue
       [ "$meta" != "$first/$self.meta" ] || continue
       [ -r "$meta" ] || {
-        FM_WINBOX_LOAD_ERROR="task record $meta cannot be read"
+        FM_LINUX_LOAD_ERROR="task record $meta cannot be read"
         return 1
       }
       kind=$(fm_meta_get "$meta" kind)
@@ -330,8 +330,8 @@ fm_winbox_heavy_count() {  # <first-state> <own-id> <config-dir>
       label=$id
       [ "$state" = "$first" ] || label="$id in $(dirname "$state")"
       fm_heavy_holder_waiting "$state" "$id" && continue
-      FM_WINBOX_HEAVY_COUNT=$((FM_WINBOX_HEAVY_COUNT + 1))
-      FM_WINBOX_HEAVY_IDS="${FM_WINBOX_HEAVY_IDS:+$FM_WINBOX_HEAVY_IDS, }$label"
+      FM_LINUX_HEAVY_COUNT=$((FM_LINUX_HEAVY_COUNT + 1))
+      FM_LINUX_HEAVY_IDS="${FM_LINUX_HEAVY_IDS:+$FM_LINUX_HEAVY_IDS, }$label"
     done
   done
   return 0

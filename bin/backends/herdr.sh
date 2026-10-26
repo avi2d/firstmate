@@ -4028,8 +4028,8 @@ fm_backend_herdr_list_live() {  # <session>
 
 # fm_backend_herdr_socket_path: the control-socket path for <session>, read from
 # `herdr session list --json` (the default session's socket differs from a named
-# session's - verified: default -> ~/.config/herdr/herdr.sock, named ->
-# ~/.config/herdr/sessions/<name>/herdr.sock). Empty on any failure.
+# session's - verified: default -> $HOME/.config/herdr/herdr.sock, named ->
+# $HOME/.config/herdr/sessions/<name>/herdr.sock). Empty on any failure.
 fm_backend_herdr_socket_path() {  # <session>
   local session=$1
   herdr session list --json 2>/dev/null \

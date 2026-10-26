@@ -517,10 +517,10 @@ SH
 
 test_outcome_without_recorded_branch_can_mention_child_pr() {
   local dir state fakebin
-  dir=$(make_case winbox-pr-outcome)
+  dir=$(make_case linux-pr-outcome)
   state="$dir/state"
   fakebin="$dir/fakebin"
-  printf 'project=%s\n' "$ROOT" > "$state/winbox.meta"
+  printf 'project=%s\n' "$ROOT" > "$state/linux.meta"
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -531,10 +531,10 @@ SH
   chmod +x "$fakebin/gh"
 
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" "$OUTCOMES" append \
-    --task winbox --verdict captain \
+    --task linux --verdict captain \
     --summary 'child PR https://github.com/avi2d/skills/pull/242 is ready' > "$dir/append.out" \
     || fail "a task without branch metadata could not report its child PR: $(cat "$dir/append.out")"
-  grep -F '"task":"winbox"' "$state/branch-outcomes.jsonl" >/dev/null \
+  grep -F '"task":"linux"' "$state/branch-outcomes.jsonl" >/dev/null \
     || fail "the no-branch PR outcome was not recorded"
   pass "a task without a recorded branch can report a child PR"
 }

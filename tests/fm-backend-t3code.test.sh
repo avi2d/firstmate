@@ -1928,7 +1928,7 @@ test_uncertain_thread_launch_keeps_lease() {
 # url.insteadOf with an embedded token), so the T3 env file carries only
 # Firstmate's own hook entry, for every harness's file.
 test_spawn_never_writes_inherited_git_config() {
-  local harness model id out rc settings secret=fm-inherited-secret-7f3a
+  local harness model id out rc settings secret=fm-example-secret-7f3a
   for harness in claude codex; do
     case "$harness" in claude) model=claude-sonnet-5 ;; codex) model=gpt-5.6-sol ;; esac
     id=$(t3_uid "t3gitcfgz$harness")

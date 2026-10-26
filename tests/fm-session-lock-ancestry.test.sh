@@ -486,7 +486,7 @@ SH
 
 # WINPID 7204 is the session harness. 4321 is an ordinary desktop process, and
 # 5150 is the path-shaped lookalike that must never read as a harness.
-WIN_TABLE='  4201508       0       0       7204  ?              0 22:24:48 C:\Users\u\.local\bin\claude.exe
+WIN_TABLE='  4201508       0       0       7204  ?              0 22:24:48 C:\opt\.local\bin\claude.exe
   4198625       0       0       4321  ?              0 22:24:48 C:\Windows\explorer.exe
   4199454       0       0       5150  ?              0 22:24:48 C:\tools\claude-notes\helper.exe'
 
@@ -588,7 +588,7 @@ test_windows_tagged_holder_is_a_live_foreign_owner() {
   printf 'win:7204\n' > "$dir/state/.lock"
   # A second live session, 7300, reads the home held by the live session 7204.
   table="$WIN_TABLE
-  4201600       0       0       7300  ?              0 22:30:00 C:\Users\u\.local\bin\claude.exe"
+  4201600       0       0       7300  ?              0 22:30:00 C:\opt\.local\bin\claude.exe"
 
   got=$(FM_TEST_WIN_TABLE="$table" FM_TEST_SESSION_ID=S1 FM_TEST_CLAUDE_PID=7300 foreign_owner "$fakebin" "$dir/state") \
     || fail "a live tagged lock holder was not seen as a foreign owner by a second session"
@@ -689,7 +689,7 @@ SH
   cat > "$fakebin/ps" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND'
-printf '%s\n' '  4201508       0       0       7204  ?              0 22:24:48 C:\Users\u\.local\bin\claude.exe'
+printf '%s\n' '  4201508       0       0       7204  ?              0 22:24:48 C:\opt\.local\bin\claude.exe'
 SH
   chmod +x "$fakebin/uname" "$fakebin/ps"
   state="$dir/state"
@@ -742,7 +742,7 @@ test_windows_task_lease_follows_a_tagged_lock_holder() {
   # A caller-supplied tagged holder naming a live harness is taken whole ahead
   # of the lock holder, never as its digits; a dead one falls back to the lock.
   table="$WIN_TABLE
-  4201600       0       0       7300  ?              0 22:24:48 C:\Users\u\.local\bin\claude.exe"
+  4201600       0       0       7300  ?              0 22:24:48 C:\opt\.local\bin\claude.exe"
   rm -f "$home/state/.lease-task-1"
   env -u CLAUDE_PID -u CLAUDE_CODE_SESSION_ID PATH="$fakebin:$PATH" \
     FM_TEST_WIN_TABLE="$table" FM_HOME="$home" FM_SUPERVISION_ACTOR=branch \

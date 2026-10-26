@@ -223,17 +223,17 @@ test_mac_shape_snapshots_running_default() {
   pass "fm-herdr-lab: the mac shape snapshots the running default session"
 }
 
-test_winbox_shape_provisions_and_tears_down() {
-  local name="fm-lab-winbox-$$" snapshot
+test_linux_shape_provisions_and_tears_down() {
+  local name="fm-lab-linux-$$" snapshot
   printf '%s\n' false > "$FAKE_STATE/default-running"
   printf '%s\n' fm-remote > "$FAKE_STATE/fleet-extra"
-  run_with_fake fm_herdr_lab_provision "$name" || fail "winbox-shape provision failed"
+  run_with_fake fm_herdr_lab_provision "$name" || fail "linux-shape provision failed"
   snapshot=$(cat "$TRIPWIRES/$name.fleet-state.json")
   printf '%s' "$snapshot" | jq -e 'map(.name) == ["fm-remote"]' >/dev/null \
-    || fail "winbox shape did not snapshot the running fleet session: $snapshot"
-  run_with_fake fm_herdr_lab_teardown "$name" || fail "winbox-shape teardown failed"
+    || fail "linux shape did not snapshot the running fleet session: $snapshot"
+  run_with_fake fm_herdr_lab_teardown "$name" || fail "linux-shape teardown failed"
   rm -f "$FAKE_STATE/default-running" "$FAKE_STATE/fleet-extra"
-  pass "fm-herdr-lab: the winbox shape provisions on the running fleet session"
+  pass "fm-herdr-lab: the linux shape provisions on the running fleet session"
 }
 
 test_no_running_fleet_session_refuses_provision() {
@@ -603,7 +603,7 @@ test_run_scopes_session_before_double_dash
 test_missing_tripwire_blocks_destruction
 test_changed_default_trips_after_teardown
 test_mac_shape_snapshots_running_default
-test_winbox_shape_provisions_and_tears_down
+test_linux_shape_provisions_and_tears_down
 test_no_running_fleet_session_refuses_provision
 test_fleet_session_change_trips_teardown
 test_stopped_owned_lab_can_reprovision

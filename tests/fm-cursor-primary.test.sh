@@ -725,8 +725,8 @@ SH
   printf '%s\n' "$fakebin"
 }
 
-WIN_SESSION_ROW='  4201508       0       0       7204  ?              0 22:24:48 C:\Users\u\.local\bin\claude.exe'
-WIN_OTHER_ROW='  4201600       0       0       7300  ?              0 22:30:00 C:\Users\u\.local\bin\claude.exe'
+WIN_SESSION_ROW='  4201508       0       0       7204  ?              0 22:24:48 C:\opt\.local\bin\claude.exe'
+WIN_OTHER_ROW='  4201600       0       0       7300  ?              0 22:30:00 C:\opt\.local\bin\claude.exe'
 
 run_windows_park() {  # <dir> <fakebin> <windows-table>
   printf '%s' "$CURSOR_PAYLOAD" | env -u PI_CODING_AGENT -u CLAUDE_PID -u CLAUDE_CODE_SESSION_ID \

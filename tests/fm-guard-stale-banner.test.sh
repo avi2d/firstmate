@@ -659,7 +659,7 @@ windows_table_fakebin() {  # <dir> <uname>
 #!/usr/bin/env bash
 [ "$*" = -W ] || exec /bin/ps "$@"
 printf '%s\n' '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND'
-printf '%s\n' '  4201508       0       0       7204  ?              0 22:24:48 C:\Users\u\AppData\Roaming\npm\pi.exe'
+printf '%s\n' '  4201508       0       0       7204  ?              0 22:24:48 C:\opt\npm\pi.exe'
 SH
   chmod +x "$fakebin/uname" "$fakebin/ps"
   printf '%s\n' "$fakebin"

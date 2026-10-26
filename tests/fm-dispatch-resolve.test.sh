@@ -193,7 +193,7 @@ run_without_curl() {
   printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
 }
 
-KEY='test-key-9f1c2d3e-never-on-argv'
+KEY='test-key-placeholder-never-on-argv'
 code='' out='' err=''
 
 # --- absent key: off, silent on stdout, no network, no quota read -----------

@@ -80,7 +80,7 @@ $ cd /tmp && gerrit-axi show 4200 --json
 `gerrit-axi` resolves its server from the current directory's `origin` remote first, so outside a clone it has nothing to reach.
 The poll is silent on every failure, so without `--host` the watch would wait forever on a change it never looked at.
 `bin/fm-pr-poll.sh` therefore passes `--host` from the validated record, and `bin/fm-crew-state.sh` reads an open change's status through the same explicit host.
-`--host` pins only the server, and the SSH user and port resolve down that same current-directory `origin` path before falling back to the local login name and 29418, so watching a change requires `GERRIT_USER` - and `GERRIT_PORT` on a server that does not use 29418 - set in the watcher's environment or in `~/.config/gerrit-axi/config.json`, because the poll cannot report that it never authenticated.
+`--host` pins only the server, and the SSH user and port resolve down that same current-directory `origin` path before falling back to the local login name and 29418, so watching a change requires `GERRIT_USER` - and `GERRIT_PORT` on a server that does not use 29418 - set in the watcher's environment or in `$HOME/.config/gerrit-axi/config.json`, because the poll cannot report that it never authenticated.
 
 ## The poll against the real server
 

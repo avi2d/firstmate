@@ -2,7 +2,7 @@
 # Regression test for the fm-spawn.sh treehouse-get worktree-detection settle
 # loop (bin/fm-spawn.sh, the `for _ in $(seq 1 60)` loop after `treehouse get`).
 #
-# On some tmux/WSL setups a brand-new window's pane_current_path transiently
+# On some tmux/Windows Subsystem for Linux setups a brand-new window's pane_current_path transiently
 # reports a stale, unrelated-but-real path on the very first poll, before the
 # pane actually settles into the worktree treehouse get moved it to. That stale
 # path still passes the loop's "differs from the project" check and

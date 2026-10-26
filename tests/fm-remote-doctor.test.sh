@@ -56,7 +56,7 @@ SSH_PIDFILE="$TMP_ROOT/holder-$HOLDER_FD.pid"
 mkfifo "$SSH_FIFO"
 eval "exec ${HOLDER_FD}<>\"$SSH_FIFO\""
 ( export FM_SSH_HOLDER_JQ="$JQ" FM_SSH_HOLDER_FIFO="$SSH_FIFO" FM_SSH_HOLDER_PIDFILE="$SSH_PIDFILE"
-  exec -a sshd bash -c "env -i SSH_CONNECTION='100.102.217.78 51234 100.100.1.2 22' SSH_CLIENT='100.102.217.78 51234 22' \"\$FM_SSH_HOLDER_JQ\" . \"\$FM_SSH_HOLDER_FIFO\" & printf '%s\n' \"\$!\" > \"\$FM_SSH_HOLDER_PIDFILE\"; wait" ) &
+  exec -a sshd bash -c "env -i SSH_CONNECTION='192.0.2.20 51234 192.0.2.21 22' SSH_CLIENT='192.0.2.20 51234 22' \"\$FM_SSH_HOLDER_JQ\" . \"\$FM_SSH_HOLDER_FIFO\" & printf '%s\n' \"\$!\" > \"\$FM_SSH_HOLDER_PIDFILE\"; wait" ) &
 HOLDER_PIDS+=("$!")
 HOLDER_FD=$((HOLDER_FD + 1))
 SSH_WAIT=0
