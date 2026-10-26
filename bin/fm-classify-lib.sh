@@ -1311,6 +1311,142 @@ EOF
   return 0
 }
 
+# --- declared-wait owner and recheck -----------------------------------------
+
+# A bare date falls due when that UTC day ends.
+wait_recheck_due_epoch() {  # <recheck> -> epoch the wait falls due; nonzero when unreadable
+  local day
+  case "$1" in
+    [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9])
+      day=$(fm_utc_iso_to_epoch "$1T00:00Z") || return 1
+      printf '%s' "$(( day + 86400 ))"
+      ;;
+    *) fm_utc_iso_to_epoch "$1" ;;
+  esac
+}
+
+wait_overdue_text() {  # <seconds> -> 1d 9h, 2h 5m or 7m
+  local s=$1
+  if [ "$s" -ge 86400 ]; then
+    printf '%sd %sh' "$(( s / 86400 ))" "$(( s % 86400 / 3600 ))"
+  elif [ "$s" -ge 3600 ]; then
+    printf '%sh %sm' "$(( s / 3600 ))" "$(( s % 3600 / 60 ))"
+  else
+    printf '%sm' "$(( s / 60 ))"
+  fi
+}
+
+# Reserved-prefix locals: bash's dynamic scope would shadow a caller's out-var of the same name.
+_fm_wait_declaration_fields() {  # <note> <what-var> <owner-var> <recheck-var>
+  local __fm_w_rest=$1 __fm_w_seg __fm_w_what='' __fm_w_owner='' __fm_w_recheck=''
+  while :; do
+    __fm_w_seg=${__fm_w_rest%%|*}
+    __fm_w_seg=${__fm_w_seg#"${__fm_w_seg%%[![:space:]]*}"}
+    __fm_w_seg=${__fm_w_seg%"${__fm_w_seg##*[![:space:]]}"}
+    case "$__fm_w_seg" in
+      owner=*) __fm_w_owner=${__fm_w_seg#owner=} ;;
+      recheck=*) __fm_w_recheck=${__fm_w_seg#recheck=} ;;
+      ?*) __fm_w_what="${__fm_w_what:+$__fm_w_what | }$__fm_w_seg" ;;
+    esac
+    case "$__fm_w_rest" in *'|'*) __fm_w_rest=${__fm_w_rest#*|} ;; *) break ;; esac
+  done
+  __fm_w_owner=${__fm_w_owner#"${__fm_w_owner%%[![:space:]]*}"}
+  __fm_w_recheck=${__fm_w_recheck#"${__fm_w_recheck%%[![:space:]]*}"}
+  printf -v "$2" '%s' "$__fm_w_what"
+  printf -v "$3" '%s' "$__fm_w_owner"
+  printf -v "$4" '%s' "$__fm_w_recheck"
+}
+
+wait_declaration_marker() {  # <state> <task> <wait> -> marker path for one declared wait
+  printf '%s/.wait-flag-%s' "$1" "$(printf '%s--%s' "$2" "$3" | tr '/' '_')"
+}
+
+_fm_wait_declaration_item() {  # <marker> <task> <verb> <note> <identity> <now>
+  local marker=$1 task=$2 verb=$3 note=$4 now=$6 sig what owner recheck due='' missing=''
+  sig=$(printf '%s' "$5" | cksum); sig=${sig%% *}
+  _fm_wait_declaration_fields "$note" what owner recheck
+  [ -n "$what" ] || what='-'
+  [ "${#what}" -le 200 ] || what="${what:0:200}..."
+  [ -z "$recheck" ] || due=$(wait_recheck_due_epoch "$recheck") || due=
+  if [ -z "$owner" ] && [ -z "$due" ]; then missing='owner or recheck date'
+  elif [ -z "$owner" ]; then missing=owner
+  elif [ -z "$due" ]; then missing='recheck date'
+  fi
+  if [ -n "$missing" ]; then
+    [ "$(cat "$marker" 2>/dev/null)" = "undated:$sig" ] && return 0
+    printf 'undated\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$task" "${marker##*/}" "undated:$sig" "$verb" "$missing" "$what"
+    return 0
+  fi
+  [ "$now" -ge "$due" ] || return 0
+  [ "$(cat "$marker" 2>/dev/null)" = "overdue:$sig" ] && return 0
+  printf 'overdue\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$task" "${marker##*/}" "overdue:$sig" "$verb" "$owner" "$recheck" "$(( now - due ))" "$what"
+}
+
+scan_wait_declarations() {  # <state> [now] -> one TAB-separated line per wait to flag or raise
+  local state=$1 now=${2:-} f task exclude line paused open key verb note opened marker live=$'\n'
+  [ -n "$now" ] || now=$(date +%s)
+  paused=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+  exclude=$(status_scan_parent_channel_exclude "$state")
+  for f in "$state"/*.status; do
+    [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || continue
+    [ "$f" = "$exclude" ] && continue
+    task=$(basename "$f"); task=${task%.status}
+    line=$(status_declared_wait_line "$f")
+    if status_is_paused "$line"; then
+      marker=$(wait_declaration_marker "$state" "$task" "$paused")
+      live="$live${marker##*/}"$'\n'
+      _fm_wait_declaration_item "$marker" "$task" "$paused" \
+        "$(status_line_note "$line")" "$line" "$now"
+    fi
+    open=$(status_own_open_decisions "$f") || open=
+    while IFS=$'\t' read -r key verb note; do
+      [ "$verb" = blocked ] || continue
+      opened=$(status_decision_opened_epoch "$f" "$key") || opened=
+      marker=$(wait_declaration_marker "$state" "$task" "blocked-$key")
+      live="$live${marker##*/}"$'\n'
+      _fm_wait_declaration_item "$marker" "$task" blocked "$note" \
+        "$key"$'\t'"$opened"$'\t'"$note" "$now"
+    done <<EOF
+$open
+EOF
+  done
+  for marker in "$state"/.wait-flag-*; do
+    [ -e "$marker" ] || continue
+    case "$live" in *$'\n'"${marker##*/}"$'\n'*) ;; *) rm -f "$marker" ;; esac
+  done
+  return 0
+}
+
+wait_declaration_record_raised() {  # <state> <scan item> -> remember it so it is raised once per declaration
+  local state=$1 type task name sig rest tmp
+  [ -d "$state" ] || return 1
+  IFS=$'\t' read -r type task name sig rest <<EOF
+$2
+EOF
+  case "$name" in .wait-flag-*) ;; *) return 1 ;; esac
+  case "$name" in */*) return 1 ;; esac
+  [ -n "$sig" ] || return 1
+  tmp=$(umask 077; mktemp "$state/.wait-flag-tmp.XXXXXX") || return 1
+  printf '%s' "$sig" >"$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$state/$name" || { rm -f "$tmp"; return 1; }
+}
+
+wait_declaration_item_reason() {  # <scan item> -> the human line both supervisors raise
+  local type task name sig verb f6 f7 f8 f9
+  IFS=$'\t' read -r type task name sig verb f6 f7 f8 f9 <<EOF
+$1
+EOF
+  case "$type" in
+    undated) printf 'wait names no %s: %s %s: %s' "$f6" "$task" "$verb" "$f7" ;;
+    overdue)
+      printf 'wait overdue: %s %s waiting on %s, recheck %s passed %s ago: %s' \
+        "$task" "$verb" "$f6" "$f7" "$(wait_overdue_text "$f8")" "$f9" ;;
+    *) return 1 ;;
+  esac
+}
+
 # --- incremental (cursor-backed) open-decisions fold ------------------------
 #
 # status_open_decisions above re-reads and re-folds a status file's ENTIRE
