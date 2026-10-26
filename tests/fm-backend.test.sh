@@ -1237,7 +1237,7 @@ test_teardown_conformance_old_vs_new() {
 
   data="$TMP_ROOT/teardown-data"
   mkdir -p "$data/$id"
-  printf 'scout findings\n' > "$data/$id/report.md"
+  printf '# Report\n\nscout findings\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
 
   state_old="$TMP_ROOT/teardown-state-old"; state_new="$TMP_ROOT/teardown-state-new"
   config_old="$TMP_ROOT/teardown-config-old"; config_new="$TMP_ROOT/teardown-config-new"

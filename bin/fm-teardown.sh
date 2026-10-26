@@ -3721,6 +3721,11 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
     echo "The report is the work product. Have the crewmate write it, or use --force after explicit discard approval." >&2
     exit 1
   fi
+  if ! grep -Eq '^#{1,6}[[:space:]]+References[[:space:]]*$' "$REPORT"; then
+    echo "REFUSED: scout task $ID's report at $REPORT has no References section." >&2
+    echo "Add a \"## References\" heading listing the sources the findings rely on, then run teardown again." >&2
+    exit 1
+  fi
   if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
       FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
     echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2

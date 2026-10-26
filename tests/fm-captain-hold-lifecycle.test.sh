@@ -326,7 +326,7 @@ write_scout_with_attested_inventory() {  # <home> <scout-id> <keys>
     "decisions_reviewed=1" \
     "decision_keys=$keys"
   printf 'done: report complete\n' > "$home/state/$scout.status"
-  printf '# Report\n\nThe investigation finished.\n' > "$home/data/$scout/report.md"
+  printf '# Report\n\nThe investigation finished.\n\n## References\n\n- fixture source\n' > "$home/data/$scout/report.md"
 }
 
 test_verify_resolves_a_hold_migrated_to_beads_notes() {
@@ -485,7 +485,7 @@ test_complete_accepts_a_migrated_inventory_on_beads() {
     "spawn_gen=fixture-$scout"
   printf 'done: report complete\n' > "$home/state/$scout.status"
   mkdir -p "$home/data/$scout"
-  printf '# Report\n\nThe investigation finished.\n' > "$home/data/$scout/report.md"
+  printf '# Report\n\nThe investigation finished.\n\n## References\n\n- fixture source\n' > "$home/data/$scout/report.md"
 
   run_captain "$home" complete "$scout" herald-retire-decision-github-delete >/dev/null \
     || fail "the completion gate refused an inventory resolved through a migrated beads row"
@@ -718,6 +718,10 @@ EOF
 
 The evidence is complete.
 The captain still needs to choose route north or route south before follow-up work starts.
+
+## References
+
+- fixture source
 EOF
 
   json=$(run_bearings "$home") || fail "Bearings failed for unresolved-call regression"
@@ -759,6 +763,10 @@ EOF
 
 Two choices remain unresolved: the route and the sample access level.
 A separate recommendation is already resolved and requires no captain action.
+
+## References
+
+- fixture source
 EOF
 
   if run_captain "$home" complete "$id" --none > "$home/none.out" 2> "$home/none.err"; then
@@ -838,7 +846,7 @@ test_answer_records_and_closes() {
     || fail "could not create the answer-guard origin"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Guard review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  printf '# Guard review\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-guard-call \
     --title "Choose the guard option" --reason "captain guard choice pending" --repo sample >/dev/null \
     || fail "could not register the captain-held task"
@@ -1197,7 +1205,7 @@ test_out_of_band_close_is_recordable() {
     || fail "could not create out-of-band origin"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Sample full run review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  printf '# Sample full run review\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-submission-call --title "Choose the sample submission" \
     --reason "captain submission choice pending" --repo sample --origin "$id" >/dev/null \
     || fail "could not register the captain-held task"
@@ -1258,7 +1266,7 @@ test_visual_review_uses_shared_completion_owner() {
   tasks_in "$home" add "$id" "Review the sample board" --kind scout --repo sample --start >/dev/null
   write_origin_meta "$home" "$id"
   printf 'done: investigation complete\n' > "$home/state/$id.status"
-  printf '# Sample board investigation\n\nThe initial findings need no captain choice.\n' > "$home/data/$id/report.md"
+  printf '# Sample board investigation\n\nThe initial findings need no captain choice.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" complete "$id" --none >/dev/null \
     || fail "initial investigation could not pass the shared completion owner"
   run_teardown "$home" "$id" >/dev/null 2> "$home/visual-teardown.err" \
@@ -1295,6 +1303,10 @@ test_none_inventory_and_resolved_prose_do_not_create_holds() {
 
 Decision record: the earlier choice is resolved.
 The recommendation is informational and needs no captain action.
+
+## References
+
+- fixture source
 EOF
   run_captain "$home" complete "$id" --none >/dev/null \
     || fail "explicit no-call inventory failed"
@@ -1314,7 +1326,7 @@ test_terminal_single_owner_status_decision_does_not_block_empty_inventory() {
   write_origin_meta "$home" "$id"
   printf 'blocked [key=access]: waiting\ndone: report complete\nnote: cleanup complete\n' \
     > "$home/state/$id.status"
-  printf '# Terminal sample review\n\nNo unresolved captain choice remains.\n' > "$home/data/$id/report.md"
+  printf '# Terminal sample review\n\nNo unresolved captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
     "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
   [ -z "$open" ] || fail "the shared fold retained a pre-terminal blocker"
@@ -1372,7 +1384,7 @@ EOF
   tasks_in "$mate" add "$origin" "Investigate secondmate sample" --kind scout --repo sample --start >/dev/null
   write_origin_meta "$mate" "$origin"
   printf 'done: report and visual review complete\n' > "$mate/state/$origin.status"
-  printf '# Sample secondmate review\n\nOne captain choice remains.\n' > "$mate/data/$origin/report.md"
+  printf '# Sample secondmate review\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$mate/data/$origin/report.md"
   run_captain "$mate" hold sample-release-call --title "Choose the sample release" \
     --reason "captain release choice pending" --repo sample --origin "$origin" >/dev/null \
     || fail "secondmate-owned hold creation failed"
@@ -1579,7 +1591,7 @@ test_bound_channel_answers_close_at_answer_time() {
     || fail "could not create the review origin"
   write_origin_meta "$home" "$id"
   printf 'done: proposal deck ready for the captain\n' > "$home/state/$id.status"
-  printf '# Sample eval proposal\n\nThree captain choices remain.\n' > "$home/data/$id/report.md"
+  printf '# Sample eval proposal\n\nThree captain choices remain.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-membership-call --title "Captain call: membership" \
     --reason "captain membership choice pending" --repo sample --origin "$id" >/dev/null
   run_captain "$home" hold sample-headline-call --title "Captain call: headline" \
@@ -2100,7 +2112,7 @@ test_unbound_source_closes_no_hold() {
     || fail "could not create the unbound origin"
   write_origin_meta "$home" "$id"
   printf 'done: deck ready\n' > "$home/state/$id.status"
-  printf '# Unbound review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  printf '# Unbound review\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-only-call --title "Captain call: only choice" \
     --reason "captain only choice pending" --repo sample --origin "$id" >/dev/null \
     || fail "could not register the unbound call"
@@ -2143,7 +2155,7 @@ test_legacy_identities_keep_working() {
   tasks_in "$home" add "$id" "Legacy-shaped review" --kind scout --repo sample --start >/dev/null
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Legacy review\n\nTwo captain choices remain.\n' > "$home/data/$id/report.md"
+  printf '# Legacy review\n\nTwo captain choices remain.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
 
   hold=$(run_shim "$home" id "$id" pick-one)
   [ "$hold" = "$id-decision-pick-one" ] || fail "the shim identity was not deterministic: $hold"
@@ -2546,7 +2558,7 @@ test_chat_channel_feeds_the_same_keyed_answer_intake() {
     || fail "could not create the chat-channel origin"
   write_origin_meta "$home" "$id" ship
   printf 'needs-decision [key=chat-choice]: pick option A or option B\n' > "$home/state/$id.status"
-  printf '# Chat review\n\nTwo captain choices remain.\n' > "$home/data/$id/report.md"
+  printf '# Chat review\n\nTwo captain choices remain.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_shim "$home" hold "$id" chat-choice \
     --title "Choose the sample chat option" --reason "captain chat choice pending" --repo sample >/dev/null \
     || fail "could not register the legacy chat row"
@@ -2816,7 +2828,7 @@ test_teardown_never_closes_a_captain_held_task() {
     --repo sample --start >/dev/null || fail "could not create the investigation fixture"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Sample attachment evidence\n\nThe captain must choose inline or by-reference attachments.\n' \
+  printf '# Sample attachment evidence\n\nThe captain must choose inline or by-reference attachments.\n\n## References\n\n- fixture source\n' \
     > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" \
     --reason "captain must choose inline or by-reference attachments" >/dev/null \
@@ -2851,7 +2863,7 @@ test_teardown_never_closes_a_captain_held_task() {
     --repo sample --start >/dev/null || fail "could not create the ordinary fixture"
   write_origin_meta "$home" "$plain"
   printf 'done: report complete\n' > "$home/state/$plain.status"
-  printf '# Sample cache\n\nNothing waits on the captain.\n' > "$home/data/$plain/report.md"
+  printf '# Sample cache\n\nNothing waits on the captain.\n\n## References\n\n- fixture source\n' > "$home/data/$plain/report.md"
   run_captain "$home" complete "$plain" --none >/dev/null \
     || fail "completion gate failed for the ordinary investigation"
   run_teardown "$home" "$plain" > "$home/plain.out" 2> "$home/plain.err" \
@@ -2868,7 +2880,7 @@ test_teardown_never_closes_a_captain_held_task() {
     --repo sample --start >/dev/null || fail "could not create the forced fixture"
   write_origin_meta "$home" "$forced"
   printf 'done: report complete\n' > "$home/state/$forced.status"
-  printf '# Sample forced path\n\nOne captain choice remains.\n' > "$home/data/$forced/report.md"
+  printf '# Sample forced path\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$forced/report.md"
   run_captain "$home" hold "$forced" --reason "captain must choose the sample forced path" >/dev/null \
     || fail "could not hold the forced fixture for the captain"
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
@@ -2908,7 +2920,7 @@ test_retained_row_artifacts_survive_captain_answers() {
     --repo sample --start >/dev/null || fail "could not create the retained report fixture"
   write_origin_meta "$home" "$retained_id"
   printf 'done: report complete\n' > "$home/state/$retained_id.status"
-  printf '# Retained report\n\nThe captain must choose the follow-up.\n' \
+  printf '# Retained report\n\nThe captain must choose the follow-up.\n\n## References\n\n- fixture source\n' \
     > "$home/data/$retained_id/report.md"
   run_captain "$home" hold "$retained_id" --reason "captain must choose the report follow-up" \
     >/dev/null || fail "could not hold the retained report"
@@ -2928,7 +2940,7 @@ test_retained_row_artifacts_survive_captain_answers() {
     --repo sample --start >/dev/null || fail "could not create the report precedence fixture"
   write_origin_meta "$home" "$precedence_id"
   printf 'done: report complete\n' > "$home/state/$precedence_id.status"
-  printf '# Retained report with pull request context\n' \
+  printf '# Retained report with pull request context\n\n## References\n\n- fixture source\n' \
     > "$home/data/$precedence_id/report.md"
   run_captain "$home" hold "$precedence_id" \
     --reason "captain must choose the report follow-up" >/dev/null \
@@ -3061,7 +3073,7 @@ test_retained_row_artifacts_survive_captain_answers() {
     || fail "could not create the released report fixture"
   write_origin_meta "$home" "$released_id"
   printf 'done: report complete\n' > "$home/state/$released_id.status"
-  printf '# Released report\n' > "$home/data/$released_id/report.md"
+  printf '# Released report\n\n## References\n\n- fixture source\n' > "$home/data/$released_id/report.md"
   run_captain "$home" hold "$released_id" --reason "captain report release pending" \
     >/dev/null || fail "could not hold the released report"
   complete_through_sibling "$home" "$released_id" >/dev/null \
@@ -3166,7 +3178,7 @@ test_interrupted_cleanup_keeps_the_captain_call_recoverable() {
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Failed cleanup\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  printf '# Failed cleanup\n\nThe captain call remains open.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" --reason "captain must choose after cleanup retry" >/dev/null \
     || fail "could not hold the cleanup-failure fixture"
   complete_through_sibling "$home" "$id" >/dev/null \
@@ -3225,7 +3237,7 @@ test_answer_before_cleanup_replay_preserves_the_retained_report() {
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Interrupted cleanup\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  printf '# Interrupted cleanup\n\nThe captain call remains open.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" --reason "captain must choose after interrupted cleanup" \
     >/dev/null || fail "could not hold the answer-before-replay fixture"
   complete_through_sibling "$home" "$id" >/dev/null \
@@ -3336,7 +3348,7 @@ test_unusable_pending_close_record_names_its_reason() {
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Unusable pending close\n\nThe captain call remains open.\n' > "$home/data/$id/report.md"
+  printf '# Unusable pending close\n\nThe captain call remains open.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id" --reason "captain must choose after interrupted cleanup" \
     >/dev/null || fail "could not hold the unusable pending-close fixture"
   complete_through_sibling "$home" "$id" >/dev/null \
@@ -3395,7 +3407,7 @@ EOF
     "window=firstmate:fm-$id" "worktree=$wt" "project=$home/projects/sample" \
     "harness=codex" "kind=scout" "mode=scout" "spawn_gen=fixture-$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Relocated interrupted cleanup\n\nThe captain call remains open.\n' > "$data/$id/report.md"
+  printf '# Relocated interrupted cleanup\n\nThe captain call remains open.\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
     "$ROOT/bin/fm-captain-hold.sh" hold "$id" \
@@ -3477,7 +3489,7 @@ EOF
     || fail "could not create the relocated captain-hold fixture"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Relocated hold\n\nThe captain call remains open.\n' > "$data/$id/report.md"
+  printf '# Relocated hold\n\nThe captain call remains open.\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
     "$ROOT/bin/fm-captain-hold.sh" hold "$id" \
@@ -3620,7 +3632,7 @@ test_complete_accepts_pruned_answered_rounds() {
     || fail "could not create the pruned-interview origin"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Pruned interview\n\nThree rounds remain.\n' > "$home/data/$id/report.md"
+  printf '# Pruned interview\n\nThree rounds remain.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id-r1" --title "Round one" --reason "round one pending" --repo sample --origin "$id" >/dev/null \
     || fail "could not hold round one"
   run_captain "$home" hold "$id-r2" --title "Round two" --reason "round two pending" --repo sample --origin "$id" >/dev/null \
@@ -3671,7 +3683,7 @@ test_complete_accepts_released_round_in_done_archive() {
     || fail "could not create the released-interview origin"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Released interview\n\nOne round remains.\n' > "$home/data/$id/report.md"
+  printf '# Released interview\n\nOne round remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold "$id-r1" --title "Round one" --reason "round one pending" --repo sample --origin "$id" >/dev/null \
     || fail "could not hold round one"
   printf 'Captain chose one.\n' > "$home/answer-one.txt"
@@ -4432,7 +4444,7 @@ PM
     --repo sample --start >/dev/null || fail "could not create the investigation fixture"
   write_origin_meta "$home" "$scout"
   printf 'done: report complete\n' > "$home/state/$scout.status"
-  printf '# Sample body decode\n\nOne captain choice remains.\n' \
+  printf '# Sample body decode\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' \
     > "$home/data/$scout/report.md"
   run_captain "$home" hold "$scout" --reason "captain must choose" >/dev/null \
     || fail "could not hold the investigation for the captain"
@@ -4469,7 +4481,7 @@ retain_row_with_body() {  # <home> <id> <body>
     --repo sample --start >/dev/null || fail "could not create the fixture for $id"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Sample body bytes\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  printf '# Sample body bytes\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   tasks_in "$home" update "$id" --body "$body" >/dev/null \
     || fail "could not give $id a body carrying non-ASCII characters"
   run_captain "$home" hold "$id" --reason "captain must choose" >/dev/null \
@@ -4999,7 +5011,7 @@ test_archived_answered_hold_still_satisfies_the_gate() {
     || fail "could not create the archived-answer origin"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# Archived sample review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  printf '# Archived sample review\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   run_captain "$home" hold sample-archived-call --title "Choose the archived option" \
     --reason "captain archived choice pending" --repo sample --origin "$id" >/dev/null \
     || fail "could not register the captain-held task"
@@ -5087,7 +5099,7 @@ EOF
     || fail "could not create the user-config origin"
   write_origin_meta "$home" "$id"
   printf 'done: report complete\n' > "$home/state/$id.status"
-  printf '# User-config sample review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  printf '# User-config sample review\n\nOne captain choice remains.\n\n## References\n\n- fixture source\n' > "$home/data/$id/report.md"
   HOME="$axi_home" run_captain "$home" hold sample-userconfig-call --title "Choose the relocated option" \
     --reason "captain relocated choice pending" --repo sample --origin "$id" >/dev/null \
     || fail "could not register the captain-held task"
