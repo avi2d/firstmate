@@ -2347,6 +2347,19 @@ Output lands in `data/day-review/<day>/`: `board.html` links `full.html`, and `n
 `data/day-review/notes.json` keeps each day's advice so the next review can judge it per finished task, and `data/day-review/lessons.md` keeps the lessons with the days they were seen.
 `run --force` builds a board before the scheduled time without marking the day done or recording advice.
 
+## Review round monitor
+
+A live no-mistakes run on a task of this home that reaches its third review fix round gives firstmate one `check:` wake naming the task, project, branch, and run.
+[`bin/fm-review-round-monitor.sh`](../bin/fm-review-round-monitor.sh) counts the review step's auto-fix rounds read-only from the no-mistakes state database, resolved by `fm_nm_state_db`.
+
+- `bin/fm-review-round-monitor.sh arm` writes `state/review-rounds.check.sh` and binds it with `bin/fm-check-register.sh`, so the existing watcher turns its one line into a `check:` wake.
+- `bin/fm-review-round-monitor.sh status` lists this home's live runs with their round counts, read-only.
+- `bin/fm-review-round-monitor.sh disarm` removes the shim, its trust binding, and the de-dupe record.
+
+A run is live until it is `completed`, `failed`, or `cancelled`, so a run in a fixing or gate state still counts.
+Each run wakes once, and its de-dupe entry is dropped when the run ends.
+A database that cannot be read is reported once until it reads again.
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.
