@@ -3900,6 +3900,21 @@ assert_absent "$TMP_ROOT/unguarded-launches" \
   "a source command ran without a successfully initialized owner guard"
 pass "a runner fails closed when its owner guard cannot initialize"
 
+# A home refreshes its lease when it spawns a runner, but the detached launch
+# runs several processes before the owner guard checks that lease. This launch
+# starts four seconds after a two-second lease was refreshed, and the guard must
+# still accept it, because the live home asked for this runner.
+HSTALE="$TMP_ROOT/stale-spawn"; new_home "$HSTALE"
+fm_test_track_procevent_home "$HSTALE"
+pe_register "$HSTALE" lavish stale-src -- "$BLOCKER" "$TMP_ROOT/stale-spawn.trigger" "stale payload" >/dev/null
+sleep 4
+FM_PROCEVENT_OWNER_LEASE_SECONDS=2 FM_PROCEVENT_OWNER_CHECK_SECONDS=1 FM_HOME="$HSTALE" \
+  perl -e 'setpgrp(0, 0) or exit 125; $ENV{FM_PROCEVENT_RUNNER_GROUP} = $$; exec @ARGV; exit 125' \
+  -- "$ROOT/bin/fm-procevent.sh" _start stale-src >"$HSTALE/start.log" 2>&1 &
+wait_for "$HSTALE/state/procevent/stale-src.runner" \
+  || fail "a runner launched after its lease aged was refused and never recorded"
+pass "a runner launched after its lease aged starts, rather than being refused by its guard"
+
 HATTACHED="$TMP_ROOT/attached-owner"; new_home "$HATTACHED"
 fm_test_track_procevent_home "$HATTACHED"
 ATTACHED_TRIGGER="$TMP_ROOT/attached.trigger"
