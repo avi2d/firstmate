@@ -7998,6 +7998,11 @@ if [ "$T3CODE_LAUNCH_UNCONFIRMED" = 1 ]; then
   exit 1
 fi
 
+if [ "$T3CODE_LAUNCH_UNCONFIRMED" = 1 ]; then
+  echo "error: the launch brief for $ID may already have been delivered to T3 thread $T: its outcome is unproven (a lost reply or a T3 error that can follow a commit). The task record is kept; inspect the thread in T3 Code, and if the brief is absent resend only the identical brief text, which reuses its request id within the hour" >&2
+  exit 1
+fi
+
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
 SPAWN_ACCOUNT=
