@@ -128,6 +128,7 @@ HOST=()
 HARNESS=()
 MODEL=()
 EFFORT=()
+ACCOUNT=()
 RESTART_PID=()
 RESTART_RESULT=()
 
@@ -164,11 +165,14 @@ report_unreached() {  # <id> <reason>
 
 restart_mate() {  # <array-index>
   local i=$1 id restart_out restart_rc restart_reason ran_on
+  local -a relaunch_args
   id=${IDS[$i]}
   if [ "${PLACEMENT[i]}" = remote ]; then
+    relaunch_args=("$id" "${HARNESS[i]}" "${MODEL[i]:-default}" "${EFFORT[i]:-default}")
+    # A host without the account argument refuses a fifth one.
+    [ -z "${ACCOUNT[i]}" ] || relaunch_args+=("${ACCOUNT[i]}")
     restart_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-      "$SCRIPT_DIR/fm-remote-secondmate-relaunch.sh" \
-      "$id" "${HARNESS[i]}" "${MODEL[i]:-default}" "${EFFORT[i]:-default}" < /dev/null 2>&1)
+      "$SCRIPT_DIR/fm-remote-secondmate-relaunch.sh" "${relaunch_args[@]}" < /dev/null 2>&1)
     restart_rc=$?
   else
     restart_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
@@ -259,6 +263,7 @@ while [ "$i" -lt "${#IDS[@]}" ]; do
   HARNESS[i]=""
   MODEL[i]=""
   EFFORT[i]=""
+  ACCOUNT[i]=""
   if ! fm_secondmate_restart_capable "$STATE/$id.meta"; then
     REASON[i]=$FM_SECONDMATE_RESTART_REASON
     i=$((i + 1))
@@ -298,6 +303,11 @@ while [ "$i" -lt "${#IDS[@]}" ]; do
       ''|low|medium|high|xhigh|max|ultra) ;;
       *) EFFORT[i]="" ;;
     esac
+    if ! ACCOUNT[i]=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$id"); then
+      REASON[i]="its configured account could not be read; fix config/secondmate-harness"
+      i=$((i + 1))
+      continue
+    fi
     if [ "${EFFORT[i]}" = ultra ] && ! "$SCRIPT_DIR/fm-harness.sh" validate-native-effort "${HARNESS[i]}" "${MODEL[i]}" "${EFFORT[i]}"; then
       REASON[i]="the configured Ultra profile does not select native Codex through Pi"
       i=$((i + 1))

@@ -1298,6 +1298,7 @@ spawn_remote_secondmate() {
   local id=$1 remote host root home harness positional model effort backend out rc meta tmp
   local remote_backend remote_target remote_harness remote_herdr_session registry_lock remote_lock remote_generation
   local remote_traceparent remote_recorded_traceparent sm_primary_head sync_out sync_rc account_config
+  local claude_account remote_claude_account
   local -a launch_args
   id=${POS[0]:-}
   fm_task_id_creation_valid "$id" || {
@@ -1373,6 +1374,16 @@ spawn_remote_secondmate() {
       effort=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort "$id")
       [ -n "$effort" ] || effort=-
     fi
+  fi
+  # The parent names the account and the host resolves it, because the folder
+  # an account maps to exists only in config/claude-accounts on that host.
+  claude_account=$CLAUDE_ACCOUNT
+  if [ "$CLAUDE_ACCOUNT_SET" -eq 0 ] && [ -z "$HARNESS_ARG" ] && [ -z "$positional" ]; then
+    claude_account=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$id") || {
+      fm_lock_release "$registry_lock" || true
+      fm_lock_release "$SPAWN_TASK_LOCK" || true
+      return 1
+    }
   fi
   # A remote second mate always runs on Herdr: its server belongs to the host's
   # own GUI login session, so the endpoint outlives every SSH connection that
@@ -1491,7 +1502,11 @@ spawn_remote_secondmate() {
     remote_traceparent=$(FM_TRACE_CONTEXT=on fm_trace_context_resolve "$CONFIG" "$meta" || true)
   fi
   launch_args=("$id" "$harness" "$model" "$effort" "$backend")
-  [ -z "$remote_traceparent" ] || launch_args+=("$remote_traceparent")
+  if [ -n "$claude_account" ]; then
+    launch_args+=("${remote_traceparent:--}" "$claude_account")
+  elif [ -n "$remote_traceparent" ]; then
+    launch_args+=("$remote_traceparent")
+  fi
   if out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh launch \
     "${launch_args[@]}" </dev/null 2>&1); then
     rc=0
@@ -1541,6 +1556,7 @@ spawn_remote_secondmate() {
   # reports it here so the parent does not deny the agent's actual identity.
   remote_recorded_traceparent=$(printf '%s\n' "$out" | sed -n 's/^traceparent=//p' | tail -1)
   fm_trace_context_valid "$remote_recorded_traceparent" || remote_recorded_traceparent=
+  remote_claude_account=$(printf '%s\n' "$out" | sed -n 's/^claude_account=//p' | tail -1)
   tmp="$meta.tmp.$$"
   {
     echo "window=remote:$id"
@@ -1562,6 +1578,7 @@ spawn_remote_secondmate() {
     echo "remote_herdr_session=$remote_herdr_session"
     echo "remote_target=$remote_target"
     [ -z "$remote_recorded_traceparent" ] || echo "traceparent=$remote_recorded_traceparent"
+    [ -z "$remote_claude_account" ] || echo "claude_account=$remote_claude_account"
   } >"$tmp"
   if ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
     if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
@@ -3248,7 +3265,8 @@ cloud-claude)
 esac
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
-# harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
+# harness ("<harness> [<model>] [<effort>]"), and a mate line an account=<clauth
+# profile> token. They apply only when this is a
 # --secondmate spawn and no explicit per-spawn harness/raw launch was supplied, so
 # the harness itself came from the secondmate config fallback chain. Resolving
 # here on every spawn makes the pin durable across respawns. Precedence: explicit
@@ -3266,6 +3284,9 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
       *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2 ;;
       esac
     fi
+  fi
+  if [ "$CLAUDE_ACCOUNT_SET" -eq 0 ]; then
+    CLAUDE_ACCOUNT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$ID") || exit 1
   fi
 fi
 fm_backend_validate_harness "$BACKEND" "$HARNESS" || exit 1
@@ -5083,7 +5104,7 @@ EOF
       REX_LABEL_HOME=$PROJ_ABS
       REX_LABEL_ROOT=$PROJ_ABS
       REX_LABEL_STATE=$PROJ_ABS/state
-      REX_LAUNCHER_RELATIONSHIP=other-home
+      REX_LAUNCHER_RELATIONSHIP='other-home'
     fi
     REX_TASK_IDS=$(FM_HOME="$REX_LABEL_HOME" FM_ROOT="$REX_LABEL_ROOT" STATE="$REX_LABEL_STATE" fm_backend_rex_create_task "$W" "$PROJ_ABS" "$REX_LAUNCHER_RELATIONSHIP") || exit 1
     read -r FM_REX_TASK_SESSION_ID FM_REX_TASK_WINDOW_ID FM_REX_TASK_BLOCK_ID <<EOF

@@ -1,31 +1,5 @@
 #!/usr/bin/env bash
-# tests/remote-herdr-fixture.sh - the stateful herdr CLI fixture the remote
-# second-mate suites install on their fake remote host.
-#
-# A remote second mate always launches on the Herdr backend
-# (docs/remote-secondmates.md), so a remote-route test needs a herdr CLI on the
-# remote code root's own bin directory. This fixture models the workspace, tab,
-# pane, and agent facts bin/backends/herdr.sh actually reads, backed by a JSON
-# state file mutated with real jq, using the same verified herdr behaviors as
-# tests/fm-backend-herdr.test.sh's stateful fake: workspace create seeds one
-# default tab and returns its tab and root pane in the same response, closing a
-# tab's only pane closes the tab, and agent get reports agent_not_found for a
-# pane no agent has registered on.
-#
-# Beyond that it models the pane IO a real launch performs. A pane reports a
-# registered agent once anything has been typed into it, and submitting starts
-# one turn: the next agent read reports working and the pane settles back to
-# idle, which is the native transition the adapter confirms a submit with.
-#
-# Usage:
-#   . "$(dirname "${BASH_SOURCE[0]}")/remote-herdr-fixture.sh"
-#   install_remote_herdr_fixture <remote-root> <state-file> <log-file> \
-#     <send-fail-flag> <socket-path>
-#
-# Every invocation is appended verbatim to <log-file>, so a test reads back what
-# the remote pane received. Creating <send-fail-flag> makes every pane write
-# fail, which is how a test simulates an endpoint that cannot be reached.
-
+# While <send-fail-flag> exists, every pane write fails.
 install_remote_herdr_fixture() { # <remote-root> <state> <log> <send-fail> <socket>
   local remote_root=$1 state=$2 log=$3 send_fail=$4 socket=$5 script="$1/bin/herdr"
   mkdir -p "$remote_root/bin"
@@ -83,7 +57,7 @@ case "${1:-} ${2:-}" in
     if [ "$(jq_state -r --arg p "$pane" '[.tabs[]|select(.pane_id==$p)]|length')" = 0 ]; then
       printf '{"error":{"code":"pane_not_found","message":"%s"}}\n' "$pane"
     else
-      printf '{"result":{"pane":{"pane_id":"%s"}}}\n' "$pane"
+      jq_state -c --arg p "$pane" '{result:{pane:({pane_id:$p} + ([.tabs[]|select(.pane_id==$p)|.cwd // empty|{foreground_cwd:.}][0] // {}))}}'
     fi
     ;;
   "pane close")

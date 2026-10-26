@@ -910,6 +910,7 @@ PRIOR_RECORDED_HARNESS=$RECORDED_HARNESS
 CONFIG_HARNESS=
 CONFIG_MODEL=
 CONFIG_EFFORT=
+CONFIG_CLAUDE_ACCOUNT=
 PRIOR_MODEL=
 PRIOR_EFFORT=
 TARGET_HARNESS=$HARNESS
@@ -1030,6 +1031,7 @@ resolve_relaunch_profile() {
   CONFIG_HARNESS=
   CONFIG_MODEL=
   CONFIG_EFFORT=
+  CONFIG_CLAUDE_ACCOUNT=
   if [ "$KIND" = secondmate ] && [ "$HARNESS_SET" = 0 ]; then
     # A secondmate's harness, model, and effort are a durable configured pin
     # that every respawn re-resolves (the secondmate-provisioning contract), so
@@ -1047,6 +1049,9 @@ resolve_relaunch_profile() {
     fi
     if ! CONFIG_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort "$ID"); then
       die "the configured secondmate effort pin for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved effort"
+    fi
+    if ! CONFIG_CLAUDE_ACCOUNT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$ID"); then
+      die "the configured secondmate account for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved account"
     fi
     case "$CONFIG_EFFORT" in
       ''|low|medium|high|xhigh|max|ultra) ;;
@@ -1104,7 +1109,9 @@ resolve_relaunch_profile() {
   [ "$account_model" != default ] || account_model=
   TARGET_CLAUDE_ACCOUNT=
   if [ "$CLAUDE_ACCOUNT_SET" = 1 ]; then
-    TARGET_CLAUDE_ACCOUNT=$NEW_CLAUDE_ACCOUNT
+    [ "$NEW_CLAUDE_ACCOUNT" = default ] || TARGET_CLAUDE_ACCOUNT=$NEW_CLAUDE_ACCOUNT
+  elif [ -n "$CONFIG_CLAUDE_ACCOUNT" ]; then
+    TARGET_CLAUDE_ACCOUNT=$CONFIG_CLAUDE_ACCOUNT
   elif { [ "$TARGET_HARNESS" = "$PRIOR_HARNESS" ] && [ "$TARGET_MODEL" = "$PRIOR_MODEL" ]; } \
      || fm_claude_bridge_model "$TARGET_HARNESS" "$account_model"; then
     TARGET_CLAUDE_ACCOUNT=$(fm_meta_get "$META" claude_account)

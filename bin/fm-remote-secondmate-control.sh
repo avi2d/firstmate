@@ -1,57 +1,4 @@
 #!/usr/bin/env bash
-# Host-local lifecycle control for the remote secondmate home selected by fm-on.
-#
-# Usage:
-#   fm-remote-secondmate-control.sh launch <id> <harness> <model|-> <effort|-> herdr [traceparent]
-#   fm-remote-secondmate-control.sh relaunch <id> <harness> <model|default|-> <effort|default|->
-#   fm-remote-secondmate-control.sh state <id>
-#   fm-remote-secondmate-control.sh route <id>
-#   fm-remote-secondmate-control.sh send <id> <message> [fire-and-forget]
-#   fm-remote-secondmate-control.sh key <id> <key>
-#   fm-remote-secondmate-control.sh capture <id> [lines]
-#   fm-remote-secondmate-control.sh observe <id>
-#   fm-remote-secondmate-control.sh sync <id> [<parent-commit>]
-#   fm-remote-secondmate-control.sh update <id>
-#   fm-remote-secondmate-control.sh retire <id> [--force]
-#
-# Remote placement ends here, but the second-mate agent always runs on the
-# Herdr backend in the dedicated fm-remote session, so launch refuses any other
-# selection rather than reading this home's config/backend. The interactive
-# default session remains for the user's work.
-# fm-spawn/fm-send/fm-teardown keep owning the local endpoint mechanics.
-# The home's own workers keep their ordinary backend selection.
-# bin/fm-remote-doctor.sh owns that host's readiness for Herdr.
-# docs/remote-secondmates.md owns why.
-#
-# With <parent-commit>, sync follows the PARENT PRIMARY's default-branch commit,
-# which the parent resolves on its own checkout and passes in, so a remote home
-# tracks the primary exactly like a local one instead of stopping at whatever
-# this host's Firstmate copy happens to hold. Omitting <parent-commit> targets
-# this host's own code-root HEAD instead, which is what /updatefirstmate wants
-# after it has refreshed that
-# code root from origin. Because this home is a standalone clone, the target
-# commit is imported here first and the fast-forward itself is the shared one in
-# bin/fm-ff-lib.sh, so the clean, ancestry, and branch guards have a single owner.
-# A private parent-route state directory stores only the remote secondmate
-# agent's endpoint record; the home's own
-# state/*.meta remains reserved for workers the secondmate supervises.
-# Retirement closes only this secondmate's panes or workspace and never
-# stops fm-remote or removes a sibling secondmate's workspace or panes.
-#
-# Relaunch is not a second lifecycle implementation: it runs the ORDINARY local
-# control plane here, because from this host the mate is a plain local
-# secondmate. cmd_relaunch below owns why the parent must hand it the profile.
-# It ends by printing the same route block `route` prints, so a caller that
-# invoked it directly (rather than through bin/fm-remote-secondmate-relaunch.sh,
-# which reads this block to keep the parent's own record in sync) still gets
-# the confirmed identity.
-#
-# The optional launch traceparent is the per-task W3C trace-context carrier the
-# PARENT home resolved for this secondmate; this host only delivers it to the
-# pane, and fm-spawn validates it (bin/fm-trace-context-lib.sh). Omitting it is
-# the default-off path. print_route echoes the carrier the endpoint actually
-# holds, including for an already-alive endpoint that was not relaunched, so the
-# parent records the identity the agent really received rather than an intent.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,7 +9,25 @@ CONTROL_DATA="$TARGET_HOME/data/.parent-route"
 REMOTE_HERDR_SESSION=fm-remote
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() {
+  cat <<'USAGE'
+Host-local lifecycle control for the remote secondmate home selected by fm-on.
+
+Usage:
+  fm-remote-secondmate-control.sh launch <id> <harness> <model|-> <effort|-> herdr [traceparent [claude-account]]
+  fm-remote-secondmate-control.sh relaunch <id> <harness> <model|default|-> <effort|default|-> [claude-account]
+  fm-remote-secondmate-control.sh state <id>
+  fm-remote-secondmate-control.sh route <id>
+  fm-remote-secondmate-control.sh send <id> <message> [fire-and-forget]
+  fm-remote-secondmate-control.sh key <id> <key>
+  fm-remote-secondmate-control.sh capture <id> [lines]
+  fm-remote-secondmate-control.sh observe <id>
+  fm-remote-secondmate-control.sh sync <id> [<parent-commit>]
+  fm-remote-secondmate-control.sh update <id>
+  fm-remote-secondmate-control.sh retire <id> [--force]
+USAGE
+  exit 2
+}
 validate_id() { case "$1" in ''|*[!A-Za-z0-9._-]*) die "invalid secondmate id: $1" ;; esac; }
 
 # Sourcing fm-wake-lib.sh through the libraries below creates "$FM_HOME/state",
@@ -167,12 +132,13 @@ state_value() { # <id>; prints recovery-grade state
 }
 
 print_route() { # <id>
-  local id=$1 harness model effort traceparent
+  local id=$1 harness model effort traceparent claude_account
   remote_endpoint_require "$id"
   harness=$(fm_meta_get "$REMOTE_ENDPOINT_META" harness)
   model=$(fm_meta_get "$REMOTE_ENDPOINT_META" model)
   effort=$(fm_meta_get "$REMOTE_ENDPOINT_META" effort)
   traceparent=$(fm_meta_get "$REMOTE_ENDPOINT_META" traceparent)
+  claude_account=$(fm_meta_get "$REMOTE_ENDPOINT_META" claude_account)
   printf 'schema=fm-remote-secondmate-control.v1\n'
   printf 'backend=%s\n' "$REMOTE_ENDPOINT_BACKEND"
   printf 'target=%s\n' "$REMOTE_ENDPOINT_TARGET"
@@ -181,6 +147,7 @@ print_route() { # <id>
   printf 'model=%s\n' "$model"
   printf 'effort=%s\n' "$effort"
   [ -z "$traceparent" ] || printf 'traceparent=%s\n' "$traceparent"
+  [ -z "$claude_account" ] || printf 'claude_account=%s\n' "$claude_account"
 }
 
 cmd_route() {
@@ -201,8 +168,9 @@ cmd_state_route() { # <id>
 }
 
 cmd_launch() {
-  local id=$1 harness=$2 model=$3 effort=$4 selected_backend=$5 traceparent=${6:-}
+  local id=$1 harness=$2 model=$3 effort=$4 selected_backend=$5 traceparent=${6:-} claude_account=${7:-}
   local current meta out herdr_session
+  [ "$traceparent" != - ] || traceparent=
 
   validate_id "$id"
   validate_home "$id"
@@ -244,6 +212,7 @@ cmd_launch() {
   [ "$model" = - ] || ARGS+=(--model "$model")
   [ "$effort" = - ] || ARGS+=(--effort "$effort")
   [ -z "$traceparent" ] || ARGS+=(--traceparent "$traceparent")
+  [ -z "$claude_account" ] || ARGS+=(--claude-account "$claude_account")
   if ! out=$(HERDR_SESSION="$REMOTE_HERDR_SESSION" FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
     FM_STATE_OVERRIDE="$CONTROL_STATE" FM_DATA_OVERRIDE="$CONTROL_DATA" \
     FM_CONFIG_OVERRIDE="$TARGET_HOME/config" FM_SKIP_SECONDMATE_INHERIT=1 \
@@ -267,13 +236,15 @@ cmd_launch() {
 # rollback, and postcondition that plane owns applies unchanged. This verb is the
 # transport hop, not a second implementation.
 #
-# harness/model/effort come from the PARENT and are passed explicitly, because
-# config/secondmate-harness is deliberately not inherited into a secondmate home:
-# the copy on this host is a different home's file, so letting the control plane
-# re-resolve it here would silently drift the mate onto another runtime. `default`
-# explicitly clears an absent parent pin; `-` remains its compatibility spelling.
+# harness/model/effort and the Claude account come from the PARENT and are
+# passed explicitly, because config/secondmate-harness is deliberately not
+# inherited into a secondmate home: the copy on this host is a different home's
+# file, so letting the control plane re-resolve it here would silently drift the
+# mate onto another runtime. `default` explicitly clears an absent parent pin;
+# `-` remains its compatibility spelling. An omitted account keeps the one this
+# host recorded.
 cmd_relaunch() {
-  local id=$1 harness=$2 model=$3 effort=$4
+  local id=$1 harness=$2 model=$3 effort=$4 claude_account=${5:-}
   local -a control_args
 
   validate_id "$id"
@@ -291,6 +262,7 @@ cmd_relaunch() {
   [ "$model" != - ] || model=default
   [ "$effort" != - ] || effort=default
   control_args=("$id" relaunch --harness "$harness" --model "$model" --effort "$effort")
+  [ -z "$claude_account" ] || control_args+=(--claude-account "$claude_account")
   # The same launch-boundary facts cmd_launch establishes: the endpoint lives in
   # the dedicated fm-remote session, and the parent already owns both convergence
   # legs, so the host-local spawn must not re-sync or re-inherit against this
@@ -472,8 +444,8 @@ cmd_retire() {
 }
 
 case "${1:-}" in
-  launch) shift; [ "$#" -ge 5 ] && [ "$#" -le 6 ] || usage; cmd_launch "$@" ;;
-  relaunch) shift; [ "$#" -eq 4 ] || usage; cmd_relaunch "$@" ;;
+  launch) shift; [ "$#" -ge 5 ] && [ "$#" -le 7 ] || usage; cmd_launch "$@" ;;
+  relaunch) shift; { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; } || usage; cmd_relaunch "$@" ;;
   state) shift; { [ "$#" -eq 1 ] || [ "$#" -eq 2 ]; } || usage; validate_id "$1"; validate_home "$1"; { [ "$#" -eq 1 ] || [ "$2" = route ]; } || usage; if [ "$#" -eq 2 ]; then cmd_state_route "$1"; else state_value "$1"; fi ;;
   route) shift; [ "$#" -eq 1 ] || usage; cmd_route "$1" ;;
   send) shift; [ "$#" -ge 2 ] && [ "$#" -le 3 ] || usage; cmd_send "$@" ;;
