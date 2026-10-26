@@ -21,7 +21,7 @@ db.executescript("""
 create table repos (id text primary key, working_path text not null unique, upstream_url text not null, created_at integer not null);
 create table runs (id text primary key, repo_id text not null references repos(id), branch text not null, status text not null, created_at integer not null, updated_at integer not null);
 create table step_results (id text primary key, run_id text not null references runs(id), step_name text not null, step_order integer not null);
-create table step_rounds (id text primary key, step_result_id text not null references step_results(id), round integer not null, trigger_type text not null, duration_ms integer not null, created_at integer not null);
+create table step_rounds (id text primary key, step_result_id text not null references step_results(id), round integer not null, trigger_type text not null, duration_ms integer not null, created_at integer not null, findings_json text, starting_head_sha text, reviewed_head_sha text);
 insert into repos values ('repo-demo', '/Users/x/projects/demo', 'https://example.invalid/demo.git', 0);
 """)
 db.commit()
@@ -51,7 +51,13 @@ add_run() {  # <home> <run-id> <branch> <status>
 add_round() {  # <home> <run-id> <created-at> [step] [trigger]
   local db="$1/nm/state.sqlite" step="${4:-review}" trigger="${5:-auto_fix}"
   sql "$db" "insert or ignore into step_results values (?, ?, ?, 1)" "$2-$step" "$2" "$step"
-  sql "$db" "insert into step_rounds values (?, ?, 1, ?, 1, ?)" "$2-$step-$3" "$2-$step" "$trigger" "$3"
+  sql "$db" "insert into step_rounds (id, step_result_id, round, trigger_type, duration_ms, created_at) values (?, ?, 1, ?, 1, ?)" "$2-$step-$3" "$2-$step" "$trigger" "$3"
+}
+
+add_review() {  # <home> <run-id> <created-at> <trigger> <starting-head> <reviewed-head> <findings-json>
+  local db="$1/nm/state.sqlite"
+  sql "$db" "insert or ignore into step_results values (?, ?, 'review', 1)" "$2-review" "$2"
+  sql "$db" "insert into step_rounds (id, step_result_id, round, trigger_type, duration_ms, created_at, starting_head_sha, reviewed_head_sha, findings_json) values (?, ?, 1, ?, 1, ?, ?, ?, ?)" "$2-review-$3" "$2-review" "$4" "$3" "$5" "$6" "$7"
 }
 
 run_check() {  # <home>
@@ -212,6 +218,34 @@ test_arm_and_disarm() {
   pass "arm writes and binds the shim, and disarm removes it with its record"
 }
 
+test_repeat_and_no_commit_are_named() {
+  local home out
+  home=$(make_home repeat)
+  write_task "$home" alpha fm/alpha-x
+  add_run "$home" r1 fm/alpha-x running
+  add_review "$home" r1 "$T0" initial h0 h0 '{"findings":[]}'
+  add_review "$home" r1 $((T0 + 60)) auto_fix h0 h1 '{"findings":[{"id":"x","severity":"error","file":"src/unrelated.ts","line":1,"action":"auto-fix","description":"Unrelated problem."}]}'
+  add_review "$home" r1 $((T0 + 120)) auto_fix h1 h2 '{"findings":[{"id":"y","severity":"error","file":"src/a.ts","line":40,"action":"auto-fix","description":"Profile key drops the provider. Detail."},{"id":"z","severity":"info","file":"src/w.ts","line":8,"action":"no-op","description":"Nit."}]}'
+  add_review "$home" r1 $((T0 + 180)) auto_fix h2 h2 '{"findings":[{"id":"y2","severity":"error","file":"src/a.ts","line":42,"action":"auto-fix","description":"Profile key drops the provider. Still there."},{"id":"w","severity":"warning","file":"src/w.ts","line":9,"action":"ask-user","description":"Naming needs a decision."}]}'
+  out=$(run_check "$home")
+  assert_contains "$out" "3 review fix rounds in run r1, repeated from previous round: src/a.ts:42 Profile key drops the provider, last fix round made no new commit: yes" "a repeat from the previous round and a no-commit round are named"
+  pass "a gating finding repeated in the same file within 3 lines is named, and a no-commit last round is flagged"
+}
+
+test_neither_repeat_nor_no_commit() {
+  local home out
+  home=$(make_home neither)
+  write_task "$home" alpha fm/alpha-x
+  add_run "$home" r1 fm/alpha-x running
+  add_review "$home" r1 "$T0" initial h0 h0 '{"findings":[]}'
+  add_review "$home" r1 $((T0 + 60)) auto_fix h0 h1 '{"findings":[{"id":"p","severity":"error","file":"src/p.ts","line":10,"action":"auto-fix","description":"Old problem."}]}'
+  add_review "$home" r1 $((T0 + 120)) auto_fix h1 h2 '{"findings":[{"id":"q","severity":"warning","file":"src/q.ts","line":3,"action":"auto-fix","description":"Other problem."}]}'
+  add_review "$home" r1 $((T0 + 180)) auto_fix h2 h3 '{"findings":[{"id":"p2","severity":"error","file":"src/p.ts","line":11,"action":"auto-fix","description":"Old problem again, two rounds back."}]}'
+  out=$(run_check "$home")
+  assert_contains "$out" "repeated from previous round: none, last fix round made no new commit: no" "neither a repeat nor a no-commit round"
+  pass "a finding that repeats only two rounds back is not named, and a round with a new commit is not flagged"
+}
+
 test_two_rounds_stay_silent
 test_third_round_wakes_once
 test_fourth_round_stays_silent
@@ -222,3 +256,5 @@ test_unmatched_branch_stays_silent
 test_absent_database_is_silent
 test_unreadable_database_reports_once
 test_arm_and_disarm
+test_repeat_and_no_commit_are_named
+test_neither_repeat_nor_no_commit

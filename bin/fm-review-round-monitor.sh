@@ -50,6 +50,9 @@ from pathlib import Path
 
 mode, state, db_path, record_path = sys.argv[1:5]
 LIMIT = 3
+REPEAT_WINDOW_LINES = 3
+GATING_ACTIONS = ("auto-fix", "ask-user")
+READ_ERRORS = (sqlite3.Error, OSError, ValueError, AttributeError)
 SCHEMA = "fm-review-round-monitor-v1"
 # Not fm_nm_run_status_class: it has no live class for fixing or the gate statuses, which are live here.
 TERMINAL = ("completed", "failed", "cancelled")
@@ -59,6 +62,51 @@ MS_FLOOR = 100_000_000_000
 
 def seconds(stamp):
     return stamp / 1000 if stamp >= MS_FLOOR else stamp
+
+
+def short_title(description):
+    first = (description or "").strip().split(". ")[0]
+    return first if len(first) <= 60 else first[:57].rstrip() + "..."
+
+
+def findings_of(text):
+    return (json.loads(text).get("findings") or []) if text else []
+
+
+def gating(findings):
+    return [
+        finding for finding in findings
+        if finding.get("action") in GATING_ACTIONS and finding.get("file") and isinstance(finding.get("line"), int)
+    ]
+
+
+def repeated(current, previous):
+    earlier = gating(previous["findings"]) if previous else []
+    return [
+        finding for finding in gating(current["findings"])
+        if any(
+            old["file"] == finding["file"] and abs(old["line"] - finding["line"]) <= REPEAT_WINDOW_LINES
+            for old in earlier
+        )
+    ]
+
+
+def no_new_commit(review):
+    if review["starting"] is None or review["reviewed"] is None:
+        return "unknown"
+    return "yes" if review["starting"] == review["reviewed"] else "no"
+
+
+def describe(row):
+    repeats = " | ".join(
+        "%s:%d %s" % (finding["file"], finding["line"], short_title(finding.get("description")))
+        for finding in row["repeated"]
+    ) or "none"
+    return (
+        "task %s, project %s, branch %s, %d review fix rounds in run %s, "
+        "repeated from previous round: %s, last fix round made no new commit: %s"
+        % (row["task"], row["project"], row["branch"], row["rounds"], row["run"], repeats, row["no_commit"])
+    )
 
 
 def tasks_by_branch():
@@ -83,35 +131,55 @@ def snapshot():
             " where r.status not in (?, ?, ?)",
             TERMINAL,
         ).fetchall()
-        stamps = {}
+        reviews = {}
         for run_id, _, _ in runs:
             rows = db.execute(
-                "select r.created_at from step_rounds r"
-                " join step_results sr on sr.id = r.step_result_id"
-                " where sr.run_id = ? and sr.step_name = 'review' and r.trigger_type = 'auto_fix'",
+                "select r.trigger_type, r.created_at, r.starting_head_sha, r.reviewed_head_sha, r.findings_json"
+                " from step_rounds r join step_results sr on sr.id = r.step_result_id"
+                " where sr.run_id = ? and sr.step_name = 'review'",
                 (run_id,),
             ).fetchall()
-            stamps[run_id] = sorted(seconds(row[0]) for row in rows)
-    return runs, stamps
+            reviews[run_id] = sorted(
+                (
+                    {
+                        "trigger": trigger,
+                        "at": seconds(at),
+                        "starting": starting,
+                        "reviewed": reviewed,
+                        "findings": findings_of(text),
+                    }
+                    for trigger, at, starting, reviewed, text in rows
+                ),
+                key=lambda review: review["at"],
+            )
+    return runs, reviews
 
 
 def observe():
-    runs, stamps = snapshot()
+    runs, reviews = snapshot()
     tasks = tasks_by_branch()
     rows = []
     for run_id, branch, working_path in runs:
         task = tasks.get(branch)
         if task is None:
             continue
-        rounds = stamps[run_id]
-        rows.append({
+        ordered = reviews[run_id]
+        fixes = [position for position, review in enumerate(ordered) if review["trigger"] == "auto_fix"]
+        row = {
             "run": run_id,
             "task": task,
             "branch": branch,
             "project": os.path.basename(working_path.rstrip("/")),
-            "rounds": len(rounds),
-            "third": rounds[LIMIT - 1] if len(rounds) >= LIMIT else None,
-        })
+            "rounds": len(fixes),
+            "third": ordered[fixes[LIMIT - 1]]["at"] if len(fixes) >= LIMIT else None,
+            "repeated": [],
+            "no_commit": "unknown",
+        }
+        if len(fixes) >= LIMIT:
+            position = fixes[LIMIT - 1]
+            row["repeated"] = repeated(ordered[position], ordered[position - 1] if position else None)
+            row["no_commit"] = no_new_commit(ordered[position])
+        rows.append(row)
     return rows, {run_id for run_id, _, _ in runs}
 
 
@@ -144,7 +212,7 @@ def check():
     woken, failure = read_record()
     try:
         rows, live = observe()
-    except (sqlite3.Error, OSError) as err:
+    except READ_ERRORS as err:
         message = "review fix rounds: the no-mistakes state database could not be read: " + str(err).replace("\n", " ")
         if message == failure:
             return ""
@@ -159,11 +227,7 @@ def check():
     write_record({run_id: entry for run_id, entry in woken.items() if run_id in live}, "")
     if not fresh:
         return ""
-    return "decision: third review fix round reached - " + "; ".join(
-        "task %s, project %s, branch %s, %d review fix rounds in run %s"
-        % (row["task"], row["project"], row["branch"], row["rounds"], row["run"])
-        for row in fresh
-    )
+    return "decision: third review fix round reached - " + "; ".join(describe(row) for row in fresh)
 
 
 def status():
@@ -172,7 +236,7 @@ def status():
         return 1
     try:
         rows, _ = observe()
-    except (sqlite3.Error, OSError) as err:
+    except READ_ERRORS as err:
         sys.stderr.write("could not read the no-mistakes state database: " + str(err) + "\n")
         return 1
     woken, _ = read_record()
