@@ -2248,6 +2248,31 @@ The pass stamps `state/.daily-reset` with the date, so each day fires once and a
 The main session resets itself: persist its open work following the /stow skill's open-record persistence half, then start a fresh session.
 The check stays silent while `state/.afk` exists and retries after the record clears.
 
+## Day review
+
+The day review is a short evening board for the captain: where the time and the API price went per finished task, the quality signals, three recommendations, lessons from repeated mistakes, and whether the last advice helped.
+It is separate from the daily session reset and runs on its own schedule.
+`config/day-review` is an optional local gitignored file holding `HH:MM` with an optional IANA time zone, such as `21:00 Europe/Moscow`.
+When it is absent the review is due daily after 21:00 Europe/Moscow, whatever the host clock's zone.
+A bare `HH:MM` uses Europe/Moscow.
+The word `off` disables it, and a malformed file is reported once until edited.
+
+Arm the check in the main home only with `bin/fm-day-review.sh arm`.
+Second mates need no check of their own, because the main home's run reads them.
+That writes `state/day-review.check.sh` and binds its bytes with `bin/fm-check-register.sh`, so the existing watcher polls it and turns its one line into a `check:` wake.
+`bin/fm-day-review.sh disarm` removes the shim, its trust binding, and the due record.
+The check stays silent while `state/.afk` exists.
+The next review then covers the whole time since the previous one, up to a week.
+
+Handle the wake by running `bin/fm-day-review.sh run`, then deliver the board path it prints with `lavish-axi`.
+The run reads this home and every home in `data/secondmates.md`, local ones directly and remote ones through `bin/fm-on.sh <id> fm-day-review.sh collect`.
+A home that cannot be read becomes a stated gap on the board rather than a failed run.
+Durations come from the status records and `state/merge-on-green.log`, tokens from the Pi session logs, prices from list prices in `bin/fm-day-review.py`, and quality from the no-mistakes database.
+A figure with no source, such as a model with no list price, is named on the board instead of estimated.
+Output lands in `data/day-review/<day>/`: `board.html` links `full.html`, and `numbers.json` holds every figure.
+`data/day-review/notes.json` keeps each day's advice so the next review can judge it per finished task, and `data/day-review/lessons.md` keeps the lessons with the days they were seen.
+`run --force` builds a board before the scheduled time without marking the day done or recording advice.
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.

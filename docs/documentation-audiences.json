@@ -396,6 +396,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0012-day-review.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
