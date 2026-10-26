@@ -92,6 +92,9 @@
 #              A recorded Claude account (claude_account=) follows a relaunch
 #              that keeps the same harness and model, under the same pre-stop
 #              sign-in check; any other profile relaunches without it.
+#              A replacement omp secondmate likewise passes its per-secondmate
+#              omp profile pin (bin/fm-omp-profile-lib.sh) before the old agent
+#              stops.
 #              The same pre-stop refusal applies to this home's worker tool
 #              exclusions (bin/fm-exclude-tools-lib.sh): a malformed list, or a
 #              replacement runtime that cannot hide the listed tools.
@@ -138,8 +141,8 @@
 #   - `exit` and `relaunch` require a backend with a recovery-grade agent-state
 #     classifier (tmux, herdr, rex, or t3code), because without one the "the
 #     agent stopped" postcondition cannot be proven. Relaunch also requires
-#     replacement support, which t3code lacks. zellij, orca, cmux, and paseo are refused
-#     rather than reported as successful blind.
+#     replacement support, which t3code lacks. zellij, orca, cmux, paseo, and tern are
+#     refused rather than reported as successful blind.
 #   - An ambiguous or unreadable endpoint state refuses; only a positively
 #     classified state acts (a Rex `unreadable` first goes through the absence
 #     proof `exit` describes, and refuses unless that proof settles it).
@@ -207,6 +210,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-omp-profile-lib.sh
+. "$SCRIPT_DIR/fm-omp-profile-lib.sh"
 # shellcheck source=bin/fm-exclude-tools-lib.sh
 . "$SCRIPT_DIR/fm-exclude-tools-lib.sh"
 
@@ -1127,6 +1132,8 @@ resolve_relaunch_profile() {
   [ "$KIND" != secondmate ] || account_mate=$ID
   fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
     "$account_model" "$TARGET_HARNESS" "" "$account_mate" >/dev/null || return 1
+  fm_omp_profile_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
+    "$account_mate" >/dev/null || return 1
   # Likewise polytoken's launch profile and wiring refusals
   # (bin/fm-polytoken-lib.sh owns them). The launch owner retires the prior
   # incarnation's own generated hook layer, so only one it did not generate
