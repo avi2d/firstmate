@@ -228,7 +228,7 @@ file_task() {
 
 action_check() {
   local repo runs rc=0 task title body detail outside first_file first_line first_seeds count failures jobs
-  local errors=0 filed=0 truncated='' stop_repo=''
+  local errors=0 filed=0 truncated='' stop_repo='' started=''
   local error_line=
   local tmp report
   command -v gh-axi >/dev/null 2>&1 || error_line="gh-axi is not installed"
@@ -239,7 +239,9 @@ action_check() {
   order_repos
   if [ -z "${error_line:-}" ]; then
     for repo in $ORDER; do
-      past_budget && { truncated=1; stop_repo=$repo; break; }
+      # Every poll starts at least one repository, so the rotation always advances.
+      past_budget && [ -n "$started" ] && { truncated=1; stop_repo=$repo; break; }
+      started=1
       runs=$(report_runs "$repo") || rc=$?
       if [ "$rc" -eq 2 ]; then rc=0; continue; fi
       if [ "$rc" -ne 0 ]; then
