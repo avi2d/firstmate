@@ -1681,9 +1681,9 @@ A line whose name starts with `@` is a machine-wide setting rather than a projec
 A worker that is only waiting on the captain or on a set time holds no heavy worker place, and counts again once its status shows it resumed.
 On Linux the standing caps are 4 from 06:00 up to but not including 21:00 UTC and 6 at other hours with a load cap of 16.
 `@core-budget` caps trailing-hour core hours on the Mac with a standing 6, so a heavy start waits while the hour already burned that budget and resumes on its own once use drops back under, while a light start never waits.
-On a Linux host that two Firstmate homes share without a common local root, each home lists the other in `config/winbox-load-siblings`, and the same two lines cap heavy starts across both homes with a standing 4 from 06:00 up to but not including 21:00 UTC and 6 at other hours, while the load average cap stays 16.
+On a Linux host that two Firstmate homes share without a common local root, each home lists the other in `config/linux-load-siblings`, and the same two lines cap heavy starts across both homes with a standing 4 from 06:00 up to but not including 21:00 UTC and 6 at other hours, while the load average cap stays 16.
 A place is held by every ship or scout on that project in the root home or any local secondmate home registered under it, including one working in a separate clone of the same origin, until its ready PR is recorded or it is cleaned up; a local-only ship or a scout holds its place until cleanup.
-Where `config/winbox-load-siblings` lists sibling homes, a place is also held by every ship or scout in those homes.
+Where `config/linux-load-siblings` lists sibling homes, a place is also held by every ship or scout in those homes.
 The declaration is matched by the spawning clone's directory name, so clones of the same origin share the cap only when they use that same directory name.
 A clone of that origin under a different directory name finds no declaration and is not capped, though its workers are still counted as holders for a same-origin clone that is capped.
 When every place is held, `bin/fm-spawn.sh` launches nothing, creates no record, leaves the backlog item queued, prints one `deferred:` line naming the holders, and exits 75, so Firstmate dispatches the item again once a place frees.

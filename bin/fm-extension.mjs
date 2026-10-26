@@ -865,7 +865,7 @@ async function lifecycleBash(code, message) {
       if (stdout !== `${marker}\n`) throw new Error("lifecycle Bash probe marker missing");
       return executable;
     } catch {
-      // A PATH entry may be absent or a different shell (e.g. WSL bash.exe).
+      // A PATH entry may be absent or a different shell (e.g. Windows Subsystem for Linux bash.exe).
     }
   }
   fail(code, message);

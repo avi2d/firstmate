@@ -122,7 +122,7 @@ hold_ssh() {
   mkfifo "$fifo"
   eval "exec ${HOLDER_FD}<>\"$fifo\""
   export FM_SSH_JQ="$JQ" FM_SSH_FIFO="$fifo" FM_SSH_PIDFILE="$pidfile"
-  ( exec -a sshd bash -c 'env -i SSH_CONNECTION="100.102.217.78 51234 100.100.1.2 22" SSH_CLIENT="100.102.217.78 51234 22" "$FM_SSH_JQ" . "$FM_SSH_FIFO" & printf "%s\n" "$!" > "$FM_SSH_PIDFILE"; wait' sshd: kunchen@notty ) &
+  ( exec -a sshd bash -c 'env -i SSH_CONNECTION="192.0.2.20 51234 192.0.2.21 22" SSH_CLIENT="192.0.2.20 51234 22" "$FM_SSH_JQ" . "$FM_SSH_FIFO" & printf "%s\n" "$!" > "$FM_SSH_PIDFILE"; wait' sshd: kunchen@notty ) &
   HOLDER_PIDS+=("$!")
   HOLDER_FD=$((HOLDER_FD + 1))
   local i=0

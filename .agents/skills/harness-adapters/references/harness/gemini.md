@@ -52,7 +52,7 @@ So never drive lifecycle text into a gemini pane that is showing this dialog.
 Treat it as a credential blocker under `../../../../../AGENTS.md` section 9, fix the environment, and retire the endpoint rather than typing into it.
 
 Do NOT give a worker an isolated `GEMINI_CLI_HOME`.
-It hides `~/.agents/skills`, so `/no-mistakes` and every other user skill silently disappear from that worker.
+It hides `$HOME/.agents/skills`, so `/no-mistakes` and every other user skill silently disappear from that worker.
 
 ## Detection
 
@@ -96,8 +96,8 @@ While a hook runs, the status row shows `Executing Hook: <name>` and the `(esc t
 
 ## Skills
 
-Gemini discovers user skills from `~/.gemini/skills/` or `~/.agents/skills/` and workspace skills from `.gemini/skills/` or `.agents/skills/`.
-`~/.agents/skills/no-mistakes` is therefore discovered as a user skill and loads even in an untrusted folder, which is what keeps firstmate's delivery path available.
+Gemini discovers user skills from `~/.gemini/skills/` or `$HOME/.agents/skills/` and workspace skills from `.gemini/skills/` or `.agents/skills/`.
+`$HOME/.agents/skills/no-mistakes` is therefore discovered as a user skill and loads even in an untrusted folder, which is what keeps firstmate's delivery path available.
 Workspace skills need the workspace trust the launch already grants, which is what makes a firstmate-repo task's own `.agents/skills` reachable.
 Gemini does NOT read `.claude/skills`.
 

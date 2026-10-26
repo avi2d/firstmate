@@ -103,7 +103,7 @@ The host invokes one exact package entrypoint directly with `shell=false`, the p
 It never uses `source`, `eval`, a shell command string, or package-supplied argv.
 The host's internal lifecycle calls to tracked `bin/fm-procevent.sh` are separate from package invocation: they resolve and probe an absolute Bash executable, then pass the script path as an argv argument with `shell=false`, preserving literal lifecycle arguments and the existing failure mapping.
 On POSIX hosts the candidate comes only from the sanitized `PATH`, as the script's `env bash` shebang resolved it before.
-On Windows, the host tries the exported `BASH` before `PATH`, and the probe accepts only Bash reporting an MSYS or Cygwin `OSTYPE`, so an unrelated `bash.exe` such as WSL Bash is refused.
+On Windows, the host tries the exported `BASH` before `PATH`, and the probe accepts only Bash reporting an MSYS or Cygwin `OSTYPE`, so an unrelated `bash.exe` such as Windows Subsystem for Linux Bash is refused.
 The entrypoint reads exactly one UTF-8 JSON document from stdin and writes exactly one UTF-8 JSON document to stdout.
 Logs must use stderr.
 

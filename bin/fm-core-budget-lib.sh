@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rolling hourly core budget shared by the Mac gate and the winbox gate.
+# Rolling hourly core budget shared by the Mac gate and the linux gate.
 # Sparse samples carry the last value forward, so thin history overstates the burn.
 
 # shellcheck disable=SC2034 # read by bin/fm-spawn.sh after sourcing.

@@ -100,12 +100,12 @@ if fm_mac_load_gate_active; then
   fm_mac_heavy_count "$STATE" "" || no_room
   [ "$FM_MAC_HEAVY_COUNT" -lt "$FM_MAC_HEAVY_LIMIT" ] || no_room
 fi
-if fm_winbox_load_gate_active "$CAPACITY_CONFIG"; then
-  fm_winbox_load_config "$CAPACITY_CONFIG" || no_room
+if fm_linux_load_gate_active "$CAPACITY_CONFIG"; then
+  fm_linux_load_config "$CAPACITY_CONFIG" || no_room
   LOADAVG=$(fm_mac_loadavg_5min) || no_room
-  fm_winbox_load_high "$LOADAVG" && no_room
-  fm_winbox_heavy_count "$STATE" "" "$CAPACITY_CONFIG" || no_room
-  [ "$FM_WINBOX_HEAVY_COUNT" -lt "$FM_WINBOX_HEAVY_LIMIT" ] || no_room
+  fm_linux_load_high "$LOADAVG" && no_room
+  fm_linux_heavy_count "$STATE" "" "$CAPACITY_CONFIG" || no_room
+  [ "$FM_LINUX_HEAVY_COUNT" -lt "$FM_LINUX_HEAVY_LIMIT" ] || no_room
 fi
 
 # One admission verdict per distinct project, mirroring bin/fm-spawn.sh: the

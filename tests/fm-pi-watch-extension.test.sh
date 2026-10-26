@@ -1620,8 +1620,8 @@ test_pi_routine_secondmate_span_survives_unrelated_decision() {
   cp "$ROOT/.pi/extensions/lib/fm-native-contract.ts" "$repo/.pi/extensions/lib/fm-native-contract.ts"
   cp "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$repo/.pi/extensions/lib/fm-async-exec.ts"
   cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$repo/.pi/extensions/lib/fm-branch-model-picker.ts"
-  printf 'project=%s/projects/approved\nwindow=fm-winbox\nkind=secondmate\n' "$home" > "$home/state/winbox.meta"
-  printf 'project=%s/projects/approved\nwindow=fm-winbox-ru\nkind=secondmate\n' "$home" > "$home/state/winbox-ru.meta"
+  printf 'project=%s/projects/approved\nwindow=fm-linux\nkind=secondmate\n' "$home" > "$home/state/linux.meta"
+  printf 'project=%s/projects/approved\nwindow=fm-linux-b\nkind=secondmate\n' "$home" > "$home/state/linux-b.meta"
   LIB="$repo/.pi/extensions/lib/fm-branch-dispatch.ts" FM_HOME="$home" CLASSIFY_LIB="$ROOT/bin/fm-classify-lib.sh" \
     node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
@@ -1635,7 +1635,7 @@ const hold = "needs-decision [at=1790000000] [key=old-hold]: deferred captain ca
 
 function commitCursor() {
   const rows = [];
-  for (const task of ["winbox", "winbox-ru"]) {
+  for (const task of ["linux", "linux-b"]) {
     const path = `${state}/${task}.status`;
     let content;
     try { content = readFileSync(path); } catch { continue; }
@@ -1661,32 +1661,32 @@ function expectOffer(label, message, toBranch) {
   }
 }
 
-// One batch names a decision span for winbox and a routine done[corr] span
-// for winbox-ru: the branch claims only the routine row.
-present("winbox", hold);
-present("winbox-ru", hold);
-appendFileSync(`${state}/winbox.status`, "needs-decision [key=new-call]: pick an option\n");
-appendFileSync(`${state}/winbox-ru.status`, "done [corr=ac35a329913b9212]: re-read done, nothing changed (via-helper)\n");
+// One batch names a decision span for linux and a routine done[corr] span
+// for linux-b: the branch claims only the routine row.
+present("linux", hold);
+present("linux-b", hold);
+appendFileSync(`${state}/linux.status`, "needs-decision [key=new-call]: pick an option\n");
+appendFileSync(`${state}/linux-b.status`, "done [corr=ac35a329913b9212]: re-read done, nothing changed (via-helper)\n");
 writeFileSync(`${state}/.wake-queue`,
-  row(1, "signal", "winbox.status", "signal: winbox.status") + "\n" +
-  row(2, "signal", "winbox-ru.status", "signal: winbox-ru.status") + "\n");
-expectOffer("decision mate plus routine mate", `signal: ${state}/winbox.status ${state}/winbox-ru.status`, true);
+  row(1, "signal", "linux.status", "signal: linux.status") + "\n" +
+  row(2, "signal", "linux-b.status", "signal: linux-b.status") + "\n");
+expectOffer("decision mate plus routine mate", `signal: ${state}/linux.status ${state}/linux-b.status`, true);
 {
   const scope = scopeForUnreadWake(state, false, false, false);
   if (JSON.stringify(scope.eligibleSeqs) !== '["2"]') throw new Error(`routine mate claim wrong: ${JSON.stringify(scope)}`);
-  if (!scope.needsDecisionKeys.includes("winbox.status")) throw new Error(`decision row lost: ${JSON.stringify(scope)}`);
-  if (scope.eligibleTasks.includes("winbox")) throw new Error(`decision mate claimable: ${JSON.stringify(scope)}`);
+  if (!scope.needsDecisionKeys.includes("linux.status")) throw new Error(`decision row lost: ${JSON.stringify(scope)}`);
+  if (scope.eligibleTasks.includes("linux")) throw new Error(`decision mate claimable: ${JSON.stringify(scope)}`);
 }
 
 // The same decision trigger alone still reaches main: nothing is claimable.
-writeFileSync(`${state}/.wake-queue`, row(1, "signal", "winbox.status", "signal: winbox.status") + "\n");
-expectOffer("lone decision span", `signal: ${state}/winbox.status`, false);
+writeFileSync(`${state}/.wake-queue`, row(1, "signal", "linux.status", "signal: linux.status") + "\n");
+expectOffer("lone decision span", `signal: ${state}/linux.status`, false);
 
 // A marked escalation alone in the queue still reaches main this cycle.
-present("winbox", hold);
-appendFileSync(`${state}/winbox.status`, "needs-decision [key=fresh-call]: pick one\n");
-writeFileSync(`${state}/.wake-queue`, row(1, "signal", "winbox.status", "needs-decision: winbox.status") + "\n");
-expectOffer("lone marked escalation", `signal: ${state}/winbox.status`, false);
+present("linux", hold);
+appendFileSync(`${state}/linux.status`, "needs-decision [key=fresh-call]: pick one\n");
+writeFileSync(`${state}/.wake-queue`, row(1, "signal", "linux.status", "needs-decision: linux.status") + "\n");
+expectOffer("lone marked escalation", `signal: ${state}/linux.status`, false);
 
 // A mixed span, a same-key update, and a resolution closing an open
 // decision stay on main even with a routine mate co-queued.
@@ -1696,12 +1696,12 @@ const stays = [
   ["closing resolution", "resolved [key=old-hold]: answered\n"],
 ];
 for (const [label, span] of stays) {
-  present("winbox", hold);
-  appendFileSync(`${state}/winbox.status`, span);
+  present("linux", hold);
+  appendFileSync(`${state}/linux.status`, span);
   writeFileSync(`${state}/.wake-queue`,
-    row(1, "signal", "winbox.status", "signal: winbox.status") + "\n" +
-    row(2, "signal", "winbox-ru.status", "signal: winbox-ru.status") + "\n");
-  expectOffer(label, `signal: ${state}/winbox.status ${state}/winbox-ru.status`, true);
+    row(1, "signal", "linux.status", "signal: linux.status") + "\n" +
+    row(2, "signal", "linux-b.status", "signal: linux-b.status") + "\n");
+  expectOffer(label, `signal: ${state}/linux.status ${state}/linux-b.status`, true);
   const scope = scopeForUnreadWake(state, false, false, false);
   if (scope.eligibleSeqs.includes("1")) throw new Error(`${label} claimed a decision row: ${JSON.stringify(scope)}`);
 }
@@ -1727,22 +1727,22 @@ test_pi_secondmate_batch_offers_routine_mate_to_branch() {
   mkdir -p "$repo/bin" "$home/state" "$home/config" "$home/projects/approved"
   install_pi_watch_extension_fixture "$repo"
   plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
-  printf 'project=%s/projects/approved\nwindow=fm-winbox\nkind=secondmate\n' "$home" > "$home/state/winbox.meta"
-  printf 'project=%s/projects/approved\nwindow=fm-winbox-ru\nkind=secondmate\n' "$home" > "$home/state/winbox-ru.meta"
-  printf 'needs-decision [at=1790000000] [key=old-hold]: deferred captain call\n' > "$home/state/winbox.status"
-  printf 'needs-decision [at=1790000000] [key=old-hold]: deferred captain call\n' > "$home/state/winbox-ru.status"
+  printf 'project=%s/projects/approved\nwindow=fm-linux\nkind=secondmate\n' "$home" > "$home/state/linux.meta"
+  printf 'project=%s/projects/approved\nwindow=fm-linux-b\nkind=secondmate\n' "$home" > "$home/state/linux-b.meta"
+  printf 'needs-decision [at=1790000000] [key=old-hold]: deferred captain call\n' > "$home/state/linux.status"
+  printf 'needs-decision [at=1790000000] [key=old-hold]: deferred captain call\n' > "$home/state/linux-b.status"
   CLASSIFY_LIB="$ROOT/bin/fm-classify-lib.sh" FM_STATE="$home/state" bash -c '
     set -e; . "$CLASSIFY_LIB"
     snapshot=""
-    for mate in winbox winbox-ru; do
+    for mate in linux linux-b; do
       ident=$(_fm_open_decisions_file_ident "$FM_STATE/$mate.status")
       bytes=$(wc -c < "$FM_STATE/$mate.status"); bytes=${bytes//[[:space:]]/}
       printf -v row "%s\t%s\t%s\n" "$mate" "$bytes" "$ident"
       snapshot+="$row"
     done
     status_commit_presentation_snapshot "$FM_STATE" "$snapshot"'
-  printf 'needs-decision [key=new-call]: pick an option\n' >> "$home/state/winbox.status"
-  printf 'done [corr=ac35a329913b9212]: re-read done, nothing changed (via-helper)\n' >> "$home/state/winbox-ru.status"
+  printf 'needs-decision [key=new-call]: pick an option\n' >> "$home/state/linux.status"
+  printf 'done [corr=ac35a329913b9212]: re-read done, nothing changed (via-helper)\n' >> "$home/state/linux-b.status"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --handling-delivered ]; then exit 0; fi
@@ -1750,7 +1750,7 @@ printf 'arm=%s\n' "$$" >> "${FM_ARM_LOG:?}"
 count=$(grep -c '^arm=' "$FM_ARM_LOG")
 if [ "$count" -eq 1 ]; then
   printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
-  printf 'signal: winbox.status winbox-ru.status\n'
+  printf 'signal: linux.status linux-b.status\n'
   exit 0
 fi
 printf 'watcher: started pid=%s (beacon fresh) recovery-generation=fixture-generation\n' "$$"
@@ -1794,8 +1794,8 @@ const pi = {
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 writeFileSync(
   `${process.env.FM_HOME}/state/.wake-queue`,
-  "1\t1\tsignal\twinbox.status\tsignal: winbox.status\n" +
-    "2\t2\tsignal\twinbox-ru.status\tsignal: winbox-ru.status\n",
+  "1\t1\tsignal\tlinux.status\tsignal: linux.status\n" +
+    "2\t2\tsignal\tlinux-b.status\tsignal: linux-b.status\n",
 );
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);

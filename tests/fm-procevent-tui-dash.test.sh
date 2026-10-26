@@ -22,7 +22,7 @@ while [ "$SECONDS" -lt 120 ]; do
     content=$(cat "$f")
     case "$content" in
       '{'*) printf '%s\n' "$content" ;;
-      *) printf '{"schemaVersion":1,"rule":"%s","at":"%s","machine":"winbox","stream":%s}\n' "$content" "$(basename "$f")" "$$" ;;
+      *) printf '{"schemaVersion":1,"rule":"%s","at":"%s","machine":"linux","stream":%s}\n' "$content" "$(basename "$f")" "$$" ;;
     esac
     rm -f "$f"
   done
@@ -90,7 +90,7 @@ emit "$H" 2026-10-19T10:00:00Z
 wait "$first" || fail "the first runner failed: $(cat "$TMP_ROOT/start1.out")"
 emit "$H" 2026-10-19T10:05:00Z long-task
 start_once "$H" > "$TMP_ROOT/start2.out" 2>&1 || fail "the second runner failed: $(cat "$TMP_ROOT/start2.out")"
-assert_equals '{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T10:00:00Z","machine":"winbox","stream":'"$(stream_pid "$(result "$H" 1)")"'}' \
+assert_equals '{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T10:00:00Z","machine":"linux","stream":'"$(stream_pid "$(result "$H" 1)")"'}' \
   "$(cat "$(result "$H" 1)")" "the captured result is the alert line byte for byte"
 assert_equals "$(stream_pid "$(result "$H" 1)")" "$(stream_pid "$(result "$H" 2)")" \
   "both alerts came from one stream that outlived the first runner"
@@ -232,7 +232,7 @@ last_verdict() {
 H=$(new_home routine-working)
 write_task "$H" alpha busy 'working: on the routine path'
 write_alert_result "$H" 4 <<'JSON'
-{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"alpha","title":"Alpha","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"linux","task":{"id":"alpha","title":"Alpha","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
 JSON
 before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")
 FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.4.result" || fail "a long task under 2h with a busy harness was not silent"
@@ -246,7 +246,7 @@ pass "a long task under 2h with a busy harness is recorded without a wake"
 H=$(new_home routine-paused)
 write_task "$H" beta idle 'paused: waiting on capacity'
 write_alert_result "$H" 5 <<'JSON'
-{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"beta","title":"Beta","project":"fixture","state":"waiting","detail":"paused","firstStartedAt":"2026-10-19T11:15:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":45}
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"linux","task":{"id":"beta","title":"Beta","project":"fixture","state":"waiting","detail":"paused","firstStartedAt":"2026-10-19T11:15:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":45}
 JSON
 FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.5.result" || fail "a long task under 2h on a declared pause was not silent"
 assert_contains "$(last_verdict | jq -r .verdict)" "declared pause" "the verdict names the declared pause"
@@ -254,7 +254,7 @@ pass "a long task under 2h on a declared pause is recorded without a wake"
 
 H=$(new_home routine-load)
 write_alert_result "$H" 6 <<'JSON'
-{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T12:00:00Z","machine":"winbox","since":"2026-10-19T11:55:00Z","crossed":["load"],"limits":{"name":"winbox","loadAtLeast":16,"memory":{"availableUnderPercent":15}},"load":[19.41,8.86,8.09],"memory":null,"topProcesses":{"byCpu":[],"byMemory":[]}}
+{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T12:00:00Z","machine":"linux","since":"2026-10-19T11:55:00Z","crossed":["load"],"limits":{"name":"linux","loadAtLeast":16,"memory":{"availableUnderPercent":15}},"load":[19.41,8.86,8.09],"memory":null,"topProcesses":{"byCpu":[],"byMemory":[]}}
 JSON
 FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.6.result" || fail "a heavy load on load alone was not silent"
 assert_contains "$(last_verdict | jq -r .verdict)" "load alone" "the verdict names the load-only crossing"
@@ -263,7 +263,7 @@ pass "a heavy load on load alone is recorded without a wake"
 H=$(new_home wake-two-hours)
 write_task "$H" gamma busy 'working: past the mark'
 write_alert_result "$H" 7 <<'JSON'
-{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T13:00:00Z","machine":"winbox","task":{"id":"gamma","title":"Gamma","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T12:45:00Z","quietMinutes":15,"totalMinutes":120}
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T13:00:00Z","machine":"linux","task":{"id":"gamma","title":"Gamma","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T12:45:00Z","quietMinutes":15,"totalMinutes":120}
 JSON
 before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")
 if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.7.result" 2>/dev/null; then
@@ -275,7 +275,7 @@ pass "a long task at exactly 2h still wakes"
 H=$(new_home wake-blocked)
 write_task "$H" delta idle 'blocked: waiting on review'
 write_alert_result "$H" 8 <<'JSON'
-{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"delta","title":"Delta","project":"fixture","state":"blocked","detail":"waiting on review","firstStartedAt":"2026-10-19T11:30:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":30}
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"linux","task":{"id":"delta","title":"Delta","project":"fixture","state":"blocked","detail":"waiting on review","firstStartedAt":"2026-10-19T11:30:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":30}
 JSON
 if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.8.result" 2>/dev/null; then
   fail "a blocked long task stayed silent"
@@ -285,7 +285,7 @@ pass "a long task under 2h in another state still wakes"
 H=$(new_home wake-idle-harness)
 write_task "$H" epsilon idle 'working: between turns'
 write_alert_result "$H" 9 <<'JSON'
-{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"epsilon","title":"Epsilon","project":"fixture","state":"working","detail":"between turns","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"linux","task":{"id":"epsilon","title":"Epsilon","project":"fixture","state":"working","detail":"between turns","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
 JSON
 if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.9.result" 2>/dev/null; then
   fail "a working task with an idle harness stayed silent"
@@ -303,7 +303,7 @@ pass "every quota-pace alert still wakes"
 
 H=$(new_home wake-memory)
 write_alert_result "$H" 11 <<'JSON'
-{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T12:00:00Z","machine":"winbox","since":"2026-10-19T11:55:00Z","crossed":["load","memory"],"limits":{"name":"winbox","loadAtLeast":16,"memory":{"availableUnderPercent":15}},"load":[19.41,8.86,8.09],"memory":{"usedBytes":46000000000,"totalBytes":50513698816,"usedPercent":91},"topProcesses":{"byCpu":[],"byMemory":[]}}
+{"schemaVersion":1,"rule":"heavy-load","at":"2026-10-19T12:00:00Z","machine":"linux","since":"2026-10-19T11:55:00Z","crossed":["load","memory"],"limits":{"name":"linux","loadAtLeast":16,"memory":{"availableUnderPercent":15}},"load":[19.41,8.86,8.09],"memory":{"usedBytes":46000000000,"totalBytes":50513698816,"usedPercent":91},"topProcesses":{"byCpu":[],"byMemory":[]}}
 JSON
 if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.11.result" 2>/dev/null; then
   fail "a memory-pressure heavy load stayed silent"
@@ -328,7 +328,7 @@ H=$(new_home routine-runner)
 write_task "$H" alpha busy 'working: on the routine path'
 FM_HOME="$H" "$ADAPTER" arm -- "$FAKE_BIN/tui-dash" >/dev/null || fail "arm failed"
 emit_json "$H" 2026-10-19T12:00:00Z <<'JSON'
-{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"winbox","task":{"id":"alpha","title":"Alpha","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
+{"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"linux","task":{"id":"alpha","title":"Alpha","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
 JSON
 start_once "$H" > "$TMP_ROOT/routine-run.out" 2>&1 || fail "the routine runner failed: $(cat "$TMP_ROOT/routine-run.out")"
 assert_not_contains "$(cat "$H/state/.wake-queue")" "procevent:tui-dash-alerts:1" "a routine alert queues no wake"

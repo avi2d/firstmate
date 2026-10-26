@@ -39,7 +39,7 @@ if [ "\${1:-}" = api ]; then
       if [ "$mode" = notstarted ]; then
         printf '  body: "flake\\\\tfailure\\\\t0\\\\t-\\\\t0"\n'
       else
-        printf '  body: "flake\\\\tfailure\\\\t21\\\\twinbox-skills\\\\t12"\n'
+        printf '  body: "flake\\\\tfailure\\\\t21\\\\tlinux-skills\\\\t12"\n'
       fi
       printf '  truncated: false\n'
       ;;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Write a private Devin worker config, preserving user settings and hooks.
 # Usage: fm-devin-config.sh <state-dir> <task-id> <busy-gen> [<user-config>]
-# The default source is ~/.config/devin/config.json (Devin's --config default).
+# The default source is $HOME/.config/devin/config.json (Devin's --config default).
 # An absent source starts from {}; unreadable or malformed sources refuse.
 # Output: <state-dir>/<task-id>.devin-config.json, mode 600, atomically replaced.
 # No project or user config is edited. fm-control-lib.sh owns retirement.

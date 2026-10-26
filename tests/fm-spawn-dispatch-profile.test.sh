@@ -2018,12 +2018,12 @@ test_lavish_server_address_is_exported_to_worker_launch() {
   id=profile-lavish-host-z18
   rec=$(make_spawn_case profile-lavish-host claude "$id")
   read_case_record "$rec"
-  printf '%s\n' '100.99.161.42' > "$HOME_DIR/config/lavish-axi-host"
+  printf '%s\n' '192.0.2.10' > "$HOME_DIR/config/lavish-axi-host"
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
   expect_code 0 "$status" "a configured Lavish server address should allow the worker spawn"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "export LAVISH_AXI_HOST='100.99.161.42';" \
+  assert_contains "$launch" "export LAVISH_AXI_HOST='192.0.2.10';" \
     "worker launch did not export the primary-owned Lavish server address"
   pass "the primary-owned Lavish server address reaches every worker launch"
 }

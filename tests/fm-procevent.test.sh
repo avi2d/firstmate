@@ -3045,7 +3045,7 @@ pass "the adapter classifies published poll output safely"
 
 HOST_HOME="$TMP_ROOT/host-config"
 mkdir -p "$HOST_HOME/config"
-printf '%s\n' '100.99.161.42' > "$HOST_HOME/config/lavish-axi-host"
+printf '%s\n' '192.0.2.10' > "$HOST_HOME/config/lavish-axi-host"
 HOST_ART="$TMP_ROOT/board, '评审'.html"
 printf '<h1>session routing</h1>\n' > "$HOST_ART"
 HOST_SEEN="$TMP_ROOT/session-route-seen"
