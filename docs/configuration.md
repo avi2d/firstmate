@@ -1434,10 +1434,11 @@ A Claude worker on a mapped directory reads that directory's settings, memory, a
 `fm-spawn.sh --claude-account <name>` refuses before any worker endpoint, local copy, or task record exists unless the map declares the account, an `ordinary` account is the active clauth profile, and `claude auth status` says its login is signed in.
 That check runs with the same cleared environment as the worker account pin check.
 The spawn prints and records `claude_account=<name>`.
-Once the map declares an account, a ship or scout spawn on a Pi `claude-bridge/<id>` model that names no account refuses before any of those exist and names `--claude-account` and the declared accounts.
+Once the map declares an account, a ship or scout spawn or relaunch on a Pi `claude-bridge/<id>` model that names no account refuses before any of those exist, or before the running worker stops, and names `--claude-account` and the declared accounts.
 Without an account the bridge would run on the terminal's ambient Claude login, which clauth folder attach signs out, so the worker would stop at its first turn.
-A secondmate agent, a raw launch command, a relaunch, and a home with no declared account still launch without an account.
-A relaunch that keeps the same harness and model keeps the account under the same check before the running worker stops, and a relaunch onto another profile drops it.
+A secondmate agent, a raw launch command, and a home with no declared account still launch without an account.
+A relaunch that keeps the same harness and model, or lands on a Pi `claude-bridge/<id>` model, keeps the account under the same check before the running worker stops, and a relaunch onto another profile drops it.
+`fm-control.sh <id> relaunch --claude-account <name>` sets or replaces the account for the replacement.
 
 `config/claude-accounts` is not inherited into secondmate homes, because its directories belong to one machine.
 A secondmate whose inherited dispatch file names accounts treats them as ineligible until its own home maps them.
