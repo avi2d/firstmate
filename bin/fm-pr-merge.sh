@@ -1779,6 +1779,29 @@ if [ "$PROVIDER" = github ]; then
   fi
 fi
 
+require_conventional_pr_title() {
+  local json title reasons
+  json=$(gh pr view "$URL" --json title 2>/dev/null) && [ -n "$json" ] || {
+    echo "error: could not read the title of $URL to check it before merging" >&2
+    return 1
+  }
+  title=$(printf '%s' "$json" | jq -r '.title // ""' 2>/dev/null) || title=
+  if reasons=$("$SCRIPT_DIR/fm-pr-title-check.sh" "$title"); then
+    return 0
+  fi
+  {
+    printf 'error: refusing to merge %s: its title "%s" does not pass the title rule:\n' "$URL" "$title"
+    printf '%s\n' "$reasons"
+    printf 'fix the title, then retry: gh pr edit %s --title %s\n' "$URL" "'<type>(<scope>): <lowercase subject>'"
+  } >&2
+  return 1
+}
+
+# Runs before the record so a refused title leaves no pr= metadata behind.
+if [ "$PROVIDER" = github ]; then
+  require_conventional_pr_title || exit 1
+fi
+
 # Record before either forge call. This arms the merge poll without claiming a
 # landed outcome, so even a provider read failure after a real merge cannot
 # leave teardown without the PR identity it needs to verify the result.
