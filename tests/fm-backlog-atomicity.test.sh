@@ -1610,7 +1610,7 @@ test_completion_closes_a_scout_with_its_report() {
   # A scout's deliverable is its report, and teardown also enforces the shared
   # captain-call completion gate; satisfy both the way a real scout does.
   mkdir -p "$(home_of "$case_dir")/data/$id"
-  printf 'findings\n' > "$(home_of "$case_dir")/data/$id/report.md"
+  printf '# Findings\n\n## References\n\n- fixture source\n' > "$(home_of "$case_dir")/data/$id/report.md"
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
     PATH="$case_dir/fakebin:$PATH" \
     "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
@@ -1680,7 +1680,7 @@ test_completion_records_a_relative_report_for_relocated_data() {
   tasks-axi start "$id" --file "$backlog" >/dev/null
   write_task_meta "$case_dir" "$id" scout '' "spawn_gen=spawn-relocated-scout"
   mkdir -p "$relocated/$id"
-  printf 'findings\n' > "$relocated/$id/report.md"
+  printf '# Findings\n\n## References\n\n- fixture source\n' > "$relocated/$id/report.md"
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
     FM_DATA_OVERRIDE="$relocated////" PATH="$case_dir/fakebin:$PATH" \
     "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \
@@ -1708,7 +1708,7 @@ test_space_containing_scout_report_marker_replays() {
   tasks-axi start "$id" --file "$backlog" >/dev/null
   write_task_meta "$case_dir" "$id" scout '' "spawn_gen=spawn-space-report"
   mkdir -p "$data/$id"
-  printf 'findings\n' > "$data/$id/report.md"
+  printf '# Findings\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
     FM_DATA_OVERRIDE="$data" PATH="$case_dir/fakebin:$PATH" \
     "$ROOT/bin/fm-captain-hold.sh" complete "$id" --none >/dev/null \

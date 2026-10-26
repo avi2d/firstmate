@@ -1322,7 +1322,7 @@ CHECK
   git -C "$wt" -c user.name=t -c user.email=t@example.invalid commit -qam "worker change"
   git -C "$wt" show HEAD:.codex/config.toml > "$CASE_DIR/committed.toml"
   cmp -s "$original" "$CASE_DIR/committed.toml" || fail "git add -A and commit -a must not commit the environment overlay"
-  printf 'report\n' > "$data/$id/report.md"
+  printf '# Report\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
   printf 'decisions_reviewed=1\ndecision_keys=\n' >> "$state/$id.meta"
   neutral=$(neutral_fm_root "$CASE_DIR/neutral")
   out=$( HOME="$SPAWN_HOME" PATH="$fb:$PATH" FM_T3_TREEHOUSE_LOG="$LOG" FM_T3_TREEHOUSE_WT="$wt" \
@@ -2125,7 +2125,7 @@ test_scout_teardown_stops_and_archives_before_slot_return() {
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
-  printf 'report\n' > "$data/$id/report.md"
+  printf '# Report\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "endpoint_task_id=$id" "worktree=$wt" "project=$proj" \
@@ -2232,7 +2232,7 @@ test_teardown_refuses_when_t3_is_unreachable() {
   proj="$CASE_DIR/project"; wt="$CASE_DIR/wt"; data="$CASE_DIR/data"; state="$CASE_DIR/state"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
-  printf 'report\n' > "$data/$id/report.md"
+  printf '# Report\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "endpoint_task_id=$id" "worktree=$wt" "project=$proj" \
@@ -2653,7 +2653,7 @@ test_teardown_keeps_tracked_claude_local_md() {
   git -C "$wt" add CLAUDE.local.md
   git -C "$wt" -c user.name=t -c user.email=t@example.invalid -c core.hooksPath=/dev/null commit -qm instructions
   mkdir -p "$data/$id" "$state" "$CASE_DIR/home/state"
-  printf 'report\n' > "$data/$id/report.md"
+  printf '# Report\n\n## References\n\n- fixture source\n' > "$data/$id/report.md"
   touch "$state/.last-watcher-beat"
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" "endpoint_task_id=$id" "worktree=$wt" "project=$proj" \

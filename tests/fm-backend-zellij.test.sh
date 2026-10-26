@@ -835,7 +835,7 @@ test_teardown_passes_recorded_tab_id_to_zellij_kill() {
   local dir state data config project fb out status
   dir="$TMP_ROOT/teardown-zellij-ghost"; state="$dir/state"; data="$dir/data"; config="$dir/config"; project="$dir/project"
   mkdir -p "$state" "$data/zghost" "$config" "$project" "$dir/responses"
-  printf 'report\n' > "$data/zghost/report.md"
+  printf '# Report\n\n## References\n\n- fixture source\n' > "$data/zghost/report.md"
   fm_write_meta "$state/zghost.meta" \
     "window=firstmate:7" \
     "endpoint_task_id=zghost" \

@@ -1648,7 +1648,7 @@ SH
 prepare_scout_teardown() {
   local case_dir=$1
   mkdir -p "$case_dir/data/task-x1"
-  printf '%s\n' 'Scout report.' > "$case_dir/data/task-x1/report.md"
+  printf '%s\n' '# Report' '' 'Scout findings.' '' '## References' '' '- fixture source' > "$case_dir/data/task-x1/report.md"
   printf '%s\n' 'decisions_reviewed=1' >> "$case_dir/state/task-x1.meta"
 }
 
@@ -6002,7 +6002,7 @@ make_scout_board_case() {  # <name>
     "spawn_gen=teardown-test-task-x1" \
     "decisions_reviewed=1"
   mkdir -p "$case_dir/data/task-x1" "$case_dir/state/procevent"
-  printf '# Report\n\nThe board compared the options.\n' > "$case_dir/data/task-x1/report.md"
+  printf '# Report\n\nThe board compared the options.\n\n## References\n\n- fixture source\n' > "$case_dir/data/task-x1/report.md"
   printf 'done: report complete\n' > "$case_dir/state/task-x1.status"
   artifact="$case_dir/wt/review.html"
   printf '<h1>Board</h1>\n' > "$artifact"
@@ -6108,6 +6108,28 @@ test_scout_board_copy_failure_refuses_cleanup() {
   pass "teardown refuses cleanup when the board copy fails"
 }
 
+test_scout_report_without_references_refuses_cleanup() {
+  local case_dir rc
+  case_dir=$(make_case scout-no-references)
+  write_meta "$case_dir" no-mistakes scout
+  prepare_scout_teardown "$case_dir"
+  printf '%s\n' '# Report' '' 'Findings. The sources are listed in the references below.' > "$case_dir/data/task-x1/report.md"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "scout-no-references: a report without a References heading must stop cleanup"
+  assert_grep "has no References section" "$case_dir/stderr" \
+    "scout-no-references: refusal did not name the missing section"
+  assert_grep '## References' "$case_dir/stderr" \
+    "scout-no-references: refusal did not say what to add"
+  assert_present "$case_dir/state/task-x1.meta" \
+    "scout-no-references: cleanup removed the task record"
+  pass "scout teardown refuses a report with no References heading"
+}
+
 test_unrecorded_open_pr_for_pushed_branch_refuses() {
   local case_dir rc mode head
   for mode in direct-PR no-mistakes; do
@@ -6174,6 +6196,7 @@ test_local_only_pushed_branch_ignores_open_pr() {
 test_scout_board_is_preserved_via_export
 test_scout_board_falls_back_to_plain_copy
 test_scout_board_copy_failure_refuses_cleanup
+test_scout_report_without_references_refuses_cleanup
 test_recorded_open_pr_is_not_landed_even_when_content_is_in_default
 test_unrecorded_open_pr_for_pushed_branch_refuses
 test_unrecorded_finished_pr_for_pushed_branch_allows
