@@ -2117,6 +2117,18 @@ A host named here still needs its own `gh` authentication (`gh auth login --host
 The file is local to each home and not part of secondmate inherited configuration, so a secondmate home that serves such a project names the host in its own copy.
 The host is part of each recorded PR identity, so removing a host while a task's pull request is still open stops that task's merge monitoring rather than pointing it at another host.
 
+## Security-sensitive paths: config/security-paths
+
+`bin/fm-security-paths.default` is the tracked list of security-sensitive paths.
+It holds one extended regular expression per line, matched against every path a pull request changes.
+Both names of a rename count.
+`config/security-paths` in the home, when present, replaces that default list entirely.
+Blank lines and `#` lines are ignored.
+An autonomous merge, one run without `--attended-override`, is refused when a changed path matches a line.
+Those paths need the captain's explicit word.
+A missing or empty list, an unreadable changed-file list, or a pattern that does not compile refuses the merge.
+It never passes.
+
 ## External review tool (config/external-review.md, config/external-review-url, config/external-review-backup)
 
 These optional local, gitignored files configure a home's `forge=external` projects; a home with no such project needs none of them.
@@ -2386,6 +2398,19 @@ A figure with no source, such as a model with no list price, is named on the boa
 Output lands in `data/day-review/<day>/`: `board.html` links `full.html`, and `numbers.json` holds every figure.
 `data/day-review/notes.json` keeps each day's advice so the next review can judge it per finished task, and `data/day-review/lessons.md` keeps the lessons with the days they were seen.
 `run --force` builds a board before the scheduled time without marking the day done or recording advice.
+
+## Review round monitor
+
+A live no-mistakes run on a task of this home that reaches its third review fix round gives firstmate one `check:` wake naming the task, project, branch, and run.
+[`bin/fm-review-round-monitor.sh`](../bin/fm-review-round-monitor.sh) counts the review step's auto-fix rounds read-only from the no-mistakes state database, resolved by `fm_nm_state_db`.
+
+- `bin/fm-review-round-monitor.sh arm` writes `state/review-rounds.check.sh` and binds it with `bin/fm-check-register.sh`, so the existing watcher turns its one line into a `check:` wake.
+- `bin/fm-review-round-monitor.sh status` lists this home's live runs with their round counts, read-only.
+- `bin/fm-review-round-monitor.sh disarm` removes the shim, its trust binding, and the de-dupe record.
+
+A run is live until it is `completed`, `failed`, or `cancelled`, so a run in a fixing or gate state still counts.
+Each run wakes once, and its de-dupe entry is dropped when the run ends.
+A database that cannot be read is reported once until it reads again.
 
 ## Mail plane (.env)
 
