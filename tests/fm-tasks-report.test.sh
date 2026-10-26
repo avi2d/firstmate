@@ -8,7 +8,7 @@ set -u
 REPORT="$ROOT/bin/fm-tasks-report.sh"
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
-TUI_DASH_CONTRACT_SOURCE="tui-dash packages/schema/src/contract/tasks.ts and recorded fixture tests/fixtures/tasks/winbox.json"
+TUI_DASH_CONTRACT_SOURCE="tui-dash packages/schema/src/contract/tasks.ts and recorded fixture tests/fixtures/tasks/linux.json"
 [ -n "$TUI_DASH_CONTRACT_SOURCE" ] || exit 1
 
 TMP_ROOT=$(fm_test_tmproot fm-tasks-report)

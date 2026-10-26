@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Behavior tests for the winbox load gate at night: a heavy start waits while the
+# Behavior tests for the linux load gate at night: a heavy start waits while the
 # average is high or six heavy workers already run across both homes.
 set -u
 
@@ -9,7 +9,7 @@ set -u
 unset TASKS_AXI_BACKEND || :
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
-TMP_ROOT=$(fm_test_tmproot fm-winbox-load-gate)
+TMP_ROOT=$(fm_test_tmproot fm-linux-load-gate)
 DEFER_EXIT=75
 HAVE_TASKS_AXI=0
 command -v tasks-axi >/dev/null 2>&1 && HAVE_TASKS_AXI=1
@@ -22,7 +22,7 @@ write_brief() {  # <home> <id>
 Run the heavy suite for $2.
 
 ## Firstmate spec
-Exercise the winbox load gate.
+Exercise the linux load gate.
 
 # Definition of done
 Delivery contract: mode=no-mistakes
@@ -94,8 +94,8 @@ SH
   fm_git_add_origin "$case_dir/project" "$case_dir/project.origin.git"
   make_home "$case_dir/home-a" "$@"
   make_home "$case_dir/home-b"
-  printf '%s\n' "$case_dir/home-b" > "$case_dir/home-a/config/winbox-load-siblings"
-  printf '%s\n' "$case_dir/home-a" > "$case_dir/home-b/config/winbox-load-siblings"
+  printf '%s\n' "$case_dir/home-b" > "$case_dir/home-a/config/linux-load-siblings"
+  printf '%s\n' "$case_dir/home-a" > "$case_dir/home-b/config/linux-load-siblings"
   printf '%s\n' "$case_dir"
 }
 
@@ -139,7 +139,7 @@ run_spawn_load() {  # <load> <case-dir> <home> <pane> <args...>
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_BACKEND=tmux \
-    FM_MAC_LOAD_GATE_FORCE=0 FM_WINBOX_LOAD_GATE_FORCE=1 \
+    FM_MAC_LOAD_GATE_FORCE=0 FM_LINUX_LOAD_GATE_FORCE=1 \
     FM_MAC_LOAD_MOCK_5MIN="$load" \
     FM_FAKE_PANE_PATH="$pane" FM_FAKE_CALL_LOG="$case_dir/calls.log" \
     PATH="$case_dir/fakebin:$PATH" \
@@ -170,7 +170,7 @@ test_six_across_two_homes_defer_a_seventh_then_release_admits() {
   local case_dir home_a out rc=0 before worktrees
   case_dir=$(make_case six task-c)
   home_a="$case_dir/home-a"
-  printf '%s\n' "$case_dir/home-a" >> "$home_a/config/winbox-load-siblings"
+  printf '%s\n' "$case_dir/home-a" >> "$home_a/config/linux-load-siblings"
   write_live "$home_a" live-a1 "$case_dir/project"
   write_live "$home_a" live-a2 "$case_dir/project"
   write_live "$home_a" live-a3 "$case_dir/project"
@@ -226,7 +226,7 @@ test_malformed_sibling_refuses() {
   local case_dir home_a out rc=0
   case_dir=$(make_case malformed task-c)
   home_a="$case_dir/home-a"
-  printf '%s\n' "relative/home" > "$home_a/config/winbox-load-siblings"
+  printf '%s\n' "relative/home" > "$home_a/config/linux-load-siblings"
   out=$(spawn_ship_load 1.0 "$case_dir" task-c "$case_dir/unused") || rc=$?
   expect_code 1 "$rc" "a relative sibling entry did not refuse the spawn: $out"
   assert_contains "$out" "not an absolute path" "the refusal did not say the sibling entry was not absolute"

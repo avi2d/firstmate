@@ -31,7 +31,7 @@ For helpers outside `bin/`, inspect the source or header before running `--help`
 3. Do not create projectless threads for repo work.
    If the project is absent, stop and ask for the project to be added or use a normal Firstmate backend instead.
 4. Decide whether this is a real Firstmate-managed task or a visible companion thread.
-   A real task needs a task id, an isolated worktree or Desktop-owned cwd, a branch plan, and a writable `state/<id>.status` path.
+   A real task needs a task id, an isolated worktree or Desktop app-owned cwd, a branch plan, and a writable `state/<id>.status` path.
 
 ## Create And Send
 
@@ -53,7 +53,7 @@ If the user types directly into the visible thread, treat that as authoritative 
 
 ## Status Return Channel
 
-A Desktop-owned Codex thread can append to Firstmate status files only when the prompt gives an absolute path and the Desktop permission context can write that checkout.
+A Desktop app-owned Codex thread can append to Firstmate status files only when the prompt gives an absolute path and the Desktop permission context can write that checkout.
 That makes status writes a verified return-channel requirement, not a fact to assume.
 
 For a Firstmate-managed task, include an explicit status instruction:
@@ -82,7 +82,7 @@ Use `list_threads` only to find or recover a visible thread id, not as a replace
 For Firstmate reconciliation, prefer concrete evidence:
 
 - thread id and project
-- current Desktop-owned cwd
+- current Desktop app-owned cwd
 - branch name
 - last meaningful thread state
 - latest status file line
@@ -90,7 +90,7 @@ For Firstmate reconciliation, prefer concrete evidence:
 
 Avoid repeating long transcripts into Firstmate docs or PR bodies.
 Summarize only the host-tool calls, the status-file result, and the archive result.
-When reporting a Desktop-thread result to the captain, translate status prefixes and return-channel evidence through `AGENTS.md` section 9.
+When reporting a Desktop app-thread result to the captain, translate status prefixes and return-channel evidence through `AGENTS.md` section 9.
 
 ## Archive
 

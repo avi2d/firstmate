@@ -4183,37 +4183,37 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_mac_load_gate_active
     exit "$FM_MAC_LOAD_DEFER_EXIT"
   fi
 fi
-# The winbox load gate extends the capacity path above on a Linux host that two
+# The linux load gate extends the capacity path above on a Linux host that two
 # Firstmate homes share without a common local root. Each home lists the other
-# in config/winbox-load-siblings, so a heavy start waits while the five-minute
+# in config/linux-load-siblings, so a heavy start waits while the five-minute
 # average is high or the standing heavy cap for the hour is full across both homes.
 # A relaunch replaces a worker that already holds a heavy place, so it skips the gate rather than stranding the task with no agent running.
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_winbox_load_gate_active "${SPAWN_CAPACITY_CONFIG:-}"; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_linux_load_gate_active "${SPAWN_CAPACITY_CONFIG:-}"; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
       echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2
       exit 1
     }
   fi
-  if ! fm_winbox_load_config "$SPAWN_CAPACITY_CONFIG"; then
-    echo "error: spawn refused: the machine load declaration is unreadable ($FM_WINBOX_LOAD_ERROR)" >&2
+  if ! fm_linux_load_config "$SPAWN_CAPACITY_CONFIG"; then
+    echo "error: spawn refused: the machine load declaration is unreadable ($FM_LINUX_LOAD_ERROR)" >&2
     exit 1
   fi
   if ! SPAWN_LOADAVG=$(fm_mac_loadavg_5min); then
     echo "error: spawn refused: the five-minute load average cannot be read; refusing a heavy start rather than guessing it" >&2
     exit 1
   fi
-  if fm_winbox_load_high "$SPAWN_LOADAVG"; then
-    echo "deferred: five-minute load average is $SPAWN_LOADAVG (limit $FM_WINBOX_LOAD_LIMIT); task $ID was not launched and its backlog item stays queued - dispatch it again once the average drops" >&2
-    exit "$FM_WINBOX_LOAD_DEFER_EXIT"
+  if fm_linux_load_high "$SPAWN_LOADAVG"; then
+    echo "deferred: five-minute load average is $SPAWN_LOADAVG (limit $FM_LINUX_LOAD_LIMIT); task $ID was not launched and its backlog item stays queued - dispatch it again once the average drops" >&2
+    exit "$FM_LINUX_LOAD_DEFER_EXIT"
   fi
-  if ! fm_winbox_heavy_count "$STATE" "$ID" "$SPAWN_CAPACITY_CONFIG"; then
-    echo "error: spawn refused: this machine's task records cannot all be read to count heavy workers ($FM_WINBOX_LOAD_ERROR)" >&2
+  if ! fm_linux_heavy_count "$STATE" "$ID" "$SPAWN_CAPACITY_CONFIG"; then
+    echo "error: spawn refused: this machine's task records cannot all be read to count heavy workers ($FM_LINUX_LOAD_ERROR)" >&2
     exit 1
   fi
-  if [ "$FM_WINBOX_HEAVY_COUNT" -ge "$FM_WINBOX_HEAVY_LIMIT" ]; then
-    echo "deferred: $FM_WINBOX_HEAVY_COUNT heavy worker(s) already run on this machine (limit $FM_WINBOX_HEAVY_LIMIT: $FM_WINBOX_HEAVY_IDS); task $ID was not launched and its backlog item stays queued - dispatch it again once one of them records its ready PR or is cleaned up" >&2
-    exit "$FM_WINBOX_LOAD_DEFER_EXIT"
+  if [ "$FM_LINUX_HEAVY_COUNT" -ge "$FM_LINUX_HEAVY_LIMIT" ]; then
+    echo "deferred: $FM_LINUX_HEAVY_COUNT heavy worker(s) already run on this machine (limit $FM_LINUX_HEAVY_LIMIT: $FM_LINUX_HEAVY_IDS); task $ID was not launched and its backlog item stays queued - dispatch it again once one of them records its ready PR or is cleaned up" >&2
+    exit "$FM_LINUX_LOAD_DEFER_EXIT"
   fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$WEIGHT" = heavy ] && fm_mac_core_budget_gate_active; then
@@ -5923,7 +5923,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     # the very first poll, before the pane has actually moved.
     #
     # A single read that already looks isolated is not proof the pane settled
-    # there: on some tmux/WSL setups a brand-new window's pane_current_path
+    # there: on some tmux/Windows Subsystem for Linux setups a brand-new window's pane_current_path
     # transiently reports an unrelated stale path (seen live as another real git
     # checkout entirely) before the shell catches up with treehouse get's cd. That
     # stale path passes spawn_worktree_isolated too (it resolves to a real,

@@ -21,10 +21,10 @@ A visible thread that cannot report into Firstmate's normal lifecycle is not a c
 
 Firstmate backend scripts use the shell-callable transports listed in the [runtime backend reference](configuration.md#runtime-backend-configbackend--fm_backend).
 Codex Desktop host tools are available to a Desktop conversation, not to arbitrary Firstmate subprocesses.
-The missing component is a Codex Desktop-supported shell-callable transport, not another local ledger.
+The missing component is a Codex Desktop app-supported shell-callable transport, not another local ledger.
 
 `codex app-server --stdio` exposes useful JSON-RPC pieces such as thread start, turn start, thread read, and thread archive.
-A one-process probe could create and archive a thread record, but no supported bridge was found that lets Firstmate create, continue, read, and archive the same visible Desktop-owned endpoint over its full lifetime.
+A one-process probe could create and archive a thread record, but no supported bridge was found that lets Firstmate create, continue, read, and archive the same visible Desktop app-owned endpoint over its full lifetime.
 A raw Desktop control-socket proxy is not a supported transport.
 These partial pieces do not authorize adding `codex-app` to the known or spawn-capable backend registries.
 

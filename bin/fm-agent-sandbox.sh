@@ -101,9 +101,9 @@ sock = env("FM_SANDBOX_SOCK")
 route = os.environ.get("FM_SANDBOX_ROUTE", "proxy")
 claude = (route == "claude")
 allow = [worktree, task_tmp, task_tmp + "/pi-agent", data_id, state + "/" + task + ".inbox"]
-read = [os.path.expanduser("~/.local/share/mise"), os.path.expanduser("~/.config/git"), root + "/bin"]
+read = [os.path.expanduser("~/.local/share/mise"), os.path.join(os.path.expanduser("~"), ".config/git"), root + "/bin"]
 # The generated -e extension imports this directory at startup.
-for candidate in (os.path.expanduser("~/Projects/dotfiles/home/.config/git"), os.path.expanduser("~/Projects/skills"), root + "/.agents/skills", root + "/.pi/extensions/lib"):
+for candidate in (os.path.join(os.path.expanduser("~"), "Projects/example/home/.config/git"), os.path.join(os.path.expanduser("~"), "Projects/example"), root + "/.agents/skills", root + "/.pi/extensions/lib"):
     if os.path.exists(candidate):
         read.append(candidate)
 if common and os.path.isdir(common):

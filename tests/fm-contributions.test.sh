@@ -998,8 +998,8 @@ test_real_gh_errors_drive_retry_and_summary() {
 
   for row in \
     'kunchenguid/firstmate|proxyconnect tcp: dial tcp 127.0.0.1:1: connect: connection refused|connection error' \
-    'coredns/coredns|dial tcp 140.82.112.6:443: connect: connection refused|connection error' \
-    'openssl/openssl|read tcp 10.0.0.2:50000->140.82.112.6:443: read: connection reset by peer|connection error' \
+    'coredns/coredns|dial tcp 192.0.2.42:443: connect: connection refused|connection error' \
+    'openssl/openssl|read tcp 192.0.2.41:50000->192.0.2.42:443: read: connection reset by peer|connection error' \
     'rustls/rustls|unexpected EOF|connection error' \
     'coredns/coredns|net/http: TLS handshake timeout|TLS error' \
     'openssl/openssl|dial tcp: lookup api.github.com: no such host|DNS error'; do

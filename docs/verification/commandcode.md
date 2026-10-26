@@ -61,7 +61,7 @@ A running turn renders one status row such as ` ○ Contemplificating…  esc to
 One Escape on a running turn printed `❯ Interrupted · What should Command Code do instead?` and left an empty composer.
 On an idle agent, two Escapes 0.1 or 0.3 seconds apart opened the `Rewind` picker (`Select a checkpoint to restore your session`, footer `Press Enter to select · Esc to cancel`), gaps of 0.6 seconds or more did not, two presses sent back to back parsed as one key and opened nothing, and one Escape closed the picker.
 `/quit` returned to the shell and printed `Resume this session with:` followed by `cmd --resume <session-id>`.
-The slash popup listed `/no-mistakes` as `[skill]` from `~/.agents/skills`.
+The slash popup listed `/no-mistakes` as `[skill]` from `$HOME/.agents/skills`.
 A worker commit composed by the model carried `Co-authored-by: CommandCodeBot <noreply@commandcode.ai>`, which the fleet commit-msg strip now removes.
 
 ## Herdr lab session

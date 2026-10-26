@@ -178,8 +178,8 @@ write_beat() {
   local why_json='[]'
   [ -z "$why" ] || why_json="[\"$why\"]"
   cat > "$1" <<JSON
-{"schema":"lookout.beat","schema_version":"1.0","host":"beat-host","os":"wsl","interval_s":15,
- "machine":{"id":"beat-host","status":"$2","load":{"l1":$6,"runq_per_core":$5},
+{"schema":"lookout.beat","schema_version":"1.0","host":"example-host","os":"linux","interval_s":15,
+ "machine":{"id":"example-host","status":"$2","load":{"l1":$6,"runq_per_core":$5},
   "mem":{"avail_gb":$3,"total_gb":$4,"swap_rate_pps_1m":0.5,"psi_some10":1.25},
   "disks":[{"label":"disk","free_gb":$disk}],"uptime_s":5000,"on_battery":$7,
   "pressure":{"level":"$2","why":$why_json},"beat":{"errors":[]}}}
@@ -252,7 +252,7 @@ test_fresh_beat_replaces_probes() {
     "a fresh ok beat must replace the raw load probe"
   assert_contains "$out" 'Pressure: ok from beat.' "the summary must name the beat basis"
   doc=$(capacity_doc "$home" "$fakebin")
-  assert_equals 'beat|ok|13.5|25.2|0.29|0.5|1.25|24.7|false|disk:500|beat-host' \
+  assert_equals 'beat|ok|13.5|25.2|0.29|0.5|1.25|24.7|false|disk:500|example-host' \
     "$(printf '%s\n' "$doc" | jq -r '.pressure | [.basis,.level,.avail_gb,.total_gb,.runq_per_core,.swap_rate_pps_1m,.mem_stall_pct,.load1,.on_battery,(.disks[0] | "\(.label):\(.free_gb)")] | join("|")')|$(printf '%s\n' "$doc" | jq -r .machine)" \
     "the document must carry the beat's own numbers and host"
   write_beat "$home/beat.json" warn 13.5 25.2 0.29 2.0 false "swapping 410 pages/s"
@@ -276,11 +276,11 @@ test_late_stale_missing_and_malformed_beats() {
   write_beat "$home/beat.json" ok 13.5 25.2 0.29 2.0 false
   fm_touch_epoch "$((now - 45))" "$home/beat.json"
   doc=$(capacity_doc "$home" "$fakebin")
-  assert_equals 'beat|true' "$(printf '%s\n' "$doc" | jq -r '"\(.pressure.basis)|\(.pressure.why | any(test("^beat-host: beat 4[5-9] s old$")))"')" \
+  assert_equals 'beat|true' "$(printf '%s\n' "$doc" | jq -r '"\(.pressure.basis)|\(.pressure.why | any(test("^example-host: beat 4[5-9] s old$")))"')" \
     "a late beat must still count, with its age in why"
   fm_touch_epoch "$((now - 600))" "$home/beat.json"
   doc=$(capacity_doc "$home" "$fakebin")
-  assert_equals 'probe|ok|true' "$(printf '%s\n' "$doc" | jq -r '"\(.pressure.basis)|\(.pressure.level)|\(.pressure.why | any(test("^beat-host: beat 60[0-9] s old$")))"')" \
+  assert_equals 'probe|ok|true' "$(printf '%s\n' "$doc" | jq -r '"\(.pressure.basis)|\(.pressure.level)|\(.pressure.why | any(test("^example-host: beat 60[0-9] s old$")))"')" \
     "a stale beat must fall back to probes with its age in why"
   out=$(run_capacity_jq "$home" "$fakebin")
   assert_contains "$out" 'capacity: free_lanes=3 reason=ok ' "a stale beat must not close lanes"
@@ -311,10 +311,10 @@ test_several_pressure_files() {
   write_beat "$home/win.json" critical 2.0 64 1.5 9.0 false "memory 6% available" 40
   printf '4\nmin-disk-gb 60\npressure-file %s\npressure-file %s\n' "$home/vm.json" "$home/win.json" > "$home/config/lane-capacity"
   doc=$(capacity_doc "$home" "$fakebin")
-  assert_equals 'critical|13.5|2|beat-host: pressure_why=1' \
+  assert_equals 'critical|13.5|2|example-host: pressure_why=1' \
     "$(printf '%s\n' "$doc" | jq -r '.pressure | "\(.level)|\(.avail_gb)|\(.disks | length)|\(.why | join(","))"')" \
     "the worst fresh level must win while the first fresh file supplies memory"
-  assert_equals 'disk: beat-host disk 40 GB free, under 60 GB,pressure critical' \
+  assert_equals 'disk: example-host disk 40 GB free, under 60 GB,pressure critical' \
     "$(printf '%s\n' "$doc" | jq -r '.verdict.reasons | join(",")')" "every fresh disk row must count against min-disk-gb"
   pass "several pressure files: worst level wins, first supplies memory, every disk counts"
 }

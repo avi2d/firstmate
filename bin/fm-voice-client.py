@@ -171,7 +171,7 @@ def relay_command(options):
     remote += list(options.relay_arg or [])
     if options.verbose:
         remote.append("--verbose")
-    if options.local:
+    if options.is_local:
         return remote
     # -T because a pty would rewrite bytes in the audio stream, which is the
     # single most confusing way this could fail.
@@ -1074,8 +1074,8 @@ class Client:
         record = {
             "run": index,
             "listen": self.options.listen,
-            "transport": "local" if self.options.local else "ssh",
-            "host": None if self.options.local else self.options.host,
+            "transport": "local" if self.options.is_local else "ssh",
+            "host": None if self.options.is_local else self.options.host,
             "input": self.options.in_file or "microphone",
             "output": self.options.out_file or "speaker",
             "model": self.ready_notice.get("model"),
@@ -1289,7 +1289,7 @@ def parse_args(argv):
         prog="fm-voice-client.py", add_help=True,
         description=__doc__.splitlines()[0])
     parser.add_argument("--host")
-    parser.add_argument("--local", action="store_true")
+    parser.add_argument("--local", dest="is_local", action="store_true")
     parser.add_argument("--relay", default=os.environ.get("FM_VOICE_RELAY"),
                         help="path to fm-voice-relay.py on the desktop; required, "
                              "and FM_VOICE_RELAY sets it for a whole shell")
@@ -1318,7 +1318,7 @@ def parse_args(argv):
                              "arriving. default 0.4")
     parser.add_argument("--verbose", action="store_true")
     options = parser.parse_args(argv)
-    if bool(options.host) == bool(options.local):
+    if bool(options.host) == bool(options.is_local):
         parser.error("give exactly one of --host <sshhost> or --local")
     if not options.relay:
         parser.error(

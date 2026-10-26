@@ -2791,7 +2791,7 @@ test_tagged_lock_holder_reaches_the_engine_whole() {
 #!/usr/bin/env bash
 [ "$*" = -W ] || exec /bin/ps "$@"
 printf '%s\n' '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND'
-printf '%s\n' '  4201508       0       0       7204  ?              0 22:24:48 C:\Users\u\.local\bin\claude.exe'
+printf '%s\n' '  4201508       0       0       7204  ?              0 22:24:48 C:\opt\.local\bin\claude.exe'
 SH
   chmod +x "$home/fakebin/uname" "$home/fakebin/ps"
   printf 'win:7204\n' > "$home/state/.lock"

@@ -3799,7 +3799,7 @@ E2E_KEY=AKIADESKTOPONLYEXAMPLE
 E2E_REGION=eu-north-1
 E2E_MODEL=amazon.nova-2-sonic-v1:0
 E2E_REQUEST="take the flaky sign-in test on alpha and open a pull request for it"
-mkdir -p "$E2E/bin" "$E2E/laptop" "$E2E/desktop-home" "$E2E/laptop-home" \
+mkdir -p "$E2E/bin" "$E2E/laptop" "$E2E/peer-home" "$E2E/laptop-home" \
   "$E2E/fakesdk/aws_sdk_bedrock_runtime" \
   "$E2E/home/data" "$E2E/home/state" "$E2E/home/config"
 
@@ -4177,7 +4177,7 @@ PY
 # AWS credential is here and nowhere else, which is the whole point of the shape.
 cat > "$E2E/bin/desktop.env" <<EOF
 PATH=$PATH
-HOME=$E2E/desktop-home
+HOME=$E2E/peer-home
 PYTHONPATH=$E2E/fakesdk
 PYTHONDONTWRITEBYTECODE=1
 FM_HOME=$E2E/home
@@ -4188,7 +4188,7 @@ FM_FAKE_REPLY_SECONDS=0.4
 FM_FAKE_SCRIPT=status,handover
 FM_FAKE_REQUEST=$E2E_REQUEST
 AWS_ACCESS_KEY_ID=$E2E_KEY
-AWS_SECRET_ACCESS_KEY=desktop-secret-not-a-real-key
+AWS_SECRET_ACCESS_KEY=test-secret-not-a-real-key
 EOF
 
 # Stands in for ssh, so the client takes its real `ssh -T <host> <relay>` path
@@ -4580,10 +4580,10 @@ pass "a model session that ends mid-conversation costs one turn, not the relay"
 # stand-in the round trip above uses, and it is never asked to answer.
 
 set +e
-env -i PATH="$PATH" HOME="$E2E/desktop-home" PYTHONPATH="$E2E/fakesdk" \
+env -i PATH="$PATH" HOME="$E2E/peer-home" PYTHONPATH="$E2E/fakesdk" \
   PYTHONDONTWRITEBYTECODE=1 FM_HOME="$E2E/home" \
   AWS_ACCESS_KEY_ID="$E2E_KEY" \
-  AWS_SECRET_ACCESS_KEY=desktop-secret-not-a-real-key \
+  AWS_SECRET_ACCESS_KEY=test-secret-not-a-real-key \
   python3 - "$ROOT/bin" <<'PY'
 import os, subprocess, sys
 sys.path.insert(0, sys.argv[1])
@@ -4692,12 +4692,12 @@ PY
 relay_self_test() {
   local clip=$1
   shift
-  env -i PATH="$PATH" HOME="$E2E/desktop-home" PYTHONPATH="$E2E/fakesdk" \
+  env -i PATH="$PATH" HOME="$E2E/peer-home" PYTHONPATH="$E2E/fakesdk" \
     PYTHONDONTWRITEBYTECODE=1 FM_HOME="$E2E/home" \
     FM_FAKE_STATE="$SELFTEST/turn-counter" FM_FAKE_LOG="$SELFTEST/sessions.jsonl" \
     FM_FAKE_THINK=0.4 FM_FAKE_REPLY_SECONDS=0.4 FM_FAKE_SCRIPT=status \
     AWS_ACCESS_KEY_ID="$E2E_KEY" \
-    AWS_SECRET_ACCESS_KEY=desktop-secret-not-a-real-key \
+    AWS_SECRET_ACCESS_KEY=test-secret-not-a-real-key \
     "$@" python3 "$ROOT/bin/fm-voice-relay.py" --self-test "$clip"
 }
 
