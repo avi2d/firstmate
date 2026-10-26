@@ -105,18 +105,18 @@ write_github_required() {
 # post-merge fallback view. Merge itself is `gh pr merge --match-head-commit`.
 # Args: case_dir head_sha
 write_github_live_json() {
-  local case_dir=$1 head=$2
+  local case_dir=$1 head=$2 title=${3:-feat: task change}
   printf '%s\n' "$head" > "$case_dir/github-head"
   cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+{"state":"OPEN","isDraft":false,"title":"$title","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
 JSON
 }
 
 write_github_red_json() {
-  local case_dir=$1 head=$2 name=$3
+  local case_dir=$1 head=$2 name=$3 title=${4:-feat: task change}
   printf '%s\n' "$head" > "$case_dir/github-head"
   cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"$name","status":"COMPLETED","conclusion":"FAILURE"}]}
+{"state":"OPEN","isDraft":false,"title":"$title","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"$name","status":"COMPLETED","conclusion":"FAILURE"}]}
 JSON
 }
 
@@ -218,6 +218,10 @@ case "${1:-} ${2:-}" in
         ;;
       *headRefOid*)
         cat "$FM_TEST_GH_HEAD"
+        exit 0
+        ;;
+      *title*)
+        cat "$FM_TEST_GH_VIEW_JSON"
         exit 0
         ;;
       *isDraft*)
@@ -3519,6 +3523,168 @@ test_github_head_behind_base_refuses() {
   pass "fm-pr-merge refuses a head missing its base tip, beside other refusals and under --allow-red"
 }
 
+test_release_pr_merges_without_an_owning_task() {
+  local case_dir head
+  head=1515151515151515151515151515151515151515
+  case_dir=$(make_case release-merges)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_live_json "$case_dir" "$head" 'chore: release 2026-10-26'
+  : > "$case_dir/gh-axi.log"
+
+  run_pr_merge "$case_dir" --release https://github.com/example/repo/pull/150 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "release-merges: a green release PR that no task owns should merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 150 example/repo --squash
+  assert_absent "$case_dir/state/release-150.meta" \
+    "release-merges: a release merge wrote task metadata"
+  assert_grep 'https://github.com/example/repo/pull/150' "$case_dir/state/.wake-queue" \
+    "release-merges: the merge was not recorded for supervision"
+  pass "fm-pr-merge merges a green release PR that no task owns and records the merge"
+}
+
+test_release_pr_title_must_be_the_release_convention() {
+  local case_dir rc head
+  head=1717171717171717171717171717171717171717
+  case_dir=$(make_case release-title-refuses)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_live_json "$case_dir" "$head" 'feat: task change'
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" --release https://github.com/example/repo/pull/151 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "release-title: a PR outside the release convention must refuse"
+  assert_grep 'is not a daily release PR' "$case_dir/stderr" \
+    "release-title: the refusal did not name the release convention"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "release-title: gh pr merge ran on a PR that is not a release PR"
+  pass "fm-pr-merge refuses a --release PR whose title is not the release convention"
+}
+
+test_release_pr_owned_by_a_task_refuses() {
+  local case_dir rc head
+  head=1818181818181818181818181818181818181818
+  case_dir=$(make_case release-owned-refuses)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_live_json "$case_dir" "$head" 'chore: release 2026-10-26'
+  fm_write_meta "$case_dir/state/task-x2.meta" \
+    "window=fm-task-x2" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "pr=https://github.com/example/repo/pull/152"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" --release https://github.com/example/repo/pull/152 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "release-owned: a PR a task owns must not merge through the release route"
+  assert_grep 'is owned by task task-x2' "$case_dir/stderr" \
+    "release-owned: the refusal did not name the owning task"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "release-owned: gh pr merge ran on a PR a task owns"
+  pass "fm-pr-merge refuses the release route for a PR that a task owns"
+}
+
+test_release_pr_red_check_refuses() {
+  local case_dir rc head
+  head=1919191919191919191919191919191919191919
+  case_dir=$(make_case release-red-refuses)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" lint 'chore: release 2026-10-26'
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" --release https://github.com/example/repo/pull/153 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "release-red: a red check must refuse a release PR"
+  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
+    "release-red: the red check was not named"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "release-red: gh pr merge ran on a red release PR"
+  pass "fm-pr-merge refuses a red release PR"
+}
+
+test_release_pr_behind_base_refuses() {
+  local case_dir rc head
+  head=2020202020202020202020202020202020202020
+  case_dir=$(make_case release-behind-refuses)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_live_json "$case_dir" "$head" 'chore: release 2026-10-26'
+  printf '3\n' > "$case_dir/github-compare"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" --release https://github.com/example/repo/pull/154 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "release-behind: a release head missing the base tip must refuse"
+  assert_grep "is 3 commits behind base branch 'main'" "$case_dir/stderr" \
+    "release-behind: the refusal did not name the base and the commit count"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "release-behind: gh pr merge ran on a release head missing the base tip"
+  pass "fm-pr-merge refuses a release PR whose head is behind its base"
+}
+
+test_release_pr_held_refuses() {
+  local case_dir rc head
+  head=2121212121212121212121212121212121212121
+  case_dir=$(make_case release-held-refuses)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_live_json "$case_dir" "$head" 'chore: release 2026-10-26'
+  : > "$case_dir/gh-axi.log"
+  FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-merge-hold.sh" hold https://github.com/example/repo/pull/155 \
+      --reason "captain review pending" >/dev/null \
+    || fail "release-held: could not record the fixture hold"
+
+  set +e
+  run_pr_merge "$case_dir" --release https://github.com/example/repo/pull/155 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "release-held: a held release PR must refuse"
+  assert_grep 'is held for the captain' "$case_dir/stderr" \
+    "release-held: the refusal did not name the hold"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "release-held: gh pr merge ran despite the hold"
+  pass "fm-pr-merge refuses a held release PR"
+}
+
+test_release_pr_off_github_refuses() {
+  local case_dir rc
+  case_dir=$(make_case release-gitlab-refuses)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 2222222222222222222222222222222222222222
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" --release https://gitlab.com/example/repo/-/merge_requests/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "release-gitlab: a release route on a non-GitHub forge must refuse"
+  assert_grep 'daily release PRs merge only on GitHub' "$case_dir/stderr" \
+    "release-gitlab: the refusal did not state the GitHub-only scope"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "release-gitlab: a merge ran through the GitHub client"
+  pass "fm-pr-merge refuses the release route on a non-GitHub forge"
+}
+
 test_github_head_containing_base_tip_merges() {
   local case_dir head
   head=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
@@ -4923,6 +5089,13 @@ test_github_draft_or_unreadable_draft_state_refuses
 test_github_head_behind_base_refuses
 test_github_head_containing_base_tip_merges
 test_github_unreadable_base_containment_refuses
+test_release_pr_merges_without_an_owning_task
+test_release_pr_title_must_be_the_release_convention
+test_release_pr_owned_by_a_task_refuses
+test_release_pr_red_check_refuses
+test_release_pr_behind_base_refuses
+test_release_pr_held_refuses
+test_release_pr_off_github_refuses
 test_superseded_failed_check_run_no_longer_refuses
 test_check_runs_never_supersede_status_contexts
 test_current_failed_check_run_still_refuses
