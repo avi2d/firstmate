@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Codex permission mode](#codex-permission-mode-configcodex-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
+| Worker permissions, accounts, or environment | [Codex approval review](#codex-automatic-approval-review), [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Codex permission mode](#codex-permission-mode-configcodex-permission-mode), [persistent managed-policy failover](#persistent-managed-policy-failover), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [cloud Claude worker](#cloud-claude-worker), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist), and its [Orca environment source](#orca-environment-source-configlaunch-env-tmux-session) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), [external memory tiers](#external-memory-tiers-memory-layering-section), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -1089,6 +1089,9 @@ It has no primary or secondmate supervision protocol.
 The launch generates a private per-task config directory that mirrors the operator's provider/model configuration and enforces unattended permissions without modifying global configuration.
 The first-start license dialog requires an operator decision and is never accepted automatically.
 
+cloud-claude runs a direct-PR ship task on a GitHub-hosted project in a Claude Code cloud session, and is refused for every other task kind and delivery mode.
+[Cloud Claude worker](#cloud-claude-worker) owns its settings, and [its adapter reference](../.agents/skills/harness-adapters/references/harness/cloud-claude.md) owns the operating contract.
+
 ### Verification and primary supervision
 
 New harnesses get verified through a supervised trial task before joining the set.
@@ -1124,7 +1127,7 @@ With an override declaration, at most one non-empty, non-comment line without th
 Any number of override lines can pin named secondmates rather than the whole home:
 
 ```text
-mate <secondmate-id>: <harness> [<model>] [<effort>]
+mate <secondmate-id>: <harness> [<model>] [<effort>] [account=<clauth profile>]
 ```
 
 Override ids use letters, digits, dots, underscores, and hyphens, and matching is case-sensitive.
@@ -1132,7 +1135,7 @@ A mate line replaces the default line for that exact secondmate id, so raising t
 Precedence is the override for that mate's id, then the default line, then `config/crew-harness`, then the primary's own harness.
 An override whose harness token is `default` skips the file's default line and falls back to `config/crew-harness`, then the primary's own harness, contributing no model or effort.
 Blank lines and `#` comments stay legal anywhere, and a mate line is honored wherever it sits in the file.
-In a file that declares an override, a second default line, two overrides for one id, an override with no tokens or more than three, or a `mate` keyword naming an invalid secondmate id is an actionable error: resolution exits nonzero naming the file's line number and prints no token, so malformed pin config cannot resolve to a fallback in silence.
+In a file that declares an override, a second default line, two overrides for one id, an override with no tokens or more than three besides its account, or a `mate` keyword naming an invalid secondmate id is an actionable error: resolution exits nonzero naming the file's line number and prints no token, so malformed pin config cannot resolve to a fallback in silence.
 In a file that declares no override, none of that applies: the legacy first-line rule governs, so an existing, already-valid file is read exactly as it was before this grammar existed.
 
 A bare `<harness>` preserves the previous behavior: harness only, with no model or effort launch flag.
@@ -1145,6 +1148,13 @@ Every resolution site that knows which mate it is launching passes that id, so s
 `config/crew-harness` remains a bare adapter-name file and is never parsed for a model.
 Changing this pin affects the next secondmate spawn or control-plane relaunch; the relaunch profile rules are owned by [`docs/agent-control.md`](agent-control.md#transactional-relaunch).
 For a separate account choice for one local secondmate, see [per-secondmate account pins](#per-secondmate-account-pins).
+
+An `account=<clauth profile>` token on a mate line names the [Claude account](#claude-accounts-configclaude-accounts) that mate launches on, such as `mate win: pi claude-bridge/opus high account=main`.
+The token can sit anywhere after the colon, and a mate line without one launches with no account.
+The account is resolved on the host the mate runs on, through that home's own `config/claude-accounts`, so a remote mate's folder is mapped in its remote home and never in the primary.
+Every spawn, control-plane relaunch, secondmate restart, and automatic recovery of that mate applies the folder as `CLAUDE_CONFIG_DIR`, under the same checks and refusals as a worker's `--claude-account`.
+An account the host does not map, a folder that is missing or not signed in, or a runtime the account cannot reach refuses before the running agent stops.
+The token is per mate only, so the default line, a second token, or an empty `account=` is an actionable error.
 The regression coverage is in [`fm-secondmate-harness.test.sh`](../tests/fm-secondmate-harness.test.sh), [`fm-control-relaunch.test.sh`](../tests/fm-control-relaunch.test.sh), and [`fm-secondmate-restart.test.sh`](../tests/fm-secondmate-restart.test.sh).
 
 ### Per-launch overrides and inherited defaults
@@ -1482,10 +1492,11 @@ A Claude worker on a mapped directory reads that directory's settings, memory, a
 `fm-spawn.sh --claude-account <name>` refuses before any worker endpoint, local copy, or task record exists unless the map declares the account, an `ordinary` account is the active clauth profile, and `claude auth status` says its login is signed in.
 That check runs with the same cleared environment as the worker account pin check.
 The spawn prints and records `claude_account=<name>`.
-Once the map declares an account, a ship or scout spawn on a Pi `claude-bridge/<id>` model that names no account refuses before any of those exist and names `--claude-account` and the declared accounts.
+Once the map declares an account, a ship or scout spawn or relaunch on a Pi `claude-bridge/<id>` model that names no account refuses before any of those exist, or before the running worker stops, and names `--claude-account` and the declared accounts.
 Without an account the bridge would run on the terminal's ambient Claude login, which clauth folder attach signs out, so the worker would stop at its first turn.
-A secondmate agent, a raw launch command, a relaunch, and a home with no declared account still launch without an account.
-A relaunch that keeps the same harness and model keeps the account under the same check before the running worker stops, and a relaunch onto another profile drops it.
+A secondmate agent without a [declared account](#choose-the-secondmate-harness), a raw launch command, and a home with no declared account still launch without an account.
+A relaunch that keeps the same harness and model, or lands on a Pi `claude-bridge/<id>` model, keeps the account under the same check before the running worker stops, and a relaunch onto another profile drops it.
+`fm-control.sh <id> relaunch --claude-account <name>` sets or replaces the account for the replacement.
 
 `config/claude-accounts` is not inherited into secondmate homes, because its directories belong to one machine.
 A secondmate whose inherited dispatch file names accounts treats them as ineligible until its own home maps them.
@@ -1524,6 +1535,25 @@ The refusal names the first matching command, so the author can tell a brief tha
 A refused spawn writes no task record, so the brief can be regenerated and the spawn repeated.
 The flag is read only for ship and scout spawns, secondmate charters never take it, and it is not inherited by secondmate homes.
 [`herdr-backend.md`](herdr-backend.md) owns the lab isolation contract itself; `bin/fm-spawn.sh`'s header owns the exact matching rule.
+
+## Cloud Claude worker
+
+`--harness cloud-claude` runs a ship task in a Claude Code cloud session billed to a chosen Claude account, while this machine keeps only a relay pane and the task's local copy.
+The spawn refuses it unless the task is a ship with `--mode direct-PR`, the project's origin is on github.com, and no `--model` or `--effort` is passed.
+It also needs `claude`, `gh`, and `script` on PATH, and the Claude GitHub App must reach the repository.
+
+| File | Contents | When absent |
+| --- | --- | --- |
+| `config/cloud-claude-account` | One [Claude accounts](#claude-accounts-configclaude-accounts) profile name, the login whose cloud credit pays for the sessions | The spawn refuses unless it passes `--claude-account <profile>` |
+| `config/cloud-claude-deadline` | Whole minutes a session may run before it is reported stuck | 90 minutes |
+
+The account is never inferred, so a home that leaves the file absent cannot spend its default login's cloud usage by accident.
+A spawn's `--claude-account` overrides the file for that task only.
+The relay reports a ready pull request on the task branch as the task's result, and a missing one past the deadline as a blocker that links the session.
+Each forwarded steer restarts the deadline.
+Firstmate reads no Anthropic session API and no stored login token, so a session that waits on a question or fails is seen only at the deadline.
+Interrupt, exit, and relaunch through `bin/fm-control.sh` are refused, and cleanup leaves the cloud session in the account's session list.
+[The adapter reference](../.agents/skills/harness-adapters/references/harness/cloud-claude.md) owns the operating details and [the design record](adr/0011-cloud-claude-relay.md) owns the rationale.
 
 ## Worker launch environment (config/launch-env-allowlist)
 
@@ -2279,6 +2309,31 @@ The pass stamps `state/.daily-reset` with the date, so each day fires once and a
 
 The main session resets itself: persist its open work following the /stow skill's open-record persistence half, then start a fresh session.
 The check stays silent while `state/.afk` exists and retries after the record clears.
+
+## Day review
+
+The day review is a short evening board for the captain: where the time and the API price went per finished task, the quality signals, three recommendations, lessons from repeated mistakes, and whether the last advice helped.
+It is separate from the daily session reset and runs on its own schedule.
+`config/day-review` is an optional local gitignored file holding `HH:MM` with an optional IANA time zone, such as `21:00 Europe/Moscow`.
+When it is absent the review is due daily after 21:00 Europe/Moscow, whatever the host clock's zone.
+A bare `HH:MM` uses Europe/Moscow.
+The word `off` disables it, and a malformed file is reported once until edited.
+
+Arm the check in the main home only with `bin/fm-day-review.sh arm`.
+Second mates need no check of their own, because the main home's run reads them.
+That writes `state/day-review.check.sh` and binds its bytes with `bin/fm-check-register.sh`, so the existing watcher polls it and turns its one line into a `check:` wake.
+`bin/fm-day-review.sh disarm` removes the shim, its trust binding, and the due record.
+The check stays silent while `state/.afk` exists.
+The next review then covers the whole time since the previous one, up to a week.
+
+Handle the wake by running `bin/fm-day-review.sh run`, then deliver the board path it prints with `lavish-axi`.
+The run reads this home and every home in `data/secondmates.md`, local ones directly and remote ones through `bin/fm-on.sh <id> fm-day-review.sh collect`.
+A home that cannot be read becomes a stated gap on the board rather than a failed run.
+Durations come from the status records and `state/merge-on-green.log`, tokens from the Pi session logs, prices from list prices in `bin/fm-day-review.py`, and quality from the no-mistakes database.
+A figure with no source, such as a model with no list price, is named on the board instead of estimated.
+Output lands in `data/day-review/<day>/`: `board.html` links `full.html`, and `numbers.json` holds every figure.
+`data/day-review/notes.json` keeps each day's advice so the next review can judge it per finished task, and `data/day-review/lessons.md` keeps the lessons with the days they were seen.
+`run --force` builds a board before the scheduled time without marking the day done or recording advice.
 
 ## Mail plane (.env)
 

@@ -34,6 +34,7 @@ Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> int
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
 Muse, Gemini, AGY, Devin, Command Code, Polytoken, and Cortex are verified only for crewmate and scout work, never a secondmate or primary.
+cloud-claude is verified only for direct-PR ship work on a GitHub-hosted project, and its lifecycle actions are refused because its pane holds a relay rather than the agent.
 
 ## Detection
 
@@ -97,7 +98,8 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "devin": "references/harness/devin.md",
     "commandcode": "references/harness/commandcode.md",
     "polytoken": "references/harness/polytoken.md",
-    "cortex": "references/harness/cortex.md"
+    "cortex": "references/harness/cortex.md",
+    "cloud-claude": "references/harness/cloud-claude.md"
   }
 }
 ```

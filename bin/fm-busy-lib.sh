@@ -246,6 +246,7 @@ fm_busy_sources_for_harness() {  # <harness>
     cortex) adapter=cortex-hook ;;
     commandcode) adapter=commandcode-mod ;;
     polytoken) adapter=polytoken-hook ;;
+    cloud-claude) adapter=cloud-relay ;;
     pi|pi-signed) adapter=pi-ext ;;
     omp) adapter=omp-ext ;;
     kimi*)

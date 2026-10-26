@@ -485,17 +485,21 @@ resolve_crew() {
 # is refused. A file that does declare an override validates completely before
 # selecting a mate, so an invalid override cannot silently migrate that mate
 # onto the default runtime.
-# Fills SM_DEFAULT_LINE and the parallel SM_MATE_IDS, SM_MATE_VALS and
-# SM_MATE_LINES arrays for the reader below.
+# Fills SM_DEFAULT_LINE and the parallel SM_MATE_IDS, SM_MATE_VALS,
+# SM_MATE_ACCOUNTS and SM_MATE_LINES arrays for the reader below. A mate's
+# account=<profile> token is held apart from SM_MATE_VALS, so it never shifts
+# the positional harness, model, and effort fields.
 secondmate_parse() {
   local file="$CONFIG/secondmate-harness"
   SM_DEFAULT_LINE=
   SM_DEFAULT_LINE_NUM=
   SM_MATE_IDS=()
   SM_MATE_VALS=()
+  SM_MATE_ACCOUNTS=()
   SM_MATE_LINES=()
   [ -f "$file" ] || return 0
-  local line num=0 id rest i ntok
+  local line num=0 id rest i ntok tok account
+  local -a profile
   local override_pattern='^mate[[:space:]]+([^:[:space:]]+)[[:space:]]*:[[:space:]]*(.*)$'
   # First pass: the legacy default line, and whether the file declares any
   # override at all. A file that declares none stops here, so a home that never
@@ -543,15 +547,29 @@ secondmate_parse() {
           return 1
         fi
       done
-      ntok=$(printf '%s\n' "$rest" | wc -w)
+      account=
+      profile=()
+      # shellcheck disable=SC2086  # deliberate word-splitting: tokenizing the override into fields
+      for tok in $rest; do
+        case "$tok" in
+          account=*)
+            if [ -n "$account" ] || [ "$tok" = account= ]; then
+              echo "error: config/secondmate-harness line $num: 'mate $id:' takes at most one non-empty account=<clauth profile>" >&2
+              return 1
+            fi
+            account=${tok#account=}
+            ;;
+          *) profile+=("$tok") ;;
+        esac
+      done
+      ntok=${#profile[@]}
       if [ "$ntok" -lt 1 ] || [ "$ntok" -gt 3 ]; then
-        echo "error: config/secondmate-harness line $num: 'mate $id:' needs '<harness> [<model>] [<effort>]' after the colon" >&2
+        echo "error: config/secondmate-harness line $num: 'mate $id:' needs '<harness> [<model>] [<effort>] [account=<clauth profile>]' after the colon" >&2
         return 1
       fi
-      # shellcheck disable=SC2086  # deliberate word-splitting: tokenizing the override into fields
-      set -- $rest
       SM_MATE_IDS+=("$id")
-      SM_MATE_VALS+=("$*")
+      SM_MATE_VALS+=("${profile[*]}")
+      SM_MATE_ACCOUNTS+=("$account")
       SM_MATE_LINES+=("$num")
       continue
     fi
@@ -564,6 +582,11 @@ secondmate_parse() {
       echo "error: config/secondmate-harness line $num: '$line' is neither the default line (already set on line $SM_DEFAULT_LINE_NUM) nor a 'mate <secondmate-id>: ...' override" >&2
       return 1
     fi
+    case " $line " in
+      *[[:space:]]account=*)
+        echo "error: config/secondmate-harness line $num: account=<clauth profile> is declared per mate, on a 'mate <secondmate-id>: ...' line, not on the default line" >&2
+        return 1 ;;
+    esac
     ntok=$(printf '%s\n' "$line" | wc -w)
     if [ "$ntok" -gt 3 ]; then
       echo "error: config/secondmate-harness line $num: the default line takes '<harness> [<model>] [<effort>]', not $ntok tokens" >&2
@@ -645,6 +668,20 @@ resolve_secondmate_effort() {
   secondmate_field 3 "${1:-}"
 }
 
+# The default line never carries an account, so no id, a mate with no override
+# line, or one whose line declares none prints nothing.
+resolve_secondmate_account() {
+  local id=${1:-} i
+  secondmate_parse || return 1
+  [ -n "$id" ] || return 0
+  for i in "${!SM_MATE_IDS[@]}"; do
+    if [ "${SM_MATE_IDS[$i]}" = "$id" ]; then
+      [ -z "${SM_MATE_ACCOUNTS[$i]}" ] || printf '%s\n' "${SM_MATE_ACCOUNTS[$i]}"
+      return 0
+    fi
+  done
+}
+
 validate_native_effort() {
   local harness=${1:-} model=${2:-} effort=${3:-}
   [ "$effort" = ultra ] || return 0
@@ -680,5 +717,6 @@ case "${1:-}" in
   secondmate) resolve_secondmate "${2:-}" ;;
   secondmate-model) resolve_secondmate_model "${2:-}" ;;
   secondmate-effort) resolve_secondmate_effort "${2:-}" ;;
+  secondmate-account) resolve_secondmate_account "${2:-}" ;;
   *) detect_own ;;
 esac

@@ -257,6 +257,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/harness-adapters/references/harness/cloud-claude.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/harness-adapters/references/harness/rovo.md",
       "audience": "agent-runtime"
     },
@@ -398,6 +402,14 @@
     },
     {
       "path": "docs/adr/0010-per-pr-merge-hold.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/adr/0011-cloud-claude-relay.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/adr/0012-day-review.md",
       "audience": "maintainer-architecture"
     },
     {
@@ -618,6 +630,10 @@
     },
     {
       "path": "docs/verification/polytoken.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/cloud-claude.md",
       "audience": "maintainer-verification"
     },
     {

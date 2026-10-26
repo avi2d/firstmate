@@ -915,6 +915,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-role-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
+# shellcheck source=bin/fm-cloud-claude-lib.sh
+. "$SCRIPT_DIR/fm-cloud-claude-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
@@ -1322,6 +1324,7 @@ spawn_remote_secondmate() {
   local id=$1 remote host root home harness positional model effort backend out rc meta tmp
   local remote_backend remote_target remote_harness remote_herdr_session registry_lock remote_lock remote_generation
   local remote_traceparent remote_recorded_traceparent sm_primary_head sync_out sync_rc account_config
+  local claude_account remote_claude_account
   local -a launch_args
   id=${POS[0]:-}
   fm_task_id_creation_valid "$id" || {
@@ -1397,6 +1400,16 @@ spawn_remote_secondmate() {
       effort=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort "$id")
       [ -n "$effort" ] || effort=-
     fi
+  fi
+  # The parent names the account and the host resolves it, because the folder
+  # an account maps to exists only in config/claude-accounts on that host.
+  claude_account=$CLAUDE_ACCOUNT
+  if [ "$CLAUDE_ACCOUNT_SET" -eq 0 ] && [ -z "$HARNESS_ARG" ] && [ -z "$positional" ]; then
+    claude_account=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$id") || {
+      fm_lock_release "$registry_lock" || true
+      fm_lock_release "$SPAWN_TASK_LOCK" || true
+      return 1
+    }
   fi
   # A remote second mate always runs on Herdr: its server belongs to the host's
   # own GUI login session, so the endpoint outlives every SSH connection that
@@ -1515,7 +1528,11 @@ spawn_remote_secondmate() {
     remote_traceparent=$(FM_TRACE_CONTEXT=on fm_trace_context_resolve "$CONFIG" "$meta" || true)
   fi
   launch_args=("$id" "$harness" "$model" "$effort" "$backend")
-  [ -z "$remote_traceparent" ] || launch_args+=("$remote_traceparent")
+  if [ -n "$claude_account" ]; then
+    launch_args+=("${remote_traceparent:--}" "$claude_account")
+  elif [ -n "$remote_traceparent" ]; then
+    launch_args+=("$remote_traceparent")
+  fi
   if out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh launch \
     "${launch_args[@]}" </dev/null 2>&1); then
     rc=0
@@ -1565,6 +1582,7 @@ spawn_remote_secondmate() {
   # reports it here so the parent does not deny the agent's actual identity.
   remote_recorded_traceparent=$(printf '%s\n' "$out" | sed -n 's/^traceparent=//p' | tail -1)
   fm_trace_context_valid "$remote_recorded_traceparent" || remote_recorded_traceparent=
+  remote_claude_account=$(printf '%s\n' "$out" | sed -n 's/^claude_account=//p' | tail -1)
   tmp="$meta.tmp.$$"
   {
     echo "window=remote:$id"
@@ -1586,6 +1604,7 @@ spawn_remote_secondmate() {
     echo "remote_herdr_session=$remote_herdr_session"
     echo "remote_target=$remote_target"
     [ -z "$remote_recorded_traceparent" ] || echo "traceparent=$remote_recorded_traceparent"
+    [ -z "$remote_claude_account" ] || echo "claude_account=$remote_claude_account"
   } >"$tmp"
   if ! fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE"; then
     if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
@@ -3096,6 +3115,7 @@ launch_template() {
   # when a supported effort is requested, since a second --config-override
   # would silently discard the first (confirmed live).
   rovo) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS __ROVOBIN__ run --yolo __MODELFLAG____ROVOCONFIGOVERRIDE__' ;;
+  cloud-claude) printf '%s' '__CLOUDRELAY__' ;;
   *) return 1 ;;
   esac
 }
@@ -3197,6 +3217,11 @@ if [ "$HARNESS" = cortex ] && [ "$BACKEND" != tmux ] && [ "$BACKEND" != herdr ];
   exit 1
 fi
 
+if [ "$HARNESS" = cloud-claude ]; then
+  fm_cloud_claude_validate_launch "$KIND" "${MODE:-}" "$RAW_LAUNCH" "${MODEL:-}" "${EFFORT:-}" || exit 1
+  CLAUDE_ACCOUNT=$(fm_cloud_claude_account "$CONFIG" "$CLAUDE_ACCOUNT") || exit 1
+fi
+
 # config/crew-exclude-tools (header above): refuse before worker provisioning
 # if this launch cannot honor the list. Secondmate agents are not covered.
 EXCLUDE_TOOLS=
@@ -3285,10 +3310,19 @@ polytoken)
     exit 1
   }
   ;;
+cloud-claude)
+  for cloud_tool in claude gh script; do
+    command -v "$cloud_tool" >/dev/null 2>&1 || {
+      echo "error: harness cloud-claude needs $cloud_tool on PATH" >&2
+      exit 1
+    }
+  done
+  ;;
 esac
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
-# harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
+# harness ("<harness> [<model>] [<effort>]"), and a mate line an account=<clauth
+# profile> token. They apply only when this is a
 # --secondmate spawn and no explicit per-spawn harness/raw launch was supplied, so
 # the harness itself came from the secondmate config fallback chain. Resolving
 # here on every spawn makes the pin durable across respawns. Precedence: explicit
@@ -3306,6 +3340,9 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
       *) echo "warning: config/secondmate-harness effort token '$SM_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2 ;;
       esac
     fi
+  fi
+  if [ "$CLAUDE_ACCOUNT_SET" -eq 0 ]; then
+    CLAUDE_ACCOUNT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$ID") || exit 1
   fi
 fi
 fm_backend_validate_harness "$BACKEND" "$HARNESS" || exit 1
@@ -3354,13 +3391,13 @@ CLAUDE_ACCOUNT_ROOT=
 if [ -n "$CLAUDE_ACCOUNT" ]; then
   CLAUDE_ACCOUNT_SELECTION=$(fm_claude_account_select "$HARNESS" "$CONFIG" "$MODEL" "$CLAUDE_ACCOUNT" "$RAW_COMMAND") || exit 1
   CLAUDE_ACCOUNT_ROOT=${CLAUDE_ACCOUNT_SELECTION#*$'\t'}
-elif [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ -z "$RAW_COMMAND" ]; then
+elif [ "$KIND" != secondmate ] && [ -z "$RAW_COMMAND" ]; then
   fm_claude_bridge_account_required "$HARNESS" "$CONFIG" "$MODEL" || exit 1
 fi
 WORKER_ACCOUNT_MATE=
 [ "$KIND" != secondmate ] || WORKER_ACCOUNT_MATE=$ID
 WORKER_ACCOUNT=
-if [ -z "$CLAUDE_ACCOUNT_SELECTION" ] || [ "$HARNESS" != claude ]; then
+if [ "$HARNESS" != cloud-claude ] && { [ -z "$CLAUDE_ACCOUNT_SELECTION" ] || [ "$HARNESS" != claude ]; }; then
   WORKER_ACCOUNT=$(fm_worker_account_select "$HARNESS" "$CONFIG" "$MODEL" "${PI_BIN:-$HARNESS}" "$RAW_COMMAND" "$WORKER_ACCOUNT_MATE") || exit 1
 fi
 WORKER_ACCOUNT_DECLARED=${WORKER_ACCOUNT%%$'\t'*}
@@ -3398,7 +3435,7 @@ if [ "$BACKEND" = t3code ]; then
     exit 1
   fi
 fi
-if [ "$HARNESS" = claude ] && [ -n "$CLAUDE_ACCOUNT_SELECTION$WORKER_ACCOUNT" ]; then
+if { [ "$HARNESS" = claude ] || [ "$HARNESS" = cloud-claude ]; } && [ -n "$CLAUDE_ACCOUNT_SELECTION$WORKER_ACCOUNT" ]; then
   CLAUDE_LAUNCH_ROOT=$WORKER_ACCOUNT_ROOT
   [ -z "$CLAUDE_ACCOUNT_SELECTION" ] || CLAUDE_LAUNCH_ROOT=$CLAUDE_ACCOUNT_ROOT
   if [ -n "$CLAUDE_LAUNCH_ROOT" ]; then
@@ -4338,6 +4375,9 @@ if [ "$KIND" = ship ]; then
     exit 1
   fi
   [ -n "$STANDING_FORGE" ] || STANDING_FORGE=none
+  if [ "$HARNESS" = cloud-claude ]; then
+    fm_cloud_claude_validate_project "$STANDING_FORGE" "$(fm_cloud_origin_url "$PROJ_ABS")" || exit 1
+  fi
   STANDING_MODE=$("$FM_ROOT/bin/fm-project-mode.sh" --raw "$PROJ_NAME" 2>/dev/null | cut -d' ' -f1) || STANDING_MODE=
   BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   BRIEF_FORGE=$(sed -n 's/^Delivery contract: mode=[^ ]*.*[[:space:]]forge=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
@@ -5137,7 +5177,7 @@ EOF
       REX_LABEL_HOME=$PROJ_ABS
       REX_LABEL_ROOT=$PROJ_ABS
       REX_LABEL_STATE=$PROJ_ABS/state
-      REX_LAUNCHER_RELATIONSHIP=other-home
+      REX_LAUNCHER_RELATIONSHIP='other-home'
     fi
     REX_TASK_IDS=$(FM_HOME="$REX_LABEL_HOME" FM_ROOT="$REX_LABEL_ROOT" STATE="$REX_LABEL_STATE" fm_backend_rex_create_task "$W" "$PROJ_ABS" "$REX_LAUNCHER_RELATIONSHIP") || exit 1
     read -r FM_REX_TASK_SESSION_ID FM_REX_TASK_WINDOW_ID FM_REX_TASK_BLOCK_ID <<EOF
@@ -6008,7 +6048,7 @@ spawn_assert_agent_worktree
 # only the worktree shape applies.
 AGY_TRUST_PREREGISTERED=0
 case "$HARNESS" in
-claude*)
+claude* | cloud-claude)
   if [ "$KIND" = secondmate ]; then
     spawn_trust_args=(--secondmate-home "$PROJ_ABS" "$ID")
   else
@@ -6284,7 +6324,7 @@ BUSY_GEN=
     }
     [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
     ;;
-  gemini | devin | commandcode | polytoken | cortex)
+  gemini | devin | commandcode | polytoken | cortex | cloud-claude)
     if [ "$RAW_LAUNCH" -eq 0 ]; then
       BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
         echo "error: failed to arm the busy-state contract for $ID" >&2
@@ -7324,6 +7364,15 @@ polytoken)
   LAUNCH=${LAUNCH//__POLYTOKENCONFIG__/"$(shell_quote "$(fm_polytoken_config_dir "$STATE_REAL" "$ID")")"}
   LAUNCH=${LAUNCH//__POLYTOKENSESSIONS__/"$(shell_quote "$(fm_polytoken_sessions_root "$STATE_REAL" "$ID")")"}
   LAUNCH=${LAUNCH//__POLYTOKENFACETS__/"$(shell_quote "$WT/.polytoken/facets")"}
+  ;;
+cloud-claude)
+  cloud_relay="$(shell_quote "$FM_ROOT/bin/fm-cloud-claude-relay.sh") --task $(shell_quote "$ID")"
+  cloud_relay="$cloud_relay --worktree $sq_worktree --brief $(shell_quote "$DATA/$ID/brief.md")"
+  cloud_relay="$cloud_relay --status $(shell_quote "$STATE_REAL/$ID.status")"
+  cloud_relay="$cloud_relay --repo $(shell_quote "$(fm_cloud_github_repo "$(fm_cloud_origin_url "$PROJ_ABS")")")"
+  cloud_relay="$cloud_relay --branch $(shell_quote "$BRANCH") --base $(shell_quote "${BASE_BRANCH:-$(default_branch "$PROJ_ABS")}")"
+  cloud_relay="$cloud_relay --deadline $(fm_cloud_claude_deadline_minutes "$CONFIG") --gen $(shell_quote "$BUSY_GEN")"
+  LAUNCH=${LAUNCH//__CLOUDRELAY__/$cloud_relay}
   ;;
 esac
 LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}

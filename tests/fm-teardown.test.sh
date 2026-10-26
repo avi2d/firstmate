@@ -1873,6 +1873,38 @@ test_forced_secondmate_dirty_child_return_warns_and_completes() {
   pass "a forced secondmate teardown warns about a dirty child return and still completes"
 }
 
+# The remote host keeps the route's task record inside the home it retires.
+test_host_secondmate_retirement_with_busy_state_completes() {
+  local case_dir home route gen rc
+  case_dir=$(make_case secondmate-host-busy-state)
+  home="$case_dir/secondmate-home"
+  route="$home/state/parent-route"
+  mkdir -p "$route" "$home/data" "$home/config" "$home/projects"
+  printf '%s\n' task-x1 > "$home/.fm-secondmate-home"
+  fm_write_meta "$route/task-x1.meta" \
+    "window=firstmate:fm-task-x1" \
+    "endpoint_task_id=task-x1" \
+    "worktree=$home" \
+    "home=$home" \
+    "project=$case_dir/project" \
+    "kind=secondmate" \
+    "mode=local-only" \
+    "spawn_gen=teardown-test-task-x1"
+  gen=$("$ROOT/bin/fm-busy-event.sh" arm "$route" task-x1)
+  printf 'busy_gen=%s\n' "$gen" >> "$route/task-x1.meta"
+
+  rc=0
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$route" FM_DATA_OVERRIDE="$case_dir/data" \
+    FM_CONFIG_OVERRIDE="$case_dir/config" FM_TEARDOWN_GUARD_DONE=1 PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 --force > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "secondmate-host-busy-state: retirement failed after removing the home: $(cat "$case_dir/stderr")"
+  assert_absent "$home" "secondmate-host-busy-state: secondmate home was not removed"
+  assert_grep "teardown task-x1 complete" "$case_dir/stdout" \
+    "secondmate-host-busy-state: retirement did not report completion"
+  pass "a host-side secondmate retirement completes when its busy record lived inside the removed home"
+}
+
 test_return_that_removes_copy_warns_cannot_verify() {
   local case_dir wt rc
   case_dir=$(make_case return-removes-copy)
@@ -5826,6 +5858,7 @@ test_dirty_return_warns_which_slot_was_lost
 test_dirty_return_warns_even_when_a_later_step_refuses
 test_forced_secondmate_child_scout_nested_clone_returns_clean
 test_forced_secondmate_dirty_child_return_warns_and_completes
+test_host_secondmate_retirement_with_busy_state_completes
 test_return_that_removes_copy_warns_cannot_verify
 test_scout_ignored_files_survive_scratch_clean
 test_gh_error_and_content_absent_refuses

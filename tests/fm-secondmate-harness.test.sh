@@ -220,8 +220,32 @@ mate line whose harness is default defers to the crew chain^claude opus high\nma
 comments and blank lines stay legal between the lines^# pinned by the captain\n\n  \npi def-m xhigh\n\n# exception\nmate alpha: grok g1 max^alpha^grok^g1^max
 override with no default line governs its own id^mate alpha: grok g1 max^alpha^grok^g1^max
 id with no override and no default line falls through to own^mate alpha: grok g1 max^beta^claude^^
+account token leaves the profile fields in place^pi def-m xhigh\nmate alpha: pi claude-bridge/opus high account=main^alpha^pi^claude-bridge/opus^high
+account token may lead the profile^pi def-m xhigh\nmate alpha: account=main grok g1^alpha^grok^g1^
 ROWS
   pass "D1 fm-harness.sh honors a mate override line for its id and changes nothing else"
+}
+
+test_secondmate_account_token() {
+  local label file id expected cfg got n=0
+  while IFS='^' read -r label file id expected; do
+    [ -n "$label" ] || continue
+    n=$((n + 1))
+    cfg="$TMP_ROOT/account-$n/config"
+    mkdir -p "$cfg"
+    [ "$file" = ABSENT ] || printf '%b\n' "$file" > "$cfg/secondmate-harness"
+    got=$(FM_CONFIG_OVERRIDE="$cfg" "$ROOT/bin/fm-harness.sh" secondmate-account "$id") \
+      || fail "$label: secondmate-account refused a valid pin"
+    [ "$got" = "$expected" ] || fail "$label: account resolved '$got', expected '$expected'"
+  done <<'ROWS'
+declared account for that mate^pi def-m xhigh\nmate alpha: pi claude-bridge/opus high account=main^alpha^main
+another mate gets no account^pi def-m xhigh\nmate alpha: claude account=main^beta^
+no id gets no account^pi def-m xhigh\nmate alpha: claude account=main^^
+mate line without the token gets no account^pi def-m xhigh\nmate alpha: claude opus^alpha^
+default-only file gets no account^claude opus high^alpha^
+absent file gets no account^ABSENT^alpha^
+ROWS
+  pass "D1b fm-harness.sh secondmate-account prints a mate's declared account and nothing otherwise"
 }
 
 # Malformed pin config is an actionable error, never a fallback: every read verb
@@ -238,7 +262,7 @@ test_secondmate_malformed_pin_refuses_with_line_number() {
     mkdir -p "$cfg"
     printf '%b\n' "$file" > "$cfg/secondmate-harness"
     for id in alpha beta ''; do
-    for verb in secondmate secondmate-model secondmate-effort; do
+    for verb in secondmate secondmate-model secondmate-effort secondmate-account; do
       out=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" \
         "$ROOT/bin/fm-harness.sh" "$verb" "$id" 2>&1); rc=$?
       [ "$rc" -ne 0 ] || fail "$label: fm-harness.sh $verb accepted the malformed pin: $out"
@@ -261,6 +285,10 @@ default line with too many tokens^pi def-m xhigh extra\nmate alpha: grok
 malformed mate with no default line^mate alpha: claude opus high\nmate : grok
 malformed mate keyword with no default line^mate alpha: claude opus high\nmate: grok
 invalid mate id with no default line^mate alpha: claude opus high\nmate bad/id: grok
+account on the default line^pi def-m xhigh account=main\nmate alpha: grok
+two accounts on one mate^pi def-m xhigh\nmate alpha: claude account=main account=second
+empty account^pi def-m xhigh\nmate alpha: claude account=
+account with no harness^pi def-m xhigh\nmate alpha: account=main
 ROWS
   pass "D2 malformed config/secondmate-harness refuses with its line number on every read verb"
 }
@@ -281,7 +309,7 @@ test_secondmate_legacy_pin_file_is_never_refused() {
     mkdir -p "$cfg"
     printf '%b\n' "$file" > "$cfg/secondmate-harness"
     for id in alpha ''; do
-      for verb in secondmate secondmate-model secondmate-effort; do
+      for verb in secondmate secondmate-model secondmate-effort secondmate-account; do
         out=$(PATH="$BLIND_BIN:$BASE_PATH" CLAUDECODE=1 FM_CONFIG_OVERRIDE="$cfg" \
           "$ROOT/bin/fm-harness.sh" "$verb" "$id" 2>"$case_dir/err"); rc=$?
         err=$(cat "$case_dir/err")
@@ -2965,6 +2993,7 @@ test_harness_resolution
 test_cursor_marker_detection
 test_secondmate_model_effort_tokens
 test_secondmate_per_mate_override_lines
+test_secondmate_account_token
 test_secondmate_malformed_pin_refuses_with_line_number
 test_secondmate_legacy_pin_file_is_never_refused
 test_pi_signed_detection_and_session_lock_identity

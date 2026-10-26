@@ -280,6 +280,8 @@ NEW_EFFORT=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
+NEW_CLAUDE_ACCOUNT=
+CLAUDE_ACCOUNT_SET=0
 NOTE=
 NOTE_SET=0
 control_want_value=
@@ -292,6 +294,7 @@ for control_arg in "$@"; do
       harness) NEW_HARNESS=$control_arg; HARNESS_SET=1 ;;
       model) NEW_MODEL=$control_arg; MODEL_SET=1 ;;
       effort) NEW_EFFORT=$control_arg; EFFORT_SET=1 ;;
+      claude-account) NEW_CLAUDE_ACCOUNT=$control_arg; CLAUDE_ACCOUNT_SET=1 ;;
       note) NOTE=$control_arg; NOTE_SET=1 ;;
       note_file)
         [ -f "$control_arg" ] || die "--note-file '$control_arg' is not a readable file"
@@ -309,6 +312,8 @@ for control_arg in "$@"; do
     --model=*) NEW_MODEL=${control_arg#--model=}; MODEL_SET=1 ;;
     --effort) control_want_value=effort ;;
     --effort=*) NEW_EFFORT=${control_arg#--effort=}; EFFORT_SET=1 ;;
+    --claude-account) control_want_value=claude-account ;;
+    --claude-account=*) NEW_CLAUDE_ACCOUNT=${control_arg#--claude-account=}; CLAUDE_ACCOUNT_SET=1 ;;
     --note) control_want_value=note ;;
     --note=*) NOTE=${control_arg#--note=}; NOTE_SET=1 ;;
     --note-file) control_want_value=note_file ;;
@@ -326,12 +331,14 @@ if [ -n "$control_want_value" ]; then
 fi
 
 if [ "$VERB" != relaunch ]; then
-  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] && [ "$NOTE_SET" = 0 ] \
-    || die "--harness, --model, --effort, and --note apply to 'relaunch' only"
+  [ "$HARNESS_SET" = 0 ] && [ "$MODEL_SET" = 0 ] && [ "$EFFORT_SET" = 0 ] \
+    && [ "$CLAUDE_ACCOUNT_SET" = 0 ] && [ "$NOTE_SET" = 0 ] \
+    || die "--harness, --model, --effort, --claude-account, and --note apply to 'relaunch' only"
 fi
 [ "$HARNESS_SET" = 0 ] || [ -n "$NEW_HARNESS" ] || die "--harness requires a non-empty value"
 [ "$MODEL_SET" = 0 ] || [ -n "$NEW_MODEL" ] || die "--model requires a non-empty value"
 [ "$EFFORT_SET" = 0 ] || [ -n "$NEW_EFFORT" ] || die "--effort requires a non-empty value"
+[ "$CLAUDE_ACCOUNT_SET" = 0 ] || [ -n "$NEW_CLAUDE_ACCOUNT" ] || die "--claude-account requires a non-empty value"
 case "$NEW_EFFORT" in
   ''|default|low|medium|high|xhigh|max|ultra) ;;
   *) die "--effort must be one of default, low, medium, high, xhigh, max, ultra" ;;
@@ -385,6 +392,10 @@ fi
 # instead, using the same `remote_host` signal bin/fm-send.sh routes on.
 if [ -n "$(fm_meta_get "$META" remote_host)" ]; then
   die "task $ID is a remotely placed secondmate on $(fm_meta_get "$META" remote_host); its agent runs outside this home, so no lifecycle action here could verify that it interrupted, stopped, or came back. Drive its lifecycle on that host, and reconcile it through the secondmate recovery path rather than this plane"
+fi
+
+if [ "$(fm_meta_get "$META" harness)" = cloud-claude ]; then
+  die "task $ID runs in a Claude Code cloud session; its pane holds only the relay, so no key here interrupts, stops, or relaunches the cloud agent. Steer it with bin/fm-send.sh, and clean it up with bin/fm-teardown.sh once its pull request lands"
 fi
 
 fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
@@ -904,6 +915,7 @@ PRIOR_RECORDED_HARNESS=$RECORDED_HARNESS
 CONFIG_HARNESS=
 CONFIG_MODEL=
 CONFIG_EFFORT=
+CONFIG_CLAUDE_ACCOUNT=
 PRIOR_MODEL=
 PRIOR_EFFORT=
 TARGET_HARNESS=$HARNESS
@@ -1024,6 +1036,7 @@ resolve_relaunch_profile() {
   CONFIG_HARNESS=
   CONFIG_MODEL=
   CONFIG_EFFORT=
+  CONFIG_CLAUDE_ACCOUNT=
   if [ "$KIND" = secondmate ] && [ "$HARNESS_SET" = 0 ]; then
     # A secondmate's harness, model, and effort are a durable configured pin
     # that every respawn re-resolves (the secondmate-provisioning contract), so
@@ -1041,6 +1054,9 @@ resolve_relaunch_profile() {
     fi
     if ! CONFIG_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort "$ID"); then
       die "the configured secondmate effort pin for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved effort"
+    fi
+    if ! CONFIG_CLAUDE_ACCOUNT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$ID"); then
+      die "the configured secondmate account for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved account"
     fi
     case "$CONFIG_EFFORT" in
       ''|low|medium|high|xhigh|max|ultra) ;;
@@ -1097,13 +1113,21 @@ resolve_relaunch_profile() {
   local account_model=$TARGET_MODEL account_mate=
   [ "$account_model" != default ] || account_model=
   TARGET_CLAUDE_ACCOUNT=
-  if [ "$TARGET_HARNESS" = "$PRIOR_HARNESS" ] && [ "$TARGET_MODEL" = "$PRIOR_MODEL" ]; then
+  if [ "$CLAUDE_ACCOUNT_SET" = 1 ]; then
+    [ "$NEW_CLAUDE_ACCOUNT" = default ] || TARGET_CLAUDE_ACCOUNT=$NEW_CLAUDE_ACCOUNT
+  elif [ -n "$CONFIG_CLAUDE_ACCOUNT" ]; then
+    TARGET_CLAUDE_ACCOUNT=$CONFIG_CLAUDE_ACCOUNT
+  elif { [ "$TARGET_HARNESS" = "$PRIOR_HARNESS" ] && [ "$TARGET_MODEL" = "$PRIOR_MODEL" ]; } \
+     || fm_claude_bridge_model "$TARGET_HARNESS" "$account_model"; then
     TARGET_CLAUDE_ACCOUNT=$(fm_meta_get "$META" claude_account)
   fi
   if [ -n "$TARGET_CLAUDE_ACCOUNT" ]; then
     fm_claude_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
       "$account_model" "$TARGET_CLAUDE_ACCOUNT" >/dev/null || return 1
     [ "$TARGET_HARNESS" = claude ] && return 0
+  elif [ "$KIND" != secondmate ]; then
+    fm_claude_bridge_account_required "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
+      "$account_model" || return 1
   fi
   [ "$KIND" != secondmate ] || account_mate=$ID
   fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \

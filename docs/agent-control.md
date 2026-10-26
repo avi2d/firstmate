@@ -83,7 +83,10 @@ A relaunch does take one session reference when the endpoint's own runtime recor
    A recorded raw-command basename that differs from its resolved adapter cannot reproduce the command actually running, so relaunch refuses before the checkpoint unless the caller passes an explicit `--harness` to choose the replacement runtime deliberately.
    A harness change resets model and effort unless they are named too, because a model chosen for one adapter does not transfer to another.
    A Claude or Pi replacement must also pass the home's [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account), or a secondmate's own [per-secondmate account pin](configuration.md#per-secondmate-account-pins) when one is set, so a pin that no longer resolves or is signed out refuses before the old agent stops.
-   A recorded [Claude account](configuration.md#claude-accounts-configclaude-accounts) follows a relaunch that keeps the same harness and model, under the same pre-stop sign-in check, and is dropped for any other profile.
+   A recorded [Claude account](configuration.md#claude-accounts-configclaude-accounts) follows a relaunch that keeps the same harness and model or lands on a Pi `claude-bridge/<id>` model, under the same pre-stop sign-in check, and is dropped for any other profile.
+   A secondmate's [declared account](configuration.md#choose-the-secondmate-harness) wins over the recorded one, and an explicit `--claude-account <name>` sets or replaces the account for the replacement over both.
+   `--claude-account default` relaunches with no account.
+   A ship or scout replacement on a Pi `claude-bridge/<id>` model with no account refuses before the old agent stops once `config/claude-accounts` declares one, exactly as a fresh spawn does.
    An omp secondmate replacement likewise passes its [per-secondmate omp profile](configuration.md#per-secondmate-omp-profile) file check before the old agent stops.
    Ship and scout replacements also pass the [worker tool exclusion checks](configuration.md#worker-tool-exclusions-configcrew-exclude-tools) at this step.
 2. **Safe checkpoint.**
