@@ -413,6 +413,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0013-lint-shard-partitions.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

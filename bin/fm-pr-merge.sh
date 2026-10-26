@@ -201,6 +201,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
 # shellcheck source=bin/fm-afk-contract.sh
 . "$SCRIPT_DIR/fm-afk-contract.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -1687,6 +1689,153 @@ forgejo_confirm_merged() {
   [ "$merged" = true ]
 }
 
+FORK_REGISTRY="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fork-upstream.json"
+SYNC_FETCH_SECS=120
+
+fork_registry_is_slug() {
+  printf '%s' "$1" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+}
+
+# A slug means github.com because bin/fm-fork-drift-check.sh fetches it there.
+fork_registry_repo_identity() {
+  local spec=$1
+  case "$spec" in
+    *://*) spec=${spec#*://}; spec=${spec#*@} ;;
+    *@*:*) spec=${spec#*@}; spec=${spec/://} ;;
+    *) fork_registry_is_slug "$spec" || return 1
+       spec="github.com/$spec" ;;
+  esac
+  spec=${spec%/}
+  printf '%s\n' "${spec%.git}" | tr '[:upper:]' '[:lower:]'
+}
+
+fork_registry_fetch_url() {
+  local spec=$1
+  if fork_registry_is_slug "$spec"; then
+    printf 'https://github.com/%s.git\n' "$spec"
+  else
+    printf '%s\n' "$spec"
+  fi
+}
+
+sync_git() {
+  GIT_TERMINAL_PROMPT=0 fm_run_timed "$SYNC_FETCH_SECS" git "$@"
+}
+
+# Upstream commits the base lacks are what a squash or rebase drops, so their
+# presence, not a branch name or title, is what makes a sync.
+github_classify_upstream_sync() {
+  local records pr_identity fork upstream trigger branch entry_identity
+  local found=false view head base dir up_url up_branch ref merge_base
+  local up_refspecs=()
+  UPSTREAM_SYNC=none
+  UPSTREAM_SYNC_REASON=
+  UPSTREAM_SYNC_HEAD=
+  [ -e "$FORK_REGISTRY" ] || return 0
+  if ! records=$(jq -r '.forks[] | [.project, .fork, .upstream, .trigger, (.branch // "")] | map(tostring) | join("\u001f")' \
+    "$FORK_REGISTRY" 2>/dev/null); then
+    UPSTREAM_SYNC=unknown
+    UPSTREAM_SYNC_REASON="the fork registry $FORK_REGISTRY could not be read"
+    return 0
+  fi
+  pr_identity=$(printf '%s/%s/%s\n' "$PR_HOST" "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
+  while IFS=$'\037' read -r _ fork upstream trigger branch; do
+    entry_identity=$(fork_registry_repo_identity "$fork") || continue
+    if [ "$entry_identity" = "$pr_identity" ]; then
+      found=true
+      break
+    fi
+  done <<EOF
+$records
+EOF
+  [ "$found" = true ] || return 0
+
+  UPSTREAM_SYNC=unknown
+  if ! view=$(gh pr view "$URL" --json headRefOid,baseRefName 2>/dev/null) \
+    || ! head=$(printf '%s' "$view" | jq -er '.headRefOid | select(test("^[0-9a-f]{40}$"))' 2>/dev/null) \
+    || ! base=$(printf '%s' "$view" | jq -er '.baseRefName | select(length > 0)' 2>/dev/null); then
+    UPSTREAM_SYNC_REASON="the pull request's head and base could not be read"
+    return 0
+  fi
+  up_url=$(fork_registry_fetch_url "$upstream")
+  if [ -n "$branch" ]; then
+    up_branch=$branch
+  else
+    up_branch=$(sync_git ls-remote --symref "$up_url" HEAD 2>/dev/null \
+      | awk '$1 == "ref:" { sub(/^refs\/heads\//, "", $2); print $2; exit }')
+    if [ -z "$up_branch" ]; then
+      UPSTREAM_SYNC_REASON="the default branch of upstream $upstream could not be read"
+      return 0
+    fi
+  fi
+  up_refspecs=("refs/heads/$up_branch:refs/sync/upstream/heads/$up_branch")
+  [ "$trigger" != release ] || up_refspecs+=('+refs/tags/*:refs/sync/upstream/tags/*')
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-pr-merge-sync.XXXXXX") || {
+    UPSTREAM_SYNC_REASON="no temporary directory was available to read the histories in"
+    return 0
+  }
+  # Only commits are fetched, so the read stays small even for a large fork.
+  if ! git init --bare -q "$dir" \
+    || ! sync_git -C "$dir" fetch --quiet --no-tags --filter=tree:0 \
+      "https://$PR_HOST/$PR_OWNER/$PR_REPO.git" \
+      "refs/pull/$PR_NUMBER/head:refs/sync/head" "refs/heads/$base:refs/sync/base" >/dev/null 2>&1; then
+    rm -rf -- "$dir"
+    UPSTREAM_SYNC_REASON="the pull request's history could not be fetched from $PR_OWNER/$PR_REPO"
+    return 0
+  fi
+  if ! sync_git -C "$dir" fetch --quiet --no-tags --filter=tree:0 "$up_url" "${up_refspecs[@]}" >/dev/null 2>&1; then
+    rm -rf -- "$dir"
+    UPSTREAM_SYNC_REASON="the history of upstream $upstream could not be fetched"
+    return 0
+  fi
+  if [ "$(git -C "$dir" rev-parse refs/sync/head 2>/dev/null)" != "$head" ]; then
+    rm -rf -- "$dir"
+    UPSTREAM_SYNC_REASON="the pull request's head moved while its history was read"
+    return 0
+  fi
+  UPSTREAM_SYNC=none
+  UPSTREAM_SYNC_HEAD=$head
+  # Every commit the head shares with an upstream ref lies below one of their
+  # merge bases, so the head brings upstream history the base lacks exactly
+  # when some merge base is not already in the base branch.
+  for ref in $(git -C "$dir" for-each-ref --format='%(refname)' refs/sync/upstream/); do
+    for merge_base in $(git -C "$dir" merge-base --all refs/sync/head "$ref" 2>/dev/null); do
+      git -C "$dir" merge-base --is-ancestor "$merge_base" refs/sync/base 2>/dev/null && continue
+      UPSTREAM_SYNC=sync
+      UPSTREAM_SYNC_REASON="it brings upstream $upstream commit $merge_base into $base, which does not have it yet"
+      break 2
+    done
+  done
+  rm -rf -- "$dir"
+}
+
+# A squash or rebase of an upstream sync drops the upstream parent, so the next
+# drift check counts the same upstream commits as missing again.
+UPSTREAM_SYNC=none
+UPSTREAM_SYNC_HEAD=
+if [ "$PROVIDER" = github ]; then
+  sync_caller_method=$(caller_merge_method "$@")
+  if [ "$sync_caller_method" != merge ]; then
+    github_classify_upstream_sync
+    case "$UPSTREAM_SYNC" in
+      sync)
+        if [ -n "$sync_caller_method" ]; then
+          printf 'error: refusing to merge %s as %s: it is an upstream sync (%s), and an upstream sync lands only as a merge commit so the fork keeps the upstream parent; rerun without a merge method or with --merge\n' \
+            "$URL" "$sync_caller_method" "$UPSTREAM_SYNC_REASON" >&2
+          exit 1
+        fi
+        printf 'classified: %s is an upstream sync (%s); merging it with a merge commit\n' \
+          "$URL" "$UPSTREAM_SYNC_REASON" >&2
+        ;;
+      unknown)
+        printf 'error: refusing to merge %s: it targets a fork in the fork registry, and whether it is an upstream sync could not be told because %s; retry, or pass --merge if it is one\n' \
+          "$URL" "$UPSTREAM_SYNC_REASON" >&2
+        exit 1
+        ;;
+    esac
+  fi
+fi
+
 # Record before either forge call. This arms the merge poll without claiming a
 # landed outcome, so even a provider read failure after a real merge cannot
 # leave teardown without the PR identity it needs to verify the result.
@@ -1706,7 +1855,9 @@ case "$PROVIDER" in
   github)
     merge_output=
     merge_args=()
-    if ! caller_has_merge_method "$@"; then
+    if [ "$UPSTREAM_SYNC" = sync ]; then
+      merge_args=(--merge)
+    elif ! caller_has_merge_method "$@"; then
       merge_args=(--squash)
     fi
     FM_PR_GITHUB_CALLER_METHOD=$(caller_merge_method "$@")
@@ -1737,6 +1888,11 @@ case "$PROVIDER" in
       if [ "$mergeable_status" -eq 3 ]; then
         printf 'error: mergeability for %s is still being computed by GitHub; retry shortly\n' "$URL" >&2
       fi
+      exit 1
+    fi
+    if [ -n "$UPSTREAM_SYNC_HEAD" ] && [ "$UPSTREAM_SYNC_HEAD" != "$FM_PR_MERGE_HEAD" ]; then
+      printf 'error: refusing to merge %s: its head moved from %s, whose upstream sync classification was read, to %s; retry so the new head is classified\n' \
+        "$URL" "$UPSTREAM_SYNC_HEAD" "$FM_PR_MERGE_HEAD" >&2
       exit 1
     fi
     # The away record is locked first, so this last presence and authority read

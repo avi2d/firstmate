@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -28,29 +31,26 @@ env:
   FM_CI_TASKS_AXI_VERSION: '0.2.6'
   FM_CI_PI_VERSION: '1.3.0'
 
-# Timeout policy: docs/fm-test-portable-shards.md "Timeouts" owns the three
-# tiers and their rationale; tests/fm-ci-workflow.test.sh guards this workflow.
+# Timeout policy: every job on a pull request or push run is capped at 10
+# minutes. Daily jobs keep the tiers in docs/fm-test-portable-shards.md "Timeouts".
 # Each job comment identifies the tier implemented by its executable value.
 
-# Fork opt-out: a fork sets the repository variable FM_CI_SKIP_PUSH to 1 to
-# skip the push run, and FM_CI_SKIP_MACOS to 1 to skip the macOS job, without
-# a tracked edit that drifts from upstream; with neither set, every job runs
-# exactly as before. The skip is a job-level condition, repeated per job
-# because workflow syntax has no shared anchor, and never a trigger filter: a
-# job skipped by its condition reports success, while a workflow filtered out
-# at the trigger stays pending and blocks the merge. CONTRIBUTING.md documents
-# the variables.
+# Fork opt-out: the repository variable FM_CI_SKIP_PUSH=1 skips the push run,
+# and FM_CI_SKIP_MACOS=1 skips the macOS job in the daily run. The condition is
+# repeated per job because workflow syntax has no shared anchor, and it is never
+# a trigger filter: a job skipped by its condition reports success, while a
+# workflow filtered out at the trigger stays pending and blocks the merge.
 jobs:
   lint:
     name: Lint ${{ matrix.partition }}
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
-    # Normal tier (see the timeout policy above).
-    timeout-minutes: 30
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
+    # Pull request and push cap (see the timeout policy above).
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@v6
       - name: Install pinned ShellCheck
@@ -94,7 +94,7 @@ jobs:
   test-coverage:
     name: Test coverage guard
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     # Fast tier: the coverage guard is a seconds-long local computation.
     timeout-minutes: 5
     steps:
@@ -107,7 +107,7 @@ jobs:
   tests-portable-parallel-1:
     name: Behavior portable parallel 1
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -175,7 +175,7 @@ jobs:
   tests-portable-parallel-2:
     name: Behavior portable parallel 2
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -231,7 +231,7 @@ jobs:
   tests-portable-serial:
     name: Behavior portable serial ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     strategy:
@@ -326,7 +326,7 @@ jobs:
   tests-herdr:
     name: Behavior tests (Herdr)
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     # Heavy tier (see the timeout policy above): the last-resort job backstop.
     # The family-run step below owns the hang tripwire, so a wedged suite fails
     # there with the always() cleanup and timing upload still running.
@@ -455,7 +455,7 @@ jobs:
       - tests-portable-parallel-2
       - tests-portable-serial
       - tests-herdr
-    if: ${{ always() && !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
+    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     steps:
       - uses: actions/checkout@v6
       - name: Download lane timing artifacts
@@ -488,7 +488,7 @@ jobs:
   macos-stock-bash:
     name: Stock macOS Bash snapshot compatibility
     runs-on: macos-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') && vars.FM_CI_SKIP_MACOS != '1' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.FM_CI_SKIP_MACOS != '1' }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -600,9 +600,9 @@ jobs:
   invariants:
     name: Repo invariants
     runs-on: ubuntu-latest
-    if: ${{ !(github.event_name == 'push' && vars.FM_CI_SKIP_PUSH == '1') }}
-    # Fast tier: the invariant checks are seconds-long file comparisons.
-    timeout-minutes: 5
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
+    # Pull request and push cap (see the timeout policy above).
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - name: Compatibility pointers must stay intact
@@ -624,4 +624,48 @@ jobs:
             echo "::error::Personal fleet paths are tracked in git:"
             printf '%s\n' "$tracked"
             exit 1
+          fi
+
+  daily-test-issue:
+    name: Daily test issue
+    runs-on: ubuntu-latest
+    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    # Fast tier: one label, list, and issue call.
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    needs:
+      - test-coverage
+      - tests-portable-parallel-1
+      - tests-portable-parallel-2
+      - tests-portable-serial
+      - tests-herdr
+      - tests-timing-aggregate
+      - macos-stock-bash
+    steps:
+      - name: Open, update, or close the daily failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: Daily test suite failing
+        run: |
+          set -eu
+          failed=$(jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key' <<<"$NEEDS")
+          gh label create daily-tests --repo "$REPO" --color B60205 --description 'Failures from the daily test run' --force
+          number=$(gh issue list --repo "$REPO" --label daily-tests --state open --json number,title \
+            | jq -r --arg title "$TITLE" '.[] | select(.title == $title) | .number' | head -n 1)
+          if [ -z "$failed" ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --repo "$REPO" --comment "Green daily run: $RUN_URL"
+            fi
+            exit 0
+          fi
+          body=$(printf 'Failed jobs in the daily run:\n%s\n\nRun: %s\n' "$(sed 's/^/- /' <<<"$failed")" "$RUN_URL")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --label daily-tests --body "$body"
           fi

@@ -783,6 +783,7 @@ tests/fm-config-inherit-symlink.test.sh 262
 tests/fm-contributions.test.sh 140911
 tests/fm-control-relaunch.test.sh 114115
 tests/fm-control.test.sh 72794
+tests/fm-copy-drift-check.test.sh 7469
 tests/fm-cortex-harness.test.sh 5400
 tests/fm-cortex-signals-live-e2e.test.sh 49
 tests/fm-cursor-harness.test.sh 30088
