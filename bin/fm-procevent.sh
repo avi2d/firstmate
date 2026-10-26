@@ -1205,6 +1205,9 @@ cmd_start() {
     exec 7<"$registration" || return 1
     return 0
   }
+  # Refreshed here, not only by the spawning command: the detached launch between
+  # that refresh and the guard's lease check can outlast a short lease.
+  owner_lease_refresh
   # The inherited marker keeps the runner and its ordinary children from
   # accidentally refreshing the owner lease. A source that deliberately strips
   # it is outside this confused-agent-grade boundary.
