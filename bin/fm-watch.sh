@@ -3639,6 +3639,7 @@ resurface_after_downtime() {
 }
 
 while :; do
+  wait_items=
   # Home-gone exit: a deleted home, state directory, or code root means this
   # watcher's world is gone (a torn-down temporary home or a discarded
   # disposable checkout). Exit with a logged reason rather than writing state
@@ -3903,6 +3904,10 @@ EOF
 $stalled_items
 EOF
     fi
+    wait_items=$(scan_wait_declarations "$STATE") || {
+      triage_log "declared-wait owner/recheck scan failed; continuing without it"
+      wait_items=
+    }
     touch "$STATE/.last-check"
     if [ -n "$contribution_check_output" ]; then
       wake "$contribution_check_output"
@@ -4345,6 +4350,19 @@ EOF
       echo $(( $(cat "$STATE/.heartbeat-streak" 2>/dev/null || echo 0) + 1 )) > "$STATE/.heartbeat-streak"
       triage_log "absorbed heartbeat (no captain-relevant change)"
     fi
+  fi
+
+  # Raised last so a wait-shape flag never preempts a signal, stale pane or heartbeat.
+  if [ -n "$wait_items" ]; then
+    while IFS= read -r wait_item || [ -n "$wait_item" ]; do
+      [ -n "$wait_item" ] || continue
+      reason="check: wait-declaration: $(wait_declaration_item_reason "$wait_item")" || continue
+      fm_wake_append check wait-declaration "$reason" || exit 1
+      wait_declaration_record_raised "$STATE" "$wait_item" || exit 1
+      wake "$reason"
+    done <<EOF
+$wait_items
+EOF
   fi
 
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr, rex),

@@ -2117,6 +2117,18 @@ A host named here still needs its own `gh` authentication (`gh auth login --host
 The file is local to each home and not part of secondmate inherited configuration, so a secondmate home that serves such a project names the host in its own copy.
 The host is part of each recorded PR identity, so removing a host while a task's pull request is still open stops that task's merge monitoring rather than pointing it at another host.
 
+## Security-sensitive paths: config/security-paths
+
+`bin/fm-security-paths.default` is the tracked list of security-sensitive paths.
+It holds one extended regular expression per line, matched against every path a pull request changes.
+Both names of a rename count.
+`config/security-paths` in the home, when present, replaces that default list entirely.
+Blank lines and `#` lines are ignored.
+An autonomous merge, one run without `--attended-override`, is refused when a changed path matches a line.
+Those paths need the captain's explicit word.
+A missing or empty list, an unreadable changed-file list, or a pattern that does not compile refuses the merge.
+It never passes.
+
 ## External review tool (config/external-review.md, config/external-review-url, config/external-review-backup)
 
 These optional local, gitignored files configure a home's `forge=external` projects; a home with no such project needs none of them.
