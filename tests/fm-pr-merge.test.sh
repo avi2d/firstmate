@@ -151,7 +151,7 @@ write_github_rollup_json() {
   done
   printf '%s\n' "$head" > "$case_dir/github-head"
   cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[$rollup]}
+{"state":"OPEN","isDraft":false,"title":"feat: task change","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[$rollup]}
 JSON
 }
 
@@ -3594,6 +3594,58 @@ test_release_pr_title_must_be_the_release_convention() {
   pass "fm-pr-merge refuses a --release PR whose title is not the release convention"
 }
 
+test_non_conventional_title_is_refused_before_any_merge() {
+  local case_dir rc head meta
+  head=1818181818181818181818181818181818181818
+  case_dir=$(make_case title-refused-before-merge)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_live_json "$case_dir" "$head" 'Add the thing'
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/12 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "title-refused: a title with no conventional type must refuse"
+  assert_grep 'does not pass the title rule' "$case_dir/stderr" \
+    "title-refused: the refusal did not say the title rule failed"
+  assert_grep 'does not read as type(scope): subject' "$case_dir/stderr" \
+    "title-refused: the refusal did not give the exact reason"
+  assert_grep "gh pr edit https://github.com/example/repo/pull/12 --title '<type>(<scope>): <lowercase subject>'" \
+    "$case_dir/stderr" "title-refused: the refusal did not give the gh pr edit fix command"
+  meta="$case_dir/state/task-x1.meta"
+  [ ! -e "$meta" ] || assert_no_grep 'pr=' "$meta" \
+    "title-refused: pr= was recorded for a refused title"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "title-refused: gh pr merge ran on a refused title"
+  pass "fm-pr-merge refuses a non-conventional PR title with the reason and fix command, before recording or merging"
+}
+
+test_upstream_sync_title_is_not_refused_by_the_title_rule() {
+  local case_dir rc head
+  head=1919191919191919191919191919191919191919
+  case_dir=$(make_case upstream-sync-title-passes)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_live_json "$case_dir" "$head" 'Merge upstream main ffb2aca0 into fork main'
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/13 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "upstream-sync-title: an upstream sync title must still merge"
+  assert_no_grep 'does not pass the title rule' "$case_dir/stderr" \
+    "upstream-sync-title: the title rule refused an upstream sync title"
+  assert_logged_gh_merge "$case_dir" 13 example/repo --squash
+  pass "fm-pr-merge does not refuse an upstream sync title under the title rule"
+}
+
 test_release_pr_owned_by_a_task_refuses() {
   local case_dir rc head
   head=1818181818181818181818181818181818181818
@@ -5120,6 +5172,8 @@ test_github_head_containing_base_tip_merges
 test_github_unreadable_base_containment_refuses
 test_release_pr_merges_without_an_owning_task
 test_release_pr_title_must_be_the_release_convention
+test_non_conventional_title_is_refused_before_any_merge
+test_upstream_sync_title_is_not_refused_by_the_title_rule
 test_release_pr_owned_by_a_task_refuses
 test_release_pr_red_check_refuses
 test_release_pr_behind_base_refuses
