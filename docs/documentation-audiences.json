@@ -349,6 +349,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/share-guard.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/cmux-backend.md",
       "audience": "operator-current"
     },

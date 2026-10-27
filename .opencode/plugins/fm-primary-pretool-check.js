@@ -56,7 +56,12 @@ export const FmPrimaryPretoolCheck = async ({ directory, worktree }) => {
       if (!command || typeof command !== "string") return;
 
       const result = await runProcess(`${root}/bin/fm-arm-pretool-check.sh`, ["--command", command]);
-      if (result.code !== 2) return;
+      if (result.code !== 2) {
+        const shareResult = await runProcess(`${root}/bin/fm-share-guard-pretool-check.sh`, ["--command", command]);
+        if (shareResult.code !== 2) return;
+        const shareReason = shareResult.stderr.trim() || "denied by the share-guard PreToolUse seatbelt";
+        throw new Error(shareReason);
+      }
 
       const reason = result.stderr.trim() || "denied by the watcher-arm PreToolUse seatbelt";
       throw new Error(reason);
@@ -75,7 +80,12 @@ function installPretoolCheck(ctx) {
     if (!root) return;
 
     const result = await runProcess(`${root}/bin/fm-arm-pretool-check.sh`, ["--command", command]);
-    if (result.code !== 2) return;
+    if (result.code !== 2) {
+      const shareResult = await runProcess(`${root}/bin/fm-share-guard-pretool-check.sh`, ["--command", command]);
+      if (shareResult.code !== 2) return;
+      const shareReason = shareResult.stderr.trim() || "denied by the share-guard PreToolUse seatbelt";
+      throw new Error(shareReason);
+    }
 
     const reason = result.stderr.trim() || "denied by the watcher-arm PreToolUse seatbelt";
     throw new Error(reason);
