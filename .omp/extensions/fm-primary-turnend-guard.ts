@@ -504,6 +504,10 @@ function runCdCheck(command: string): Promise<{ code: number; stderr: string }> 
   return runChecker("fm-cd-pretool-check.sh", command);
 }
 
+function runShareGuardCheck(command: string): Promise<{ code: number; stderr: string }> {
+  return runChecker("fm-share-guard-pretool-check.sh", command);
+}
+
 export default function (pi: ExtensionAPI) {
   let sessionstartGeneration: SessionstartGeneration | null = null;
   let sessionstartExitListenerRegistered = false;
@@ -589,8 +593,12 @@ export default function (pi: ExtensionAPI) {
       return { block: true, reason: cdResult.stderr.trim() || "denied by the cd-guard PreToolUse seatbelt" };
     }
     const result = await runPretoolCheck(command);
-    if (result.code !== 2) return {};
-    return { block: true, reason: result.stderr.trim() || "denied by the watcher-arm PreToolUse seatbelt" };
+    if (result.code === 2) {
+      return { block: true, reason: result.stderr.trim() || "denied by the watcher-arm PreToolUse seatbelt" };
+    }
+    const shareResult = await runShareGuardCheck(command);
+    if (shareResult.code !== 2) return {};
+    return { block: true, reason: shareResult.stderr.trim() || "denied by the share-guard PreToolUse seatbelt" };
   });
 
   // The blocking turn boundary. Returning undefined lets the session settle;

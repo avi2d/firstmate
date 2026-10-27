@@ -1,0 +1,9 @@
+{
+  "name": "fm-share-guard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Pinned runtime for the lavish share-guard policy.",
+  "dependencies": {
+    "effect": "4.0.6"
+  }
+}
