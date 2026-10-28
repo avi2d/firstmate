@@ -94,6 +94,7 @@ due_state() {
   sched="$(sched_time)" || { printf 'bad-config\n'; return 0; }
   [ "$sched" = off ] && { printf 'disabled\n'; return 0; }
   [ -e "$STATE/.afk" ] && { printf 'parked\n'; return 0; }
+  [ "$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = away ] && { printf 'parked\n'; return 0; }
   today="$(today_now)"
   now="${today##* }"
   today="${today%% *}"
