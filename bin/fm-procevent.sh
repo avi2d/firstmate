@@ -429,6 +429,13 @@ runner_file()  { printf '%s/%s.runner\n' "$REG" "$1"; }
 staging_file() { printf '%s/.%s.%s.output\n' "$REG" "$1" "$2"; }
 stranded_file() { printf '%s/.%s.stranded\n' "$REG" "$1"; }
 launch_failed_file() { printf '%s/.%s.launch-failed\n' "$REG" "$1"; }
+# The launch stamp moves before the child runs, so it cannot show attach.
+no_attach_file() { printf '%s/.%s.%s.no-attach\n' "$REG" "$1" "${2//:/-}"; }
+launch_attached() {
+  local id=$1 identity=$2 before=$3 now=$4
+  [ -n "$now" ] && [ "$now" != "$before" ] || return 1
+  [ ! -e "$(no_attach_file "$id" "$identity")" ]
+}
 
 # Let the source's own adapter apply and acknowledge one captured result. See
 # the header for why this exists and what each exit means. An already
@@ -1268,7 +1275,7 @@ cmd_start() {
   fi
   fm_procevent_launch_floor_wait "$STATE" "$id" "$CLAIM_REG_IDENTITY" "$launch_floor"
   case "$?" in
-    0) ;;
+    0) rm -f -- "$(no_attach_file "$id" "$CLAIM_REG_IDENTITY")" ;;
     # A superseded generation leaves nothing behind. The runner marker is
     # written before this wait, and a home sweep counts a marker with no owned
     # claim as a preflight failure, so exiting without removing it would make
@@ -1405,6 +1412,7 @@ EOF
     if [ "$extension_owner" -eq 0 ]; then
       rm -f -- "$runner"
     fi
+    : > "$(no_attach_file "$id" "$CLAIM_REG_IDENTITY")"
     printf 'no-result: %s (exit %s)\n' "$id" "$rc"
     exit 0
   fi
@@ -1938,7 +1946,7 @@ launch_entry_listed() {  # <entry> <newline-separated entries>
 # Every launch shares ONE window rather than taking a window each, so a whole
 # fleet of failing sources costs a watcher cycle the same bounded wait as one.
 confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><launch-stamp-before>...
-  local deadline window entry id rest identity before state stamp mark
+  local deadline window entry id rest identity before state stamp mark expired
   local -a pending=("$@") remaining=()
   window=$(fm_procevent_launch_confirm_seconds) || return 1
   # A zero-padded window is a valid value to its validator, which reads base 10;
@@ -1951,12 +1959,18 @@ confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><lau
   # [window, window + 1] instead: never less than configured.
   deadline=$((SECONDS + 10#$window + 1))
   while :; do
+    expired=0
+    [ "$SECONDS" -lt "$deadline" ] || expired=1
     remaining=()
     for entry in "${pending[@]+"${pending[@]}"}"; do
       id=${entry%%$'\t'*}
       rest=${entry#*$'\t'}
       identity=${rest%%$'\t'*}
       before=${rest#*$'\t'}
+      if [ "$expired" -eq 0 ]; then
+        remaining+=("$entry")
+        continue
+      fi
       state=1
       if fm_procevent_source_lock_try_acquire "$id"; then
         fm_procevent_claim_state_locked "$id"
@@ -1971,14 +1985,14 @@ confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><lau
         && stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$identity"); then
         mark=$(cat -- "$stamp" 2>/dev/null || true)
       fi
-      if [ -n "$mark" ] && [ "$mark" != "$before" ]; then
+      if launch_attached "$id" "$identity" "$before" "$mark"; then
         continue
       fi
       remaining+=("$entry")
     done
     pending=("${remaining[@]+"${remaining[@]}"}")
     [ "${#pending[@]}" -gt 0 ] || break
-    [ "$SECONDS" -lt "$deadline" ] || break
+    [ "$expired" -eq 0 ] || break
     sleep 0.05
   done
   [ "${#pending[@]}" -eq 0 ] || printf '%s\n' "${pending[@]}"
@@ -2013,12 +2027,9 @@ generation_can_launch() {  # <source-id>
   return "$result"
 }
 
-# Public readiness for one source. Same evidence reconcile uses after a launch:
-# a live claim bound to this registration generation, or that generation's
-# launch stamp advancing. Returns as soon as either appears. A fixed sleep is
-# not success.
+# Decided at window close: a claim seen earlier can belong to a child that then fails.
 cmd_ensure_listening() {
-  local id=${1-} identity before mark stamp deadline window started_once=0 listening
+  local id=${1-} identity before mark stamp deadline window started_once=0 listening expired
   [ "$#" -eq 1 ] || usage
   fm_procevent_source_id_valid "$id" || die "source id must be path-safe: $id"
   window=$(fm_procevent_launch_confirm_seconds) \
@@ -2033,21 +2044,24 @@ cmd_ensure_listening() {
   fi
   deadline=$((SECONDS + 10#$window + 1))
   while :; do
+    expired=0
+    [ "$SECONDS" -lt "$deadline" ] || expired=1
     listening=0
     generation_is_listening "$id" "$identity" || listening=$?
-    [ "$listening" -ne 0 ] || return 0
     mark=
     if stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$identity"); then
       mark=$(cat -- "$stamp" 2>/dev/null || true)
     fi
-    if [ -n "$mark" ] && [ "$mark" != "$before" ]; then
-      return 0
+    if [ "$expired" -eq 1 ]; then
+      if [ "$listening" -eq 0 ] || launch_attached "$id" "$identity" "$before" "$mark"; then
+        return 0
+      fi
     fi
     if [ "$started_once" -eq 0 ] && generation_can_launch "$id"; then
       detach_runner "$id"
       started_once=1
     fi
-    [ "$SECONDS" -lt "$deadline" ] || break
+    [ "$expired" -eq 0 ] || break
     sleep 0.05
   done
   [ "$listening" -ne 3 ] || return 3
