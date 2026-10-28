@@ -9,7 +9,7 @@ if [ "$#" -ne 1 ]; then
 fi
 title=$1
 
-TYPES='build chore ci docs feat fix perf refactor revert style test theme renamer shell pi home audit comments unslop'
+TYPES='build chore ci docs feat fix perf refactor revert style test'
 
 # Forms commitlint ignores by default; they carry no type.
 IGNORED=(

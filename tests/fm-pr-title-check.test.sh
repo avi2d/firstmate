@@ -21,8 +21,7 @@ test_kit_accepted_titles_pass() {
   expect_title 0 'feat(scope): add x'
   expect_title 0 'feat: add x'
   expect_title 0 'feat(scope)!: add x'
-  expect_title 0 'theme(scope): add x'
-  expect_title 0 'unslop: add x'
+  expect_title 0 'fix(shell): add x'
   expect_title 0 'feat: iOS support'
   expect_title 0 'feat(): add x'
   expect_title 0 'chore: release 1.2.3'
@@ -43,6 +42,8 @@ test_upstream_sync_titles_pass() {
 test_kit_rejected_titles_are_refused() {
   expect_title 1 'update stuff'
   expect_title 1 'frobnicate(scope): add x'
+  expect_title 1 'unslop: add x'
+  expect_title 1 'theme: add x'
   expect_title 1 'Add x'
   expect_title 1 'feat: Add x'
   expect_title 1 'feat: Pascal Case'
