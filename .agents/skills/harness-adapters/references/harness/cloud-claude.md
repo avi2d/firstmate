@@ -18,6 +18,7 @@ It takes GitHub-hosted direct-PR ship tasks only; scouts, secondmates, primaries
 | Interrupt, exit, relaunch | `fm-control` refuses: no key in the pane reaches the cloud agent. |
 | Model and effort | Refused at spawn; the session runs its own. |
 | Trust | The spawn pre-registers workspace trust for the task copy in the cloud account's config, as for a local Claude worker. |
+| Machine load | Skips the Mac and Linux load gates, the heavy-worker cap, and the core budget, since the session runs on Anthropic's hosts; it holds no heavy place, so local starts do not count it. Project capacity still applies. |
 | Cleanup | `fm-teardown` removes the relay pane, the local copy, and `state/<id>.cloud-session`. The cloud session stays in the account's session list. |
 | Commit attribution | The task prompt forbids agent trailers, but cloud commits never pass through the local commit-msg strip. |
 

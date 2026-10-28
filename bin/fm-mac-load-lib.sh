@@ -139,8 +139,6 @@ fm_mac_loadavg_5min() {
   esac
 }
 
-# Every ship or scout holds a place, except one that is only waiting; the
-# record this start replaces does not.
 fm_mac_load_high() {  # <five-minute-average>
   awk -v avg="$1" -v limit="$FM_MAC_LOAD_LIMIT" 'BEGIN { exit !(avg + 0 >= limit + 0) }'
 }
@@ -158,6 +156,8 @@ fm_heavy_holder_waiting() {  # <state-dir> <task-id>
   return 1
 }
 
+# Every ship or scout holds a place, except one that is only waiting or a
+# cloud-claude worker; the record this start replaces does not.
 fm_mac_heavy_count() {  # <first-state> <own-id>
   local first=$1 self=$2 state meta kind id label
   FM_MAC_HEAVY_COUNT=0
@@ -182,6 +182,7 @@ fm_mac_heavy_count() {  # <first-state> <own-id>
       kind=$(fm_meta_get "$meta" kind)
       [ "$kind" != secondmate ] || continue
       [ -z "$(fm_meta_get "$meta" pr)" ] || continue
+      [ "$(fm_meta_get "$meta" harness)" != cloud-claude ] || continue
       id=$(basename "$meta" .meta)
       label=$id
       [ "$state" = "$first" ] || label="$id in $(dirname "$state")"
@@ -269,8 +270,8 @@ fm_linux_sibling_homes() {  # <config-dir>
   done < "$file"
 }
 
-# Every ship or scout holds a place across the sibling homes, except one that
-# is only waiting; the record this start replaces does not.
+# Every ship or scout holds a place across the sibling homes, except one that is
+# only waiting or a cloud-claude worker; the record this start replaces does not.
 fm_linux_heavy_count() {  # <first-state> <own-id> <config-dir>
   local first=$1 self=$2 config=${3:-} state meta kind id label
   local saved_home sib sib_state known existing
@@ -326,6 +327,7 @@ fm_linux_heavy_count() {  # <first-state> <own-id> <config-dir>
       kind=$(fm_meta_get "$meta" kind)
       [ "$kind" != secondmate ] || continue
       [ -z "$(fm_meta_get "$meta" pr)" ] || continue
+      [ "$(fm_meta_get "$meta" harness)" != cloud-claude ] || continue
       id=$(basename "$meta" .meta)
       label=$id
       [ "$state" = "$first" ] || label="$id in $(dirname "$state")"

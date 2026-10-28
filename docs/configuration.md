@@ -1595,6 +1595,8 @@ It also needs `claude`, `gh`, and `script` on PATH, and the Claude GitHub App mu
 
 The account is never inferred, so a home that leaves the file absent cannot spend its default login's cloud usage by accident.
 A spawn's `--claude-account` overrides the file for that task only.
+A cloud-claude spawn skips the Mac and Linux load gates, the heavy-worker cap, and the core budget, because its session runs on Anthropic's hosts, and it holds no heavy worker place, so local starts do not count it.
+[Project capacity](#project-capacity-configproject-capacity) still applies to it.
 The relay reports a ready pull request on the task branch as the task's result, and a missing one past the deadline as a blocker that links the session.
 Each forwarded steer restarts the deadline.
 Firstmate reads no Anthropic session API and no stored login token, so a session that waits on a question or fails is seen only at the deadline.
@@ -1725,6 +1727,7 @@ A project name may begin with `#` when that `#` is written immediately against t
 A name that is `#`, or that begins with `#` and a space, cannot be declared, because that line is a comment.
 A line whose name starts with `@` is a machine-wide setting rather than a project: `@heavy-limit` caps heavy workers across every project with a standing 3 from 06:00 up to but not including 21:00 UTC and 4 at other hours, and `@load-limit` caps the five-minute load average a heavy start tolerates with a standing 10.
 A worker that is only waiting on the captain or on a set time holds no heavy worker place, and counts again once its status shows it resumed.
+A cloud-claude worker holds no heavy worker place, and it is exempt from these machine-wide settings, as the [Cloud Claude worker](#cloud-claude-worker) section describes.
 On Linux the standing caps are 4 from 06:00 up to but not including 21:00 UTC and 6 at other hours with a load cap of 16.
 `@core-budget` caps trailing-hour core hours on the Mac with a standing 6, so a heavy start waits while the hour already burned that budget and resumes on its own once use drops back under, while a light start never waits.
 On a Linux host that two Firstmate homes share without a common local root, each home lists the other in `config/linux-load-siblings`, and the same two lines cap heavy starts across both homes with a standing 4 from 06:00 up to but not including 21:00 UTC and 6 at other hours, while the load average cap stays 16.
