@@ -1877,7 +1877,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 - Malformed JSON, malformed rules, an invalid `array_order`, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
 - While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic.
 - Without the key those inert declarations preserve the pre-existing bootstrap behavior.
-- Bootstrap enables resolver-only checks for `approval`, `min_confidence`, `floor`, and present `provider` declarations when `TYPESAFE_API_KEY` is non-empty in the environment or the home's `.env`, regardless of `FM_DISPATCH_PROVIDER`.
+- Bootstrap enables resolver-only checks for `approval`, `min_confidence`, `floor`, and present `provider` declarations when `config/bws-typesafe-secret-id` exists, regardless of `FM_DISPATCH_PROVIDER`.
 - An OpenRouter key alone does not enable these bootstrap checks.
 - The resolver validates those declarations itself before any request.
 - Without a typesafe key, bootstrap retains its pre-existing verified-harness baseline.
@@ -1898,9 +1898,15 @@ Inheritance preserves the link thereafter.
 `FM_DISPATCH_PROVIDER` selects `typesafe` or `openrouter`, and `FM_DISPATCH_MODEL` selects the model.
 Each setting comes from the calling environment or the home's gitignored `.env` through `bin/fm-env-lib.sh`; a non-empty environment value wins.
 OpenRouter requires both `FM_DISPATCH_PROVIDER=openrouter` and a non-empty `FM_DISPATCH_MODEL`; an omitted model is an actionable configuration error, and the presence of an OpenRouter key never selects the provider by itself.
-With no provider setting, the original typesafe.ai behavior is unchanged: `jev-latest` is used when `TYPESAFE_API_KEY` is available, `FM_DISPATCH_MODEL` is ignored, and the resolver is off otherwise.
+With no provider setting, the original typesafe.ai behavior is unchanged: `jev-latest` is used when the typesafe key is available from Bitwarden, `FM_DISPATCH_MODEL` is ignored, and the resolver is off when no secret id file exists.
 Explicit `FM_DISPATCH_PROVIDER=typesafe` also uses `jev-latest` when no model is set.
-The selected provider's key must be non-empty in the environment or `.env`, with the environment taking precedence.
+The OpenRouter key must be non-empty in the environment or `.env`, with the environment taking precedence.
+The typesafe key is never read from the environment or `.env`.
+The gitignored `config/bws-typesafe-secret-id` file holds the Bitwarden Secrets Manager secret id, which identifies the secret and is not itself the credential.
+The resolver fetches the value with `bws` at run time through `bin/fm-bws-lib.sh`, reading the access token from the macOS keychain item `bws-access-token` and falling back to `~/.config/bws/token`.
+The token reaches `bws` only through `BWS_ACCESS_TOKEN`, never on argv.
+An absent id file turns the typesafe gate off.
+A configured id whose fetch fails refuses with exit 2 and a line that names what is missing, and sends nothing.
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
@@ -2014,7 +2020,8 @@ Firstmate passes its profile line unless it states a reason to override, such as
 
 **Key handling and provider settings**
 
-- The resolver copies either environment-provided key into a non-exported private variable and unsets both `TYPESAFE_API_KEY` and `OPENROUTER_API_KEY` before launching child processes; bootstrap also protects the typesafe key.
+- The resolver copies the OpenRouter environment key and the bws-fetched typesafe key into non-exported private variables and unsets both `TYPESAFE_API_KEY` and `OPENROUTER_API_KEY` before launching child processes.
+- Bootstrap unsets the typesafe variable from its own environment.
 - The resolver sends only the selected key to `curl` as a header read from a file descriptor, never on argv, and never prints, logs, or writes either key.
 - The typesafe.ai endpoint is `https://api.typesafe.ai/v1/systemone`, and the OpenRouter endpoint is `https://openrouter.ai/api/alpha/decisions`.
 - The default confidence floor remains 0.6; request timeouts are 5 seconds for typesafe.ai and 10 seconds for OpenRouter.
@@ -2933,7 +2940,7 @@ After opening the artifact as required above, the worker arms it with `bin/fm-pr
 
 `arm` prints `armed` only after the process-event owner confirms this registration generation's listener is running, and otherwise returns nonzero without that line.
 
-- The confirmation is the same live claim or launch-stamp evidence `reconcile` already uses, bounded by `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS`, and a failed confirmation retires a source that never started unless `retire` refuses because something may still own it, in which case the registration stays for `reconcile` or a human.
+- The confirmation is the same live claim or launch-stamp evidence `reconcile` already uses, judged when the window bounded by `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS` closes, and a failed confirmation retires a source that never started unless `retire` refuses because something may still own it, in which case the registration stays for `reconcile` or a human.
 - An earlier registration's listener that releases the board inside the confirm window lets the new registration start, and `arm` then reports `armed` as usual.
 - When a live listener from an earlier registration of the same board still holds it when the window ends, `arm` exits zero with `still-listening` instead of `armed`, because that earlier listener keeps serving the board and the new registration takes effect only after the source is retired and armed again.
 - The arm is refused unless that task id has valid, identity-matching endpoint metadata, because a board whose owner has no endpoint would collect feedback nobody can be told about.
@@ -3243,7 +3250,7 @@ The generation's first launch is immediate, later launches share its monotonic p
 
 `FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS` (default 3, range 1..600) bounds how long `reconcile` waits for the runners it just started to prove they are running: never less than the configured value, and at most one second more, because the wait is measured on a whole-second clock.
 
-- Starting a runner is detached and its errors are not visible to the caller, so `reconcile` reports a start only after the source is observed owned or its launch-pacing stamp has advanced or appeared, and reports every unconfirmed launch as `failed=` and a non-zero exit instead.
+- Starting a runner is detached and its errors are not visible to the caller, so `reconcile` reports a start only after the source is observed owned or its launch-pacing stamp has advanced without its run ending with no result, and reports every unconfirmed launch as `failed=` and a non-zero exit instead.
 - Both signals are durable evidence a runner claimed: ownership is the only evidence a runner still blocked on its source ever shows, and the stamp - written after the claim and before the source command runs, and removed only by registration replacement - covers a runner that claimed, ran and exited between two polls.
 - A healthy launch therefore confirms on the first poll and the window only bounds a launch that has not yet proved itself - one that died before claiming, or one merely too slow to claim inside the window; confirmation cannot tell those apart, and a launch that proves itself on a later cycle closes its failure episode without a retraction wake.
 - All of a cycle's launches share one window, so a home full of sources that cannot start costs the same bounded wait as one.
@@ -3419,7 +3426,7 @@ FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
 FM_DISPATCH_PROVIDER=   # typesafe or openrouter; absent preserves the original typesafe key gate ("Typed dispatch resolution")
 FM_DISPATCH_MODEL=      # explicit model for the selected provider; required for openrouter
-TYPESAFE_API_KEY=       # typesafe dispatch key, from the environment or .env
+# typesafe key is not a .env entry; config/bws-typesafe-secret-id names its Bitwarden secret
 OPENROUTER_API_KEY=     # OpenRouter dispatch key, from the environment or .env
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
