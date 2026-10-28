@@ -324,9 +324,46 @@ test_waiting_holders_free_heavy_places_then_resume_retakes_them() {
   pass "waiting holders free heavy places, and resuming retakes them"
 }
 
+write_cloud_live() {  # <home> <id> <project-dir>
+  fm_write_meta "$1/state/$2.meta" \
+    "window=firstmate:fm-$2" \
+    "project=$3" \
+    "harness=cloud-claude" \
+    "kind=ship" \
+    "mode=direct-PR" \
+    "yolo=off"
+}
+
+test_cloud_records_hold_no_heavy_place() {
+  local case_dir home out rc=0 i=0
+  case_dir=$(make_case cloudcount task-c)
+  home="$case_dir/home"
+  while [ "$i" -lt "$GATE_FULL" ]; do
+    i=$((i + 1))
+    write_cloud_live "$home" "cloud-$i" "$case_dir/project"
+  done
+  out=$(spawn_ship_load 1.0 "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "cloud records held the heavy cap against a local start: $out"
+  assert_contains "$out" "spawned task-c" "the local start did not launch"
+  pass "cloud-claude records hold no heavy place against a local start"
+}
+
+test_cloud_records_do_not_lift_the_load_gate() {
+  local case_dir home out rc=0
+  case_dir=$(make_case cloudload task-c)
+  home="$case_dir/home"
+  write_cloud_live "$home" cloud-a "$case_dir/project"
+  out=$(spawn_ship_load "$GATE_LOAD_HIGH" "$case_dir" task-c "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a local start launched under high load beside a cloud worker: $out"
+  assert_contains "$out" "five-minute load average is $GATE_LOAD_HIGH" "the deferral did not name the average"
+  pass "a local start still defers under high load while a cloud worker runs"
+}
+
 test_high_average_defers_then_clear_admits
 test_full_heavy_cap_defers_one_more_then_release_admits
 test_waiting_holders_free_heavy_places_then_resume_retakes_them
+test_cloud_records_hold_no_heavy_place
+test_cloud_records_do_not_lift_the_load_gate
 test_handed_off_and_secondmate_records_do_not_count
 test_restart_does_not_count_its_own_record
 test_unreadable_record_refuses
