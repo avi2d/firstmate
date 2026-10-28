@@ -107,6 +107,26 @@ test_parked_stays_silent() {
   [ -z "$out" ] || fail "check while parked should stay silent: $out"
 }
 
+test_away_contract_alone_parks_the_check() {
+  local home stub out rc=0 log
+  home=$(make_home away-contract)
+  add_mate "$home" m-idle idle
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_MAC_KEEPAWAKE_DISABLE=1 \
+    "$ROOT/bin/fm-afk-contract.sh" enter --words 'away until I return' >/dev/null 2>&1 || fail "could not record the away posture"
+  assert_absent "$home/state/.afk" "the away posture fixture wrote state/.afk"
+  out=$(do_check "$home" 05:00)
+  [ -z "$out" ] || fail "check while only the away record stands should stay silent: $out"
+  stub=$(make_stub away-contract)
+  log=$(stub_log away-contract)
+  out=$(FM_HOME="$home" FM_DAILY_RESET_TODAY="$TODAY" FM_DAILY_RESET_NOW=05:00 FM_DAILY_RESET_RESTART_BIN="$stub" FM_DAILY_RESET_STUB_LOG="$log" "$CHECK" run 2>&1) || rc=$?
+  [ "$rc" = 1 ] || fail "run while away should refuse as not due, got $rc: $out"
+  case "$out" in *"not due"*) ;; *) fail "refused run should say it is not due, got: $out" ;; esac
+  [ ! -e "$log" ] || fail "refused run still invoked the restart"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_MAC_KEEPAWAKE_DISABLE=1 "$ROOT/bin/fm-afk-contract.sh" archive >/dev/null 2>&1 || fail "could not archive the away posture"
+  out=$(do_check "$home" 05:00)
+  case "$out" in *"daily-reset due"*) ;; *) fail "after the away record is archived the reset should be due again, got: $out" ;; esac
+}
+
 test_busy_mate_skipped_idle_mate_restarted() {
   local home stub out rc=0 log
   home=$(make_home mixed)
@@ -222,6 +242,7 @@ test_before_time_is_silent
 test_off_disables
 test_bad_config_reports_once
 test_parked_stays_silent
+test_away_contract_alone_parks_the_check
 test_busy_mate_skipped_idle_mate_restarted
 test_unknown_mate_rides_the_restart_gate
 test_failed_restart_does_not_mark_the_day_done
