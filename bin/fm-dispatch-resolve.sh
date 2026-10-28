@@ -1,84 +1,7 @@
 #!/usr/bin/env bash
-# fm-dispatch-resolve.sh - resolve one concrete crewmate or scout dispatch
-# profile from a task brief with a configurable model provider, opt-in.
-#
-# Usage:
-#   fm-dispatch-resolve.sh <brief-file> [--project <name>]
-#
-# Opt-in gate: FM_DISPATCH_PROVIDER and FM_DISPATCH_MODEL select the provider
-#   and model from the environment or $FM_HOME/.env (environment wins). With no
-#   provider set, retain the original typesafe.ai/jev-latest key gate exactly.
-#   OpenRouter requires both its provider selection and a model. The selected
-#   key lives in a non-exported shell variable and reaches curl through fd 3,
-#   never argv, logs, or child environments.
-#
-# What it does when on with at least one rule: one POST with the project name and the brief's
-#   `## Captain's intent` and `## Firstmate spec` sections, tagged when it is a
-#   scout brief (the whole brief when it has neither section), as state and
-#   ONE Choice question whose options are every rule's `when` from
-#   config/crew-dispatch.json plus one fixed generic none option. The provider
-#   returns the matched rule, a probability per option, and a confidence. Everything
-#   after that is jq: the confidence floor (0.6 on the answer confidence, or a
-#   rule's declared `min_confidence` on that rule's probability, falling to the
-#   most probable other option that clears its own floor), the rule's declared
-#   `approval` and `floor`, each profile's declared `provider` and `floor`, the
-#   quota rows from ONE quota-axi --json snapshot (schema 5 or 6; each
-#   candidate binds to one row through quota_row in
-#   bin/fm-quota-axi-lib.sh, so a Pi lane such as openai-codex-work/...
-#   reads its own account's row and an expanded provider with no row for the
-#   candidate is unmeasured, never blocked), ONE clauth status --json snapshot
-#   when a profile names a claude_account, whose own windows replace that
-#   candidate's quota row and which makes it ineligible when clauth cannot
-#   vouch for it (bin/fm-clauth-lib.sh), and the spendPriority argmax over
-#   the eligible candidates, or, under a top-level `array_order: preference`,
-#   the first eligible candidate in array order, quota uncertainty disclosed
-#   and never skipped. The model never sees quota, catalogs, approvals,
-#   confidence floors, `why`, or `use`. With no rules, it returns a non-clear
-#   result so firstmate keeps using the existing intake.
-#   docs/configuration.md "Crew dispatch profiles" owns the declared fields and
-#   "Typed dispatch resolution" owns this tool's operator contract.
-#
-# Never-send check: when the optional $FM_HOME/config/dispatch-never-send list
-#   exists, every string value of the built request is checked against it
-#   before the POST. Each non-blank, non-# line is a literal matched
-#   case-insensitively, with surrounding whitespace trimmed and every run of
-#   whitespace, on both sides, treated as one space. A match, or a list that
-#   is not a readable regular file, prints one
-#   "dispatch-resolve: off (...; nothing sent)" line on stderr naming at most
-#   the list line number, never its value, prints nothing on stdout, and exits
-#   0 with no network or quota call, exactly like the absent-key off path.
-#
-# Output (stdout, TOON-style block):
-#   dispatch-resolve:
-#     status: clear | ambiguous | escalate | error
-#     model/latency_ms/tokens, rule (when excerpt) and confidence, probabilities
-#     array_order: preference (first eligible candidate in array order)   (when declared)
-#     fallback: <runner-up rule taken when the picked rule missed its own floor>
-#     reason: <why the status is not clear>
-#     candidate: <harness>:<model> [account=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked|uncertain: <reason> | not eligible: <reason>
-#     profile: --harness <h> [--model <m>] [--effort <e>] [--claude-account <a>]     (status clear only)
-#   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
-#   ambiguous -> confidence below the floor; decide as today from the probabilities
-#   escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie;
-#                under preference order, no eligible candidate or an unverifiable floor on the first
-#   error     -> API, network, response, or quota-axi failure; decide as today
-#   Every outcome exits 0 so an intake is never blocked by this tool.
-#   Exit 2 only for a usage or configuration error (unreadable brief, an
-#   existing unreadable rules file, malformed rules, missing jq, an unknown
-#   provider, or OpenRouter without a model), which is actionable, never
-#   selected around.
-#
-# Environment:
-#   FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, TYPESAFE_API_KEY, and
-#   OPENROUTER_API_KEY are read from the environment or $FM_HOME/.env.
-#
-# Authority: this tool never replaces firstmate's judgment, quota-array-dispatch,
-#   the captain-approval gate, or fm-spawn.sh validation; it publishes one
-#   inspectable answer plus every candidate's evidence, in code.
 set -u
 
-TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
-export -n TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
+TYPESAFE_API_KEY_PRIVATE=
 unset TYPESAFE_API_KEY
 OPENROUTER_API_KEY_PRIVATE=${OPENROUTER_API_KEY:-}
 export -n OPENROUTER_API_KEY_PRIVATE 2>/dev/null || true
@@ -99,6 +22,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-env-lib.sh
 . "$SCRIPT_DIR/fm-env-lib.sh"
+# shellcheck source=bin/fm-bws-lib.sh
+. "$SCRIPT_DIR/fm-bws-lib.sh"
 # shellcheck source=bin/fm-timing-lib.sh
 . "$SCRIPT_DIR/fm-timing-lib.sh"
 # shellcheck source=bin/fm-brief-heading-lib.sh
@@ -119,11 +44,38 @@ no_rules() {
   exit 0
 }
 usage() {
-  awk '
-    NR == 1 { next }
-    /^#/ { sub(/^# ?/, ""); print; next }
-    { exit }
-  ' "$0"
+  cat <<'USAGE'
+fm-dispatch-resolve.sh - resolve one concrete crewmate or scout dispatch profile
+from a task brief with a configurable model provider, opt-in.
+
+Usage:
+  fm-dispatch-resolve.sh <brief-file> [--project <name>]
+
+Output (stdout, TOON-style block):
+  dispatch-resolve:
+    status: clear | ambiguous | escalate | error
+    model/latency_ms/tokens, rule (when excerpt) and confidence, probabilities
+    array_order: preference (first eligible candidate in array order)   (when declared)
+    fallback: <runner-up rule taken when the picked rule missed its own floor>
+    reason: <why the status is not clear>
+    candidate: <harness>:<model> [account=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked|uncertain: <reason> | not eligible: <reason>
+    profile: --harness <h> [--model <m>] [--effort <e>] [--claude-account <a>]     (status clear only)
+  clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
+  ambiguous -> confidence below the floor; decide as today from the probabilities
+  escalate  -> the rule requires captain approval, no candidate is rankable, or a genuine tie;
+               under preference order, no eligible candidate or an unverifiable floor on the first
+  error     -> API, network, response, or quota-axi failure; decide as today
+  Every outcome exits 0 so an intake is never blocked by this tool.
+  Exit 2 only for a usage or configuration error (unreadable brief, an
+  existing unreadable rules file, malformed rules, missing jq, an unknown
+  provider, or OpenRouter without a model), which is actionable, never
+  selected around.
+
+Environment:
+  FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, and OPENROUTER_API_KEY are read from
+    the environment or $FM_HOME/.env.
+  TYPESAFE_API_KEY is fetched through bws at run time (bin/fm-bws-lib.sh).
+USAGE
 }
 
 BRIEF='' PROJECT='' RULES_PATH="$CONFIG/crew-dispatch.json" RULES=''
@@ -137,6 +89,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+typesafe_key_or_off() {
+  local id_file="$CONFIG/bws-typesafe-secret-id"
+  if [ ! -e "$id_file" ]; then
+    echo "dispatch-resolve: off (no typesafe secret id at $id_file; nothing sent)" >&2
+    exit 0
+  fi
+  if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
+    TYPESAFE_API_KEY_PRIVATE=$(fm_bws_secret_value "$id_file") || die "TYPESAFE key unavailable through bws (see the refusal above)"
+  fi
+}
+
 # ---- opt-in gate ---------------------------------------------------------------
 DISPATCH_PROVIDER=${FM_DISPATCH_PROVIDER:-}
 [ -n "$DISPATCH_PROVIDER" ] || DISPATCH_PROVIDER=$(fmx_env_get FM_DISPATCH_PROVIDER "$FM_HOME/.env")
@@ -146,19 +109,11 @@ case "$DISPATCH_PROVIDER" in
   '')
     DISPATCH_PROVIDER=typesafe
     DISPATCH_MODEL=$TS_MODEL
-    [ -n "$TYPESAFE_API_KEY_PRIVATE" ] || TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
-    if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
-      echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env)" >&2
-      exit 0
-    fi
+    typesafe_key_or_off
     ;;
   typesafe)
     [ -n "$DISPATCH_MODEL" ] || DISPATCH_MODEL=$TS_MODEL
-    [ -n "$TYPESAFE_API_KEY_PRIVATE" ] || TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
-    if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
-      echo "dispatch-resolve: off (TYPESAFE_API_KEY absent from the environment and $FM_HOME/.env)" >&2
-      exit 0
-    fi
+    typesafe_key_or_off
     ;;
   openrouter)
     [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openrouter"
