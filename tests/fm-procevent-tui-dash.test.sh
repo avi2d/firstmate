@@ -108,7 +108,7 @@ assert_equals 2026-10-19T10:05:00Z "$(tail -n 1 "$TUI_DASH_ALERTS_VERDICTS" | jq
   "the arrival record carries the event verbatim"
 pass "alerts from one long-lived stream become one wake each"
 
-before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")
+before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS" | tr -d ' ')
 out=$(FM_HOME="$H" "$ADAPTER" verdict 1 "expected load from the night run")
 assert_equals "handled: tui-dash-alerts 1" "$out" "verdict acknowledges the result"
 judged=$(tail -n 1 "$TUI_DASH_ALERTS_VERDICTS")
@@ -119,7 +119,7 @@ printf '%s\n' "$judged" | jq -e '.recordedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}
   || fail "recordedAt is not an ISO time"
 out=$(FM_HOME="$H" "$ADAPTER" verdict 1 "a second opinion")
 assert_equals "already-handled: tui-dash-alerts 1" "$out" "a repeat verdict is reported"
-assert_equals $((before + 1)) "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")" "a repeat verdict records nothing"
+assert_equals $((before + 1)) "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS" | tr -d ' ')" "a repeat verdict records nothing"
 if FM_HOME="$H" "$ADAPTER" verdict 2 $'two\nlines' 2>/dev/null; then fail "a multi-line verdict was accepted"; fi
 if FM_HOME="$H" "$ADAPTER" verdict 9 "missing" 2>/dev/null; then fail "a verdict for a missing result was accepted"; fi
 pass "verdict records the judgment once and acknowledges it"
@@ -234,9 +234,9 @@ write_task "$H" alpha busy 'working: on the routine path'
 write_alert_result "$H" 4 <<'JSON'
 {"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T12:00:00Z","machine":"linux","task":{"id":"alpha","title":"Alpha","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T11:45:00Z","quietMinutes":15,"totalMinutes":60}
 JSON
-before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")
+before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS" | tr -d ' ')
 FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.4.result" || fail "a long task under 2h with a busy harness was not silent"
-assert_equals $((before + 1)) "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")" "a routine alert records one verdict"
+assert_equals $((before + 1)) "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS" | tr -d ' ')" "a routine alert records one verdict"
 judged=$(last_verdict)
 assert_contains "$(printf '%s\n' "$judged" | jq -r .verdict)" "routine:" "a routine long task records a routine verdict"
 assert_contains "$(printf '%s\n' "$judged" | jq -r .verdict)" "busy harness" "the verdict names why the alert stayed quiet"
@@ -265,11 +265,11 @@ write_task "$H" gamma busy 'working: past the mark'
 write_alert_result "$H" 7 <<'JSON'
 {"schemaVersion":1,"rule":"long-task","reason":"quiet","at":"2026-10-19T13:00:00Z","machine":"linux","task":{"id":"gamma","title":"Gamma","project":"fixture","state":"working","detail":"harness busy (pi-ext)","firstStartedAt":"2026-10-19T11:00:00Z"},"quietSince":"2026-10-19T12:45:00Z","quietMinutes":15,"totalMinutes":120}
 JSON
-before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")
+before=$(wc -l < "$TUI_DASH_ALERTS_VERDICTS" | tr -d ' ')
 if FM_HOME="$H" "$ADAPTER" silent "$H/state/procevent-inbox/tui-dash-alerts.7.result" 2>/dev/null; then
   fail "a long task at exactly 2h stayed silent"
 fi
-assert_equals "$before" "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS")" "a waking alert records no verdict"
+assert_equals "$before" "$(wc -l < "$TUI_DASH_ALERTS_VERDICTS" | tr -d ' ')" "a waking alert records no verdict"
 pass "a long task at exactly 2h still wakes"
 
 H=$(new_home wake-blocked)
