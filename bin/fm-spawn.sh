@@ -4155,7 +4155,7 @@ fi
 # The Mac load gate extends the capacity path above: a heavy start waits while
 # the five-minute average is high or the standing heavy cap for the hour is full.
 # A relaunch replaces a worker that already holds a heavy place, so it skips the gate rather than stranding the task with no agent running.
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_mac_load_gate_active; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$HARNESS" != cloud-claude ] && fm_mac_load_gate_active; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
       echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2
@@ -4188,7 +4188,7 @@ fi
 # in config/linux-load-siblings, so a heavy start waits while the five-minute
 # average is high or the standing heavy cap for the hour is full across both homes.
 # A relaunch replaces a worker that already holds a heavy place, so it skips the gate rather than stranding the task with no agent running.
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_linux_load_gate_active "${SPAWN_CAPACITY_CONFIG:-}"; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$HARNESS" != cloud-claude ] && fm_linux_load_gate_active "${SPAWN_CAPACITY_CONFIG:-}"; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
       echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2
@@ -4216,7 +4216,7 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && fm_linux_load_gate_acti
     exit "$FM_LINUX_LOAD_DEFER_EXIT"
   fi
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$WEIGHT" = heavy ] && fm_mac_core_budget_gate_active; then
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$HARNESS" != cloud-claude ] && [ "$WEIGHT" = heavy ] && fm_mac_core_budget_gate_active; then
   if [ -z "${SPAWN_CAPACITY_CONFIG:-}" ]; then
     SPAWN_CAPACITY_CONFIG=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || {
       echo "error: could not resolve the root Firstmate home that declares machine limits for $PROJ_ABS" >&2

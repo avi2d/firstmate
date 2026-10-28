@@ -79,6 +79,37 @@ test_direct_pr_ship_launches_the_relay_on_the_cloud_account() {
   pass "a direct-PR ship launches the relay on the configured account"
 }
 
+test_cloud_spawn_is_not_deferred_by_local_load_or_heavy_cap() {
+  local out rc id=cloud-busy i=0 launch high
+  case "$(uname -s)" in
+    Linux) high=16.0 ;;
+    *) high=10.0 ;;
+  esac
+  new_case busy
+  while [ "$i" -lt 6 ]; do
+    i=$((i + 1))
+    fm_write_meta "$HOME_DIR/state/local-$i.meta" "window=firstmate:fm-local-$i" "project=$PROJ" "harness=codex" "kind=ship"
+  done
+  out=$(export FM_MAC_LOAD_MOCK_5MIN=$high FM_CORE_BUDGET_MOCK_USAGE=99; spawn_cloud "$id" --mode direct-PR --yolo off); rc=$?
+  expect_code 0 "$rc" "a cloud spawn was deferred by local load, the heavy cap, or the core budget: $out"
+  launch=$(cat "$CASE/launch.log")
+  assert_contains "$launch" "bin/fm-cloud-claude-relay.sh" "the cloud spawn launched no relay"
+  assert_grep "harness=cloud-claude" "$HOME_DIR/state/$id.meta" "the record should name the cloud harness"
+  pass "a cloud spawn starts under high local load with the heavy cap full"
+}
+
+test_cloud_spawn_still_waits_for_its_project_capacity() {
+  local out rc id=cloud-capped
+  new_case capped
+  printf '%s\n' "project 1" > "$HOME_DIR/config/project-capacity"
+  fm_write_meta "$HOME_DIR/state/local-1.meta" "window=firstmate:fm-local-1" "project=$PROJ" "harness=codex" "kind=ship"
+  out=$(spawn_cloud "$id" --mode direct-PR --yolo off); rc=$?
+  expect_code 75 "$rc" "a cloud spawn ignored its project's declared capacity: $out"
+  assert_contains "$out" "admits 1 worker" "the deferral did not name the project capacity"
+  assert_absent "$HOME_DIR/state/$id.meta" "a deferred cloud spawn published a record"
+  pass "a cloud spawn still waits for its project's declared capacity"
+}
+
 test_refusals_before_launch() {
   local out rc
   new_case refuse
@@ -289,6 +320,8 @@ test_relay_reports_a_draft_as_not_done() {
 }
 
 test_direct_pr_ship_launches_the_relay_on_the_cloud_account
+test_cloud_spawn_is_not_deferred_by_local_load_or_heavy_cap
+test_cloud_spawn_still_waits_for_its_project_capacity
 test_relay_flags_the_deadline_and_reports_the_pull_request
 test_relay_forwards_steers_and_reports_the_follow_up
 test_relay_reports_a_draft_as_not_done
