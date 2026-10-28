@@ -425,6 +425,14 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0014-typed-dispatch-resolver-contract.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/adr/0015-typesafe-key-from-bws.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

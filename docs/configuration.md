@@ -1874,7 +1874,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 - Malformed JSON, malformed rules, an invalid `array_order`, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
 - While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic.
 - Without the key those inert declarations preserve the pre-existing bootstrap behavior.
-- Bootstrap enables resolver-only checks for `approval`, `min_confidence`, `floor`, and present `provider` declarations when `TYPESAFE_API_KEY` is non-empty in the environment or the home's `.env`, regardless of `FM_DISPATCH_PROVIDER`.
+- Bootstrap enables resolver-only checks for `approval`, `min_confidence`, `floor`, and present `provider` declarations when `config/bws-typesafe-secret-id` exists, regardless of `FM_DISPATCH_PROVIDER`.
 - An OpenRouter key alone does not enable these bootstrap checks.
 - The resolver validates those declarations itself before any request.
 - Without a typesafe key, bootstrap retains its pre-existing verified-harness baseline.
@@ -1895,9 +1895,15 @@ Inheritance preserves the link thereafter.
 `FM_DISPATCH_PROVIDER` selects `typesafe` or `openrouter`, and `FM_DISPATCH_MODEL` selects the model.
 Each setting comes from the calling environment or the home's gitignored `.env` through `bin/fm-env-lib.sh`; a non-empty environment value wins.
 OpenRouter requires both `FM_DISPATCH_PROVIDER=openrouter` and a non-empty `FM_DISPATCH_MODEL`; an omitted model is an actionable configuration error, and the presence of an OpenRouter key never selects the provider by itself.
-With no provider setting, the original typesafe.ai behavior is unchanged: `jev-latest` is used when `TYPESAFE_API_KEY` is available, `FM_DISPATCH_MODEL` is ignored, and the resolver is off otherwise.
+With no provider setting, the original typesafe.ai behavior is unchanged: `jev-latest` is used when the typesafe key is available from Bitwarden, `FM_DISPATCH_MODEL` is ignored, and the resolver is off when no secret id file exists.
 Explicit `FM_DISPATCH_PROVIDER=typesafe` also uses `jev-latest` when no model is set.
-The selected provider's key must be non-empty in the environment or `.env`, with the environment taking precedence.
+The OpenRouter key must be non-empty in the environment or `.env`, with the environment taking precedence.
+The typesafe key is never read from the environment or `.env`.
+The gitignored `config/bws-typesafe-secret-id` file holds the Bitwarden Secrets Manager secret id, which identifies the secret and is not itself the credential.
+The resolver fetches the value with `bws` at run time through `bin/fm-bws-lib.sh`, reading the access token from the macOS keychain item `bws-access-token` and falling back to `~/.config/bws/token`.
+The token reaches `bws` only through `BWS_ACCESS_TOKEN`, never on argv.
+An absent id file turns the typesafe gate off.
+A configured id whose fetch fails refuses with exit 2 and a line that names what is missing, and sends nothing.
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
@@ -2011,7 +2017,8 @@ Firstmate passes its profile line unless it states a reason to override, such as
 
 **Key handling and provider settings**
 
-- The resolver copies either environment-provided key into a non-exported private variable and unsets both `TYPESAFE_API_KEY` and `OPENROUTER_API_KEY` before launching child processes; bootstrap also protects the typesafe key.
+- The resolver copies the OpenRouter environment key and the bws-fetched typesafe key into non-exported private variables and unsets both `TYPESAFE_API_KEY` and `OPENROUTER_API_KEY` before launching child processes.
+- Bootstrap unsets the typesafe variable from its own environment.
 - The resolver sends only the selected key to `curl` as a header read from a file descriptor, never on argv, and never prints, logs, or writes either key.
 - The typesafe.ai endpoint is `https://api.typesafe.ai/v1/systemone`, and the OpenRouter endpoint is `https://openrouter.ai/api/alpha/decisions`.
 - The default confidence floor remains 0.6; request timeouts are 5 seconds for typesafe.ai and 10 seconds for OpenRouter.
@@ -3416,7 +3423,7 @@ FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
 FM_DISPATCH_PROVIDER=   # typesafe or openrouter; absent preserves the original typesafe key gate ("Typed dispatch resolution")
 FM_DISPATCH_MODEL=      # explicit model for the selected provider; required for openrouter
-TYPESAFE_API_KEY=       # typesafe dispatch key, from the environment or .env
+# typesafe key is not a .env entry; config/bws-typesafe-secret-id names its Bitwarden secret
 OPENROUTER_API_KEY=     # OpenRouter dispatch key, from the environment or .env
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
