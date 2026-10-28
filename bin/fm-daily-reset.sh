@@ -3,7 +3,7 @@
 set -u
 export LC_ALL=C
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
+export FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
@@ -122,7 +122,7 @@ report_bad_config() {
 }
 do_check() {
   case "$(due_state)" in
-    due) fm_cap_line "daily-reset due: run bin/fm-daily-reset.sh run to persist open records and reset supervisor sessions" "$MAX_LINE" ;;
+    due) fm_cap_line "daily-reset due: run FM_HOME=$(printf '%q' "$FM_HOME") bin/fm-daily-reset.sh run to persist open records and reset supervisor sessions" "$MAX_LINE" ;;
     bad-config) report_bad_config ;;
   esac
   return 0
@@ -189,8 +189,11 @@ do_run() {
     printf 'no secondmates to restart\n'
   fi
   print_main_half
+  if [ "$rc" -ne 0 ]; then
+    echo "error: second mate restart exited $rc; the reset is not recorded and stays due" >&2
+    return "$rc"
+  fi
   record_stamp "$today" || { echo "error: could not stamp $RECORD" >&2; return 1; }
-  if [ "$rc" -ne 0 ]; then return "$rc"; fi
   if [ "$skipped" -ne 0 ]; then return 3; fi
 }
 shim_content() {

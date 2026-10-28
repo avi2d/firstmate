@@ -23,6 +23,7 @@ make_stub() {
   cat > "$stub" <<'EOF'
 #!/usr/bin/env bash
 set -u
+[ -n "${FM_HOME:-}" ] || { echo "error: FM_HOME is not set" >&2; exit 1; }
 printf '%s\n' "$@" >> "$FM_DAILY_RESET_STUB_LOG"
 exit "${FM_DAILY_RESET_STUB_EXIT:-0}"
 EOF
@@ -38,6 +39,12 @@ run_forced() {
   FM_HOME="$1" FM_DAILY_RESET_TODAY="$TODAY" FM_DAILY_RESET_NOW=05:00 \
     FM_DAILY_RESET_RESTART_BIN="$2" FM_DAILY_RESET_STUB_LOG="$3" \
     "$CHECK" run --force ${4:+"$4"} ${5:+"$5"} 2>&1
+}
+
+run_unset_home() {
+  env -u FM_HOME FM_ROOT_OVERRIDE="$1" FM_DAILY_RESET_TODAY="$TODAY" FM_DAILY_RESET_NOW=05:00 \
+    FM_DAILY_RESET_RESTART_BIN="$2" FM_DAILY_RESET_STUB_LOG="$3" \
+    "$CHECK" run --force 2>&1
 }
 
 add_mate() {
@@ -128,15 +135,38 @@ test_unknown_mate_rides_the_restart_gate() {
   assert_grep 'm-strange' "$log" "unobservable mate never reached the restart gate"
 }
 
-test_restart_failure_still_stamps_for_tomorrow() {
+test_failed_restart_does_not_mark_the_day_done() {
   local home stub out rc=0 log
-  home=$(make_home failing)
+  home=$(make_home failed-restart)
   add_mate "$home" m-idle idle
-  stub=$(make_stub failing)
-  log=$(stub_log failing)
-  out=$(FM_DAILY_RESET_STUB_EXIT=3 run_forced "$home" "$stub" "$log") || rc=$?
-  [ "$rc" = 3 ] || fail "expected the restart exit to propagate, got $rc: $out"
-  assert_grep "fm-daily-reset-v1 $TODAY" "$home/state/.daily-reset" "failed pass did not stamp the day for retry tomorrow"
+  stub=$(make_stub failed-restart)
+  log=$(stub_log failed-restart)
+  : > "$log"
+  out=$(FM_DAILY_RESET_STUB_EXIT=1 run_unset_home "$home" "$stub" "$log") || rc=$?
+  [ "$rc" = 1 ] || fail "failed restart should exit 1, got $rc: $out"
+  assert_absent "$home/state/.daily-reset" "failed restart marked the day done"
+  out=$(do_check "$home" 05:00)
+  case "$out" in *"daily-reset due"*) ;; *) fail "failed restart should leave the reset due, got: $out" ;; esac
+}
+
+test_unset_home_run_restarts_and_stamps() {
+  local home stub out rc=0 log
+  home=$(make_home unset-home)
+  add_mate "$home" m-idle idle
+  stub=$(make_stub unset-home)
+  log=$(stub_log unset-home)
+  : > "$log"
+  out=$(run_unset_home "$home" "$stub" "$log") || rc=$?
+  [ "$rc" = 0 ] || fail "run without FM_HOME should restart the mate, got $rc: $out"
+  assert_grep 'm-idle' "$log" "restart never received the mate"
+  assert_grep "fm-daily-reset-v1 $TODAY" "$home/state/.daily-reset" "successful run did not stamp the day"
+}
+
+test_due_line_names_the_home() {
+  local home out
+  home=$(make_home due-line)
+  out=$(do_check "$home" 05:00)
+  case "$out" in *"FM_HOME=$home bin/fm-daily-reset.sh run"*) ;; *) fail "due line should name the home for the run command, got: $out" ;; esac
 }
 
 test_run_refuses_when_not_due() {
@@ -194,7 +224,9 @@ test_bad_config_reports_once
 test_parked_stays_silent
 test_busy_mate_skipped_idle_mate_restarted
 test_unknown_mate_rides_the_restart_gate
-test_restart_failure_still_stamps_for_tomorrow
+test_failed_restart_does_not_mark_the_day_done
+test_unset_home_run_restarts_and_stamps
+test_due_line_names_the_home
 test_run_refuses_when_not_due
 test_invalid_id_is_refused
 test_explicit_ids_skip_the_rest
