@@ -950,6 +950,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-clauth-lib.sh"
 # shellcheck source=bin/fm-quota-spawn-lib.sh
 . "$SCRIPT_DIR/fm-quota-spawn-lib.sh"
+# shellcheck source=bin/fm-dispatch-proof-lib.sh
+. "$SCRIPT_DIR/fm-dispatch-proof-lib.sh"
 # shellcheck source=bin/fm-omp-profile-lib.sh
 . "$SCRIPT_DIR/fm-omp-profile-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
@@ -3463,6 +3465,11 @@ fi
 if [ "$KIND" = secondmate ] && [ "$QUOTA_OVERRIDE_SET" -eq 1 ]; then
   echo "error: --quota-override-reason applies only to ship and scout spawns" >&2
   exit 1
+fi
+if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
+  if ! fm_dispatch_proof_gate "$DATA" "$ID" "$HARNESS" "${MODEL:-}" "${EFFORT:-}" "$CLAUDE_ACCOUNT"; then
+    exit 1
+  fi
 fi
 if [ "$KIND" != secondmate ]; then
   if ! fm_quota_spawn_gate "$CONFIG/crew-dispatch.json" "$HARNESS" "${MODEL:-default}" "${EFFORT:-default}" "$CLAUDE_ACCOUNT" "$QUOTA_OVERRIDE_REASON"; then
@@ -7151,6 +7158,8 @@ preserve_relaunch_meta() {
   [ -z "$CLAUDE_ACCOUNT" ] || echo "claude_account=$CLAUDE_ACCOUNT"
   gate_note=$(fm_quota_spawn_gate_note)
   [ -z "$gate_note" ] || echo "quota_gate=$gate_note"
+  proof_note=$(fm_dispatch_proof_note)
+  [ -z "$proof_note" ] || echo "dispatch_proof=$proof_note"
   # The per-secondmate omp profile pin, only when one applies, so every other
   # task record stays byte-identical.
   [ -z "$OMP_PROFILE_PIN" ] || echo "omp_profile=$OMP_PROFILE_PIN"

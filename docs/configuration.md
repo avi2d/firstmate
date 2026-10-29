@@ -1905,7 +1905,11 @@ Firstmate resolves the rule's profile object or array under `AGENTS.md` section 
 **Spawn requirements**
 
 - When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
-- Batch spawns satisfy the same requirement with a shared `--harness`.
+- An explicit harness alone is not proof the rules were read, so the same spawn also refuses when the task data directory holds neither the resolver output saved as `data/<id>/dispatch-resolve.out` with a clear status whose profile line matches the launch nor the selection record at `data/<id>/dispatch-selection.md` that names the matched rule and every candidate with its verdict and evidence and whose chosen profile equals the launch.
+- A resolver clear result satisfies the check on its own.
+- An explicit per-task captain override stays possible with the stated reason recorded on an `override` line in that same selection record.
+- Relaunches reuse the recorded task and its original proof.
+- Batch spawns satisfy the harness requirement with a shared `--harness`, and each pair needs its own proof under its own task data directory.
 - Secondmate spawns are exempt and resolve through `config/secondmate-harness` using the registered mate's id; see [Choose the secondmate harness](#choose-the-secondmate-harness) for pin precedence and legacy parsing.
 
 **Contract owners**

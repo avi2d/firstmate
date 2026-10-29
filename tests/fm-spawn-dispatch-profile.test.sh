@@ -130,9 +130,88 @@ task_inbox_export() {  # <home> <id>
 }
 
 
+write_test_dispatch_proof() {
+  local home=$1 harness=$2 model=$3 effort=$4 account=$5 chosen candidate id
+  shift 5
+  chosen="chosen: --harness $harness"
+  candidate="candidate: $harness"
+  [ -z "$model" ] || { chosen="$chosen --model $model"; candidate="$candidate:$model"; }
+  [ -z "$effort" ] || chosen="$chosen --effort $effort"
+  [ -z "$account" ] || chosen="$chosen --claude-account $account"
+  for id in "$@"; do
+    [ -d "$home/data/$id" ] || continue
+    {
+      printf '%s\n' 'dispatch-selection:'
+      printf '%s\n' 'rule: test dispatch'
+      printf '%s\n' "$candidate with test evidence -> eligible: test proof"
+      printf '%s\n' "$chosen"
+    } > "$home/data/$id/dispatch-selection.md"
+  done
+}
+
+auto_test_dispatch_proof() {
+  local home=$1 arg ids=() positional=() words=()
+  local harness='' model='' effort='' account='' want_value='' raw='' word=''
+  shift
+  for arg in "$@"; do
+    if [ -n "$want_value" ]; then
+      case "$want_value" in
+      harness) harness=$arg ;;
+      model) model=$arg ;;
+      effort) effort=$arg ;;
+      claude-account) account=$arg ;;
+      esac
+      want_value=
+      continue
+    fi
+    case "$arg" in
+    --harness=*|--model=*|--effort=*|--claude-account=*)
+      case "$arg" in
+      --harness=*) harness=${arg#--harness=} ;;
+      --model=*) model=${arg#--model=} ;;
+      --effort=*) effort=${arg#--effort=} ;;
+      --claude-account=*) account=${arg#--claude-account=} ;;
+      esac
+      ;;
+    --harness|--model|--effort|--claude-account) want_value=${arg#--} ;;
+    --backend|--mode|--yolo|--weight|--branch-prefix|--base-branch|--upstream-consent|--traceparent|--quota-override-reason) want_value=skip ;;
+    --*) ;;
+    *=*)
+      case "$arg" in
+      *\ *) ;;
+      *) ids+=("${arg%%=*}") ;;
+      esac
+      ;;
+    *) positional+=("$arg") ;;
+    esac
+  done
+  if [ "${#ids[@]}" -eq 0 ] && [ "${#positional[@]}" -ge 1 ]; then
+    ids+=("${positional[0]}")
+  fi
+  if [ -z "$harness" ] && [ "${#positional[@]}" -ge 3 ]; then
+    harness=${positional[2]}
+  fi
+  case "$harness" in
+  *\ *)
+    raw=$harness harness=
+    read -ra words <<< "$raw"
+    for word in "${words[@]}"; do
+      case "$word" in
+      [A-Za-z_]*=*) continue ;;
+      *) harness=$(basename "$word"); break ;;
+      esac
+    done
+    ;;
+  esac
+  [ -n "$harness" ] || return 0
+  [ "${#ids[@]}" -gt 0 ] || return 0
+  write_test_dispatch_proof "$home" "$harness" "$model" "$effort" "$account" "${ids[@]}"
+}
+
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
   shift 4
+  auto_test_dispatch_proof "$home" "$@"
   : > "$launchlog"
   # CLAUDE_CONFIG_DIR is forwarded onto claude launches by fm-spawn, so pin it
   # explicitly (empty by default) instead of leaking the invoking shell's value,
