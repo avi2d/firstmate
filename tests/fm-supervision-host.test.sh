@@ -2997,6 +2997,7 @@ SH
   pass "host+hook: hand-back retry submits only to the idle owning pane without replacing human input"
 }
 
+run_cases <<'CASES'
 test_main_only_close_after_handled_turn_restores_inherited_handling
 test_main_only_close_after_handled_turn_delivers_restore_failure
 test_returned_driver_is_caught_attended
@@ -3079,3 +3080,4 @@ test_unverified_engine_hands_every_away_wake_to_main
 test_host_outside_the_lock_owner_stands_down
 test_tagged_lock_holder_reaches_the_engine_whole
 test_superseded_host_leaves_the_owner_untouched
+CASES

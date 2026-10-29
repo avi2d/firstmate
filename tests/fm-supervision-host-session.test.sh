@@ -654,6 +654,7 @@ test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes() {
   [ "$(engine_calls "$home")" -eq 2 ] || fail "an engine ran after the latch tripped"
   pass "host: an attended close in a latched session reaches main as the arm printed it and leaves the latch as it was, and a home that opted out with off never reads it"
 }
+run_cases <<'CASES'
 test_claude_stop_hook_restores_handoff_when_successor_closed_before_exit_to_main
 test_claude_stop_hook_restores_handoff_when_successor_closed_mid_engine_turn
 test_claude_stop_hook_delivers_a_main_only_pass_through
@@ -672,3 +673,4 @@ test_attended_wake_with_an_unreadable_mirror_reaches_main
 test_latch_trips_after_two_engine_errors_then_probes_and_recovers
 test_latch_keeps_attended_closes_on_main_and_skips_unopted_homes
 test_attended_latch_keeps_closes_on_main_and_records_recovery_off_main
+CASES

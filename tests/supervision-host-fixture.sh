@@ -192,14 +192,33 @@ stop_home_processes() {  # <home>
     kill -TERM "$pid" 2>/dev/null || true
   done < <(cat "$home/orphan-pid" 2>/dev/null)
 }
-suite_cleanup() {
+stop_registered_homes() {
   local home
   while IFS= read -r home; do
     [ -n "$home" ] && stop_home_processes "$home"
   done < <(cat "$HOMES_FILE" 2>/dev/null)
+  : > "$HOMES_FILE"
+}
+suite_cleanup() {
+  stop_registered_homes
   fm_test_cleanup
 }
 trap suite_cleanup EXIT
+
+# Runs the cases named one per line on stdin. A watcher or parked host one case
+# leaves running would slow every later case past its timed waits, so each
+# case's homes are stopped before the next case starts.
+run_cases() {
+  local case cases=()
+  # The whole list is read first, so no case can consume it from stdin.
+  while IFS= read -r case; do
+    [ -n "$case" ] && cases+=("$case")
+  done
+  for case in "${cases[@]}"; do
+    "$case"
+    stop_registered_homes
+  done
+}
 
 make_home() {  # <name> <attended|away|quiet> [config line]
   local home="$TMP_ROOT/$1"
