@@ -216,6 +216,70 @@ test_site_approval_passes_unpublish() {
   pass "site approval passes the matching unpublish"
 }
 
+expect_allow() {
+  local label=$1 cmd=$2 rc
+  (CDPATH='' cd -- "$ROOT" && check --command "$cmd" >"$TMP_ROOT/allow.out" 2>"$TMP_ROOT/allow.err")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "$label must pass, got $rc: $(cat "$TMP_ROOT/allow.err")"
+  [ ! -s "$TMP_ROOT/allow.out" ] && [ ! -s "$TMP_ROOT/allow.err" ] || fail "$label must stay silent"
+}
+
+expect_deny() {
+  local label=$1 cmd=$2 rc
+  (CDPATH='' cd -- "$ROOT" && check --command "$cmd" >/dev/null 2>"$TMP_ROOT/deny.err")
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "$label must refuse, got $rc"
+  grep -q 'share-guard' "$TMP_ROOT/deny.err" || fail "$label must name the guard: $(cat "$TMP_ROOT/deny.err")"
+}
+
+write_case_script() {
+  local path=$1 extra=$2
+  cat > "$path" <<'SH'
+#!/usr/bin/env bash
+pe_register "$H" lavish shared-src -- "$BLOCKER" "payload"
+case "$out" in
+  handled:*) echo shared ;;
+esac
+SH
+  printf '%s\n' "$extra" >> "$path"
+}
+
+pad_past_scan_cap() {
+  local path=$1 i
+  for ((i = 0; i < 9000; i++)); do printf ': padding line %05d for the scan cap
+' "$i"; done >> "$path"
+}
+
+test_procevent_suite_runs_are_not_refused_as_unclassifiable() {
+  expect_allow "the procevent suite run" 'bash tests/fm-procevent.test.sh && bash tests/fm-procevent-lavish.test.sh'
+  pass "procevent suite runs that only mention lavish pass"
+}
+
+test_suite_run_beside_a_real_share_still_refuses() {
+  expect_deny "a suite run chained to a share" 'bash tests/fm-procevent-lavish.test.sh && lavish-axi share board.html'
+  pass "a suite run chained to a real share still refuses"
+}
+
+test_mention_in_unreadable_script_is_not_refused() {
+  local small="$TMP_ROOT/mention-small.sh" large="$TMP_ROOT/mention-large.sh"
+  write_case_script "$small" 'echo "lavish-axi poll board.html"'
+  write_case_script "$large" 'echo "lavish-axi poll board.html"'
+  pad_past_scan_cap "$large"
+  expect_allow "an unreadable script that only mentions lavish" "bash $small # lavish"
+  expect_allow "an oversized script that only mentions lavish" "bash $large # lavish"
+  pass "a script naming lavish and shared words without a publish passes"
+}
+
+test_publish_in_unreadable_script_still_refuses() {
+  local small="$TMP_ROOT/publish-small.sh" large="$TMP_ROOT/publish-large.sh"
+  write_case_script "$small" 'lavish-axi --token SECRET share board.html'
+  write_case_script "$large" 'lavish-axi --token SECRET share board.html'
+  pad_past_scan_cap "$large"
+  expect_deny "an unreadable script that publishes" "bash $small # lavish"
+  expect_deny "an oversized script that publishes" "bash $large # lavish"
+  pass "a script that publishes among the same words still refuses"
+}
+
 test_unknown_flag_errors() {
   check --bogus-flag >/dev/null 2>&1
   [ "$?" -eq 2 ] || fail "an unrecognized flag must exit non-zero"
@@ -232,4 +296,8 @@ test_edit_after_approval_refuses
 test_wrong_path_approval_refuses
 test_session_env_approval_passes
 test_site_approval_passes_unpublish
+test_procevent_suite_runs_are_not_refused_as_unclassifiable
+test_suite_run_beside_a_real_share_still_refuses
+test_mention_in_unreadable_script_is_not_refused
+test_publish_in_unreadable_script_still_refuses
 test_unknown_flag_errors

@@ -297,8 +297,10 @@ const UPLOAD_TOKENS = /post|put\b|upload|fetch\s*\(|axios|requests?\.\s*(post|pu
 
 const inlineCodePublishes = (code: string): boolean => /ht-ml/i.test(code) && UPLOAD_TOKENS.test(code);
 
+const LAVISH_SHARE_TEXT = /(?:^|[^\w-])lavish(?:-axi)?(?=[\s"'])(?:[^\n;|&]|\\\n)*?[\s"']share(?=[\s"';|&)]|$)/im;
+
 const textSignalsPublish = (text: string): boolean => {
-  if (/lavish[^\s]*\s+share/i.test(text)) return true;
+  if (LAVISH_SHARE_TEXT.test(text)) return true;
   return /ht-ml/i.test(text) && UPLOAD_TOKENS.test(text);
 };
 
@@ -309,12 +311,12 @@ const scanScriptFile = (path: string, scan: (text: string, depth: number) => Sca
   } catch {
     return { kind: "clean" };
   }
-  if (content.length > 262144) return hasStrongMarkers(content) ? { kind: "unclassifiable" } : { kind: "clean" };
+  const byText: ScanResult = textSignalsPublish(content) ? { kind: "attempt", candidates: [{ kind: "file", path }] } : { kind: "clean" };
+  // The command lexer cannot read most whole scripts, so a mention alone would refuse every script naming lavish.
+  if (content.length > 262144) return byText;
   const inner = scan(content, depth + 1);
   if (inner.kind === "attempt" && inner.candidates.length > 0) return inner;
-  if (inner.kind === "unclassifiable") return inner;
-  if (textSignalsPublish(content)) return { kind: "attempt", candidates: [{ kind: "file", path }] };
-  return { kind: "clean" };
+  return byText;
 };
 
 const scanShellNode = (position: LexPosition, node: ReadonlyArray<LexToken>, scan: (text: string, depth: number) => ScanResult, depth: number): ScanResult => {
