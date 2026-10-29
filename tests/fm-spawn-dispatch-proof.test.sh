@@ -6,6 +6,18 @@ set -u
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-dispatch-proof)
 
+make_proof_pi_probe() {
+  cat > "$1/pi" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = --help ]; then
+  printf '%s\n' "Pi ${FM_FAKE_PI_VERSION:-0.84.0}" 'Options: --help --tui-mode <mode> --approve'
+fi
+exit 0
+SH
+  chmod +x "$1/pi"
+}
+
 make_proof_case() {
   local name=$1 id=$2 case_dir home proj wt fakebin launchlog
   case_dir="$TMP_ROOT/$name"
@@ -14,6 +26,7 @@ make_proof_case() {
   wt="$case_dir/wt"
   launchlog="$case_dir/launch.log"
   fakebin=$(fm_test_make_spawn_fakebin "$case_dir/fake")
+  make_proof_pi_probe "$fakebin"
   cat > "$fakebin/quota-axi" <<'SH'
 #!/usr/bin/env bash
 exit 1
@@ -38,6 +51,7 @@ run_proof_ship_spawn() {
   shift 4
   : > "$launchlog"
   GROK_HOME="$home/grok-home" \
+    FM_FAKE_PI_VERSION="${FM_FAKE_PI_VERSION:-0.84.0}" \
     fm_test_run_spawn "$home" "$wt" "$fakebin" "$@" --mode no-mistakes --yolo off
 }
 
@@ -56,7 +70,7 @@ EOF
 write_selection_record() {
   cat > "$1" <<'EOF'
 dispatch-selection:
-rule: test work
+rule: rule_1
 candidate: codex:gpt-5 provider=codex remaining=10% spendPriority=5 runway=through_reset -> eligible
 candidate: grok:grok-4 provider=grok remaining=50% spendPriority=10 runway=through_reset -> eligible
 candidate: pi:claude-bridge/opus-5-5 provider=claude remaining=80% spendPriority=20 runway=through_reset -> eligible
@@ -92,7 +106,7 @@ test_clear_resolver_pick_is_not_refused() {
   pass "a clear resolver pick launches without a selection record"
 }
 
-test_matching_selection_record_is_not_refused() {
+test_full_selection_record_is_not_refused() {
   local rec id out status
   id=proof-record-z3
   rec=$(make_proof_case proof-record "$id")
@@ -100,10 +114,10 @@ test_matching_selection_record_is_not_refused() {
   write_selection_record "$HOME_DIR/data/$id/dispatch-selection.md"
   out=$(run_proof_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness grok --model grok-4)
   status=$?
-  expect_code 0 "$status" "a matching selection record should launch: $out"
+  expect_code 0 "$status" "a full selection record should launch: $out"
   assert_contains "$out" "spawned $id" "a covered launch should report success"
   assert_grep 'dispatch_proof=record:selection' "$HOME_DIR/state/$id.meta" "record proof not recorded in task metadata"
-  pass "a matching selection record launches"
+  pass "a full selection record launches"
 }
 
 test_selection_record_naming_another_profile_is_refused() {
@@ -113,7 +127,7 @@ test_selection_record_naming_another_profile_is_refused() {
   read_proof_record "$rec"
   cat > "$HOME_DIR/data/$id/dispatch-selection.md" <<'EOF'
 dispatch-selection:
-rule: test work
+rule: rule_1
 candidate: codex:gpt-5 provider=codex remaining=10% spendPriority=5 runway=through_reset -> eligible
 candidate: grok:grok-4 provider=grok remaining=50% spendPriority=10 runway=through_reset -> eligible
 candidate: pi:claude-bridge/opus-5-5 provider=claude remaining=80% spendPriority=20 runway=through_reset -> eligible
@@ -125,6 +139,87 @@ EOF
   assert_contains "$out" 'must equal the launch' "refusal should name the chosen-profile mismatch"
   assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn wrote task metadata"
   pass "a selection record naming another profile is refused"
+}
+
+test_record_with_only_the_copied_opus_candidate_is_refused() {
+  local rec id out status
+  id=proof-opus-only-z7
+  rec=$(make_proof_case proof-opus-only "$id")
+  read_proof_record "$rec"
+  cat > "$HOME_DIR/data/$id/dispatch-selection.md" <<'EOF'
+dispatch-selection:
+rule: rule_1
+candidate: pi:claude-bridge/opus-5-5 provider=claude remaining=80% spendPriority=20 runway=through_reset -> eligible
+chosen: --harness pi --model claude-bridge/opus-5-5
+EOF
+  out=$(run_proof_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness pi --model claude-bridge/opus-5-5)
+  status=$?
+  expect_code 1 "$status" "a record with only the copied Opus candidate should refuse: $out"
+  assert_contains "$out" 'missing a candidate' "refusal should name the missing candidates"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn wrote task metadata"
+  pass "a record with only the copied Opus candidate is refused"
+}
+
+test_record_missing_the_middle_candidate_is_refused() {
+  local rec id out status
+  id=proof-middle-missing-z8
+  rec=$(make_proof_case proof-middle-missing "$id")
+  read_proof_record "$rec"
+  cat > "$HOME_DIR/data/$id/dispatch-selection.md" <<'EOF'
+dispatch-selection:
+rule: rule_1
+candidate: codex:gpt-5 provider=codex remaining=10% spendPriority=5 runway=through_reset -> eligible
+candidate: pi:claude-bridge/opus-5-5 provider=claude remaining=80% spendPriority=20 runway=through_reset -> eligible
+chosen: --harness codex --model gpt-5
+EOF
+  out=$(run_proof_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
+  status=$?
+  expect_code 1 "$status" "a record missing the middle candidate should refuse: $out"
+  assert_contains "$out" 'missing a candidate' "refusal should name the missing candidate"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn wrote task metadata"
+  pass "a record missing the middle candidate is refused"
+}
+
+test_candidate_with_no_quota_reading_is_refused() {
+  local rec id out status
+  id=proof-no-reading-z9
+  rec=$(make_proof_case proof-no-reading "$id")
+  read_proof_record "$rec"
+  cat > "$HOME_DIR/data/$id/dispatch-selection.md" <<'EOF'
+dispatch-selection:
+rule: rule_1
+candidate: codex:gpt-5 provider=codex remaining=10% spendPriority=5 runway=through_reset -> eligible
+candidate: grok:grok-4 provider=grok -> eligible
+candidate: pi:claude-bridge/opus-5-5 provider=claude remaining=80% spendPriority=20 runway=through_reset -> eligible
+chosen: --harness grok --model grok-4
+EOF
+  out=$(run_proof_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness grok --model grok-4)
+  status=$?
+  expect_code 1 "$status" "a candidate with no quota reading should refuse: $out"
+  assert_contains "$out" 'no quota reading' "refusal should name the missing quota reading"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn wrote task metadata"
+  pass "a candidate with no quota reading is refused"
+}
+
+test_record_naming_an_unknown_rule_is_refused() {
+  local rec id out status
+  id=proof-unknown-rule-z10
+  rec=$(make_proof_case proof-unknown-rule "$id")
+  read_proof_record "$rec"
+  cat > "$HOME_DIR/data/$id/dispatch-selection.md" <<'EOF'
+dispatch-selection:
+rule: rule_9
+candidate: codex:gpt-5 provider=codex remaining=10% spendPriority=5 runway=through_reset -> eligible
+candidate: grok:grok-4 provider=grok remaining=50% spendPriority=10 runway=through_reset -> eligible
+candidate: pi:claude-bridge/opus-5-5 provider=claude remaining=80% spendPriority=20 runway=through_reset -> eligible
+chosen: --harness grok --model grok-4
+EOF
+  out=$(run_proof_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness grok --model grok-4)
+  status=$?
+  expect_code 1 "$status" "a record naming an unknown rule should refuse: $out"
+  assert_contains "$out" 'unknown rule' "refusal should name the unknown rule"
+  assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn wrote task metadata"
+  pass "a record naming an unknown rule is refused"
 }
 
 test_stated_captain_override_is_not_refused() {
@@ -159,8 +254,12 @@ test_override_without_a_stated_reason_is_refused() {
 
 test_copied_launch_without_proof_is_refused
 test_clear_resolver_pick_is_not_refused
-test_matching_selection_record_is_not_refused
+test_full_selection_record_is_not_refused
 test_selection_record_naming_another_profile_is_refused
+test_record_with_only_the_copied_opus_candidate_is_refused
+test_record_missing_the_middle_candidate_is_refused
+test_candidate_with_no_quota_reading_is_refused
+test_record_naming_an_unknown_rule_is_refused
 test_stated_captain_override_is_not_refused
 test_override_without_a_stated_reason_is_refused
 

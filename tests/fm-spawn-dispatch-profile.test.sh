@@ -131,20 +131,15 @@ task_inbox_export() {  # <home> <id>
 
 
 write_test_dispatch_proof() {
-  local home=$1 harness=$2 model=$3 effort=$4 account=$5 chosen candidate id
+  local home=$1 ref=$2 candidates=$3 chosen=$4 override=$5 id
   shift 5
-  chosen="chosen: --harness $harness"
-  candidate="candidate: $harness"
-  [ -z "$model" ] || { chosen="$chosen --model $model"; candidate="$candidate:$model"; }
-  [ -z "$effort" ] || chosen="$chosen --effort $effort"
-  [ -z "$account" ] || chosen="$chosen --claude-account $account"
   for id in "$@"; do
     [ -d "$home/data/$id" ] || continue
     {
-      printf '%s\n' 'dispatch-selection:'
-      printf '%s\n' 'rule: test dispatch'
-      printf '%s\n' "$candidate with test evidence -> eligible: test proof"
+      printf '%s\n' 'dispatch-selection:' "rule: $ref"
+      printf '%s\n' "$candidates"
       printf '%s\n' "$chosen"
+      [ -z "$override" ] || printf '%s\n' "override: $override"
     } > "$home/data/$id/dispatch-selection.md"
   done
 }
@@ -205,7 +200,39 @@ auto_test_dispatch_proof() {
   esac
   [ -n "$harness" ] || return 0
   [ "${#ids[@]}" -gt 0 ] || return 0
-  write_test_dispatch_proof "$home" "$harness" "$model" "$effort" "$account" "${ids[@]}"
+  [ -f "$home/config/crew-dispatch.json" ] || return 0
+  local ref entries chosen candidates override entry eh
+  ref=$(jq -r --arg h "$harness" --arg hm "$harness:$model" '
+    def norm: if type == "array" then . elif type == "object" then [.] else [] end;
+    def lines: norm | map("\(.harness):\(.model // "")");
+    ([((.rules // []) | to_entries[]) | {ref: ("rule_" + ((.key + 1) | tostring)), e: (.value.use | lines)}]
+      + [{ref: "default", e: (.default | lines)}])
+    | map(select((.e | length) > 0)) as $r
+    | (($r | map(select(.e | index($hm))) | first | .ref)
+      // ($r | map(select(.e | map(split(":")[0]) | index($h))) | first | .ref)
+      // ($r | first | .ref)
+      // empty)' "$home/config/crew-dispatch.json") || return 0
+  [ -n "$ref" ] || return 0
+  if [ "$ref" = "default" ]; then
+    entries=$(jq -r '.default | (if type == "array" then . elif type == "object" then [.] else [] end) | .[] | "\(.harness):\(.model // "")"' "$home/config/crew-dispatch.json") || return 0
+  else
+    entries=$(jq -r --argjson n "${ref#rule_}" '((.rules // [])[$n - 1].use // null) | (if type == "array" then . elif type == "object" then [.] else [] end) | .[] | "\(.harness):\(.model // "")"' "$home/config/crew-dispatch.json") || return 0
+  fi
+  [ -n "$entries" ] || return 0
+  chosen="chosen: --harness $harness"
+  [ -z "$model" ] || chosen="$chosen --model $model"
+  [ -z "$effort" ] || chosen="$chosen --effort $effort"
+  [ -z "$account" ] || chosen="$chosen --claude-account $account"
+  candidates=""
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    eh=${entry%%:*}
+    entry_line="candidate: $entry provider=$eh remaining=50% spendPriority=10 runway=through_reset -> eligible: test proof"
+    candidates=${candidates:+$candidates$'\n'}$entry_line
+  done <<< "$entries"
+  override=""
+  printf '%s\n' "$entries" | grep -qxF "$harness:$model" || override="test launch uses a profile outside the dispatch rules"
+  write_test_dispatch_proof "$home" "$ref" "$candidates" "$chosen" "$override" "${ids[@]}"
 }
 
 run_spawn() {

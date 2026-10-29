@@ -64,16 +64,66 @@ _dispatch_proof_resolve_ok() {
 }
 
 _dispatch_proof_record_ok() {
-  local file=$1 harness=$2 model=$3 effort=$4 account=$5 chosen rest kind
-  grep -Eq '^rule:[[:space:]]*[^[:space:]]' "$file" || {
+  local config=$1 file=$2 harness=$3 model=$4 effort=$5 account=$6
+  local rule rule_num use_json expected line token ch cm rest chosen kind
+  local -a identities=()
+  rule=$(grep -E '^rule:' "$file" | head -n 1 | sed 's/^rule://;s/^[[:space:]]*//;s/[[:space:]]*$//') || rule=""
+  [ -n "$rule" ] || {
     printf '%s' "selection record names no matched rule"
     return 1
   }
-  [ "$(grep -Ec '^candidate:' "$file")" -gt 0 ] || {
-    printf '%s' "selection record names no candidate"
+  if [ "$rule" = "default" ]; then
+    rule_num=0
+  elif [[ $rule =~ ^rule_([1-9][0-9]*)$ ]]; then
+    rule_num=${BASH_REMATCH[1]}
+  else
+    printf '%s' "selection record names an unknown rule: $rule"
+    return 1
+  fi
+  [ "$(jq -r --argjson n "$rule_num" 'if $n == 0 then ((.default // null) != null) else ((.rules // []) | length) >= $n end' "$config" 2>/dev/null)" = "true" ] || {
+    printf '%s' "selection record names an unknown rule: $rule"
+    return 1
+  }
+  use_json=$(jq -c --argjson n "$rule_num" '(if $n == 0 then (.default // null) else ((.rules // [])[$n - 1].use // null) end) | if type == "array" then . elif type == "object" then [.] else [] end' "$config" 2>/dev/null) || {
+    printf '%s' "selection record cannot read the dispatch rules"
+    return 1
+  }
+  [ "$use_json" != "[]" ] || {
+    printf '%s' "selection record names a rule with no profiles: $rule"
+    return 1
+  }
+  printf '%s' "$use_json" | jq -e 'all(.[]; (.harness // "") != "")' >/dev/null 2>&1 || {
+    printf '%s' "the dispatch rules name a profile with no harness"
+    return 1
+  }
+  expected=$(printf '%s' "$use_json" | jq -r '.[] | "\(.harness):\(.model // "")"') || {
+    printf '%s' "selection record cannot read the dispatch rules"
     return 1
   }
   while IFS= read -r line; do
+    token=$(printf '%s' "$line" | sed 's/^candidate:[[:space:]]*//;s/[[:space:]].*//')
+    case "$token" in
+    *:*)
+      ch=${token%%:*}
+      cm=${token#*:}
+      ;;
+    *)
+      ch=$token
+      cm=
+      ;;
+    esac
+    [ -n "$ch" ] || {
+      printf '%s' "selection record names a candidate with no profile"
+      return 1
+    }
+    printf '%s\n' "$line" | grep -Eq 'provider=[^[:space:]]' || {
+      printf '%s' "selection record candidate $ch carries no quota provider"
+      return 1
+    }
+    printf '%s\n' "$line" | grep -Eq '(remaining|spendPriority)=[^[:space:]]' || {
+      printf '%s' "selection record candidate $ch carries no quota reading"
+      return 1
+    }
     case "$line" in
     *"->"*)
       rest=${line#*"->"}
@@ -87,7 +137,22 @@ _dispatch_proof_record_ok() {
       return 1
       ;;
     esac
+    identities+=("$ch:$cm")
   done < <(grep -E '^candidate:' "$file")
+  [ "${#identities[@]}" -gt 0 ] || {
+    printf '%s' "selection record names no candidate"
+    return 1
+  }
+  line=$(comm -23 <(printf '%s\n' "$expected" | sort) <(printf '%s\n' "${identities[@]}" | sort) | head -n 1)
+  [ -z "$line" ] || {
+    printf '%s' "selection record is missing a candidate of the matched rule: $line"
+    return 1
+  }
+  line=$(comm -13 <(printf '%s\n' "$expected" | sort) <(printf '%s\n' "${identities[@]}" | sort) | head -n 1)
+  [ -z "$line" ] || {
+    printf '%s' "selection record names a candidate the matched rule does not list: $line"
+    return 1
+  }
   chosen=$(grep -E '^chosen:' "$file" | head -n 1) || chosen=""
   [ -n "$chosen" ] || {
     printf '%s' "selection record names no chosen profile"
@@ -97,6 +162,7 @@ _dispatch_proof_record_ok() {
     printf '%s' "selection record chosen profile does not match the launch"
     return 1
   }
+  override_note=""
   if grep -Eq '^override:' "$file"; then
     grep -Eq '^override:[[:space:]]*[^[:space:]]' "$file" || {
       printf '%s' "override names no stated reason"
@@ -106,12 +172,21 @@ _dispatch_proof_record_ok() {
   else
     kind="record:selection"
   fi
+  # The captain may pick outside the listed candidates, so a stated override waives membership while the accounting still stands.
+  if [ "$kind" = "record:selection" ]; then
+    ch=$(_dispatch_proof_flag "$chosen" "--harness") || ch=""
+    cm=$(_dispatch_proof_flag "$chosen" "--model") || cm=""
+    printf '%s\n' "$expected" | grep -qxF "$ch:$cm" || {
+      printf '%s' "selection record chosen profile is not one of the recorded candidates"
+      return 1
+    }
+  fi
   printf '%s' "$kind"
   return 0
 }
 
 fm_dispatch_proof_gate() {
-  local data=$1 id=$2 harness=$3 model=$4 effort=$5 account=$6
+  local config=$1 data=$2 id=$3 harness=$4 model=$5 effort=$6 account=$7
   local resolve_file="$data/$id/dispatch-resolve.out"
   local record_file="$data/$id/dispatch-selection.md"
   local reason_resolve="" reason_record="" kind="" seen_resolve=0 seen_record=0
@@ -127,7 +202,7 @@ fm_dispatch_proof_gate() {
   fi
   if [ -f "$record_file" ] && [ -r "$record_file" ]; then
     seen_record=1
-    kind=$(_dispatch_proof_record_ok "$record_file" "$harness" "$model" "$effort" "$account") || {
+    kind=$(_dispatch_proof_record_ok "$config" "$record_file" "$harness" "$model" "$effort" "$account") || {
       reason_record=$kind
       kind=""
     }
@@ -143,6 +218,10 @@ fm_dispatch_proof_gate() {
   fi
   [ "$seen_resolve" -eq 0 ] || printf 'error: dispatch proof refused: %s\n' "$reason_resolve" >&2
   [ "$seen_record" -eq 0 ] || printf 'error: dispatch proof refused: %s\n' "$reason_record" >&2
-  printf 'error: the chosen profile must equal the launch: %s\n' "$(_dispatch_proof_launch_summary "$harness" "$model" "$effort" "$account")" >&2
+  case "$reason_record" in
+  *"does not match the launch"*)
+    printf 'error: the chosen profile must equal the launch: %s\n' "$(_dispatch_proof_launch_summary "$harness" "$model" "$effort" "$account")" >&2
+    ;;
+  esac
   return 1
 }

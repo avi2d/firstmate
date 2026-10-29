@@ -3467,7 +3467,7 @@ if [ "$KIND" = secondmate ] && [ "$QUOTA_OVERRIDE_SET" -eq 1 ]; then
   exit 1
 fi
 if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ -f "$CONFIG/crew-dispatch.json" ]; then
-  if ! fm_dispatch_proof_gate "$DATA" "$ID" "$HARNESS" "${MODEL:-}" "${EFFORT:-}" "$CLAUDE_ACCOUNT"; then
+  if ! fm_dispatch_proof_gate "$CONFIG/crew-dispatch.json" "$DATA" "$ID" "$HARNESS" "${MODEL:-}" "${EFFORT:-}" "$CLAUDE_ACCOUNT"; then
     exit 1
   fi
 fi

@@ -364,9 +364,10 @@ test_raw_compound_launch_command_carries_the_switch() {
     > "$HOME_DIR/config/crew-dispatch.json"
   cat > "$HOME_DIR/data/raw-compound-a1/dispatch-selection.md" <<'EOF'
 dispatch-selection:
-rule: current events
-candidate: cd with test evidence -> eligible: test proof
+rule: rule_1
+candidate: grok:grok-4 provider=grok remaining=50% spendPriority=10 runway=through_reset -> eligible: test proof
 chosen: --harness cd
+override: test launch runs a raw compound command outside the dispatch rules
 EOF
 
   probe_dir="$CASE_DIR/agent-cwd"
