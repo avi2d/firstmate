@@ -30,6 +30,10 @@ concurrency:
 env:
   FM_CI_TASKS_AXI_VERSION: '0.2.6'
   FM_CI_PI_VERSION: '1.3.0'
+  # checks-secrets pins: the @avi2dg/checks package and the Bun version its
+  # .bun-version pins. CONTRIBUTING.md's local secrets scan names these too.
+  FM_CI_CHECKS_VERSION: '0.57.0'
+  FM_CI_BUN_VERSION: '1.4.3'
 
 # Timeout policy: every job on a pull request or push run is capped at 10
 # minutes. Daily jobs keep the tiers in docs/fm-test-portable-shards.md "Timeouts".
@@ -561,6 +565,30 @@ jobs:
 
           FM_TEST_STOCK_BASH=1 FM_TEST_BASH=/bin/bash \
             /bin/bash bin/fm-test-tap-verify.sh tests/fm-backend.test.sh
+
+  # Required pull-request gate: checks-secrets scans the lines each commit in
+  # the PR's range adds with the kit's pinned gitleaks rules, and fails the PR
+  # on any secret. CHECKS_SECRETS_PACK stays unset, so no private pack runs.
+  secrets:
+    name: Secrets
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'pull_request' }}
+    # Pull request and push cap (see the timeout policy above).
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.FM_CI_BUN_VERSION }}
+      - name: Scan the PR range for added secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          bunx --package "@avi2dg/checks@$FM_CI_CHECKS_VERSION" checks-secrets "$BASE_SHA" "$HEAD_SHA"
 
   invariants:
     name: Repo invariants
