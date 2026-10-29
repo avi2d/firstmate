@@ -2755,7 +2755,7 @@ test_lock_wait_returns_when_its_directory_is_removed() {
     kill -TERM "$holder" 2>/dev/null || true
     fail "the waiter stopped waiting on a live hold while its directory still existed"
   fi
-  rm -rf "$state"
+  remove_dir_at_once "$state" || fail "the fixture could not remove the lock's directory"
   i=0
   while [ "$i" -lt 20 ] && kill -0 "$waiter" 2>/dev/null; do
     sleep 0.1

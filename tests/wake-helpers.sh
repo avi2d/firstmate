@@ -380,6 +380,16 @@ is_live_non_zombie() {
   return 0
 }
 
+# rm -rf empties a directory one entry at a time, so a live process can create
+# an entry in it before the final rmdir and keep the path alive; a rename
+# removes the path in one step before any of its contents go.
+remove_dir_at_once() {  # <dir>
+  local dir=$1 gone
+  gone=$(mktemp -d "$dir.removed.XXXXXX") || return 1
+  mv "$dir" "$gone/" || return 1
+  rm -rf "$gone"
+}
+
 hash_text() {
   if command -v md5 >/dev/null 2>&1; then
     printf '%s' "$1" | md5 -q
