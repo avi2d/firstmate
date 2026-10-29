@@ -52,7 +52,7 @@ Read `quota-axi auth --json` only when a candidate's credential surface is in qu
 
 For each candidate, preserve explicit `harness`, `model`, and `provider`; `harness-adapters` owns identity, and model/provider never infer harness.
 
-## Three gates, then spendPriority
+## Three gates, then provider preference and spendPriority
 
 Apply the three cheap orthogonal gates first.
 `spendPriority` ranks only among candidates that pass all three.
@@ -110,7 +110,18 @@ Do not invent a generic percentage floor, and honor an explicit captain floor fo
 
 ## Rank by spendPriority
 
-Among candidates that pass all three gates, pick the highest known `spendPriority`.
+Among candidates that pass all three gates, first apply the optional top-level `preferred_provider` from `config/crew-dispatch.json`.
+Its schema is owned by [Crew dispatch profiles](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson).
+Within the already matched rule or default, restrict ranking to eligible candidates of that family when any remain.
+Do not introduce other profiles, change a Claude-only rule, or override an explicit captain choice or approval requirement.
+Only concrete evidence that every matched preferred candidate is ineligible authorizes fallback to other families.
+Unknown quota, missing account evidence, and unrankable scalars do not establish ineligibility.
+If preferred candidates remain eligible but none can be ranked, escalate with that uncertainty instead of switching families.
+When no matched profile belongs to the preferred family, preserve the rule's candidate set.
+With the field absent, keep the existing candidate set unchanged.
+Print the preferred-family decision, including the reason for any fallback.
+
+Within the resulting candidate set, pick the highest known `spendPriority`.
 A higher known scalar is better: positive means paid allowance is on track to reach reset unused, `0` is exact utilization, and negative means overdrawn against the reset clock.
 Rank only from comparable known scalars.
 Never treat absent, `unknown`, or unmeasurable `spendPriority` as zero or as healthy; `0` means exact utilization, a different claim from unknown.
@@ -132,7 +143,8 @@ Report duplicate concrete profiles as a configuration error.
 
 This branch applies only when `config/crew-dispatch.json` declares `"array_order": "preference"`.
 [`docs/configuration.md`](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns that field.
-It covers every profile array, in rules and in `default`, and the ranking section above does not apply.
+It covers every profile array, in rules and in `default`, and the `spendPriority` ranking above does not apply.
+An optional `preferred_provider` still applies first: walk only that family's eligible candidates when any remain, under the fallback rules above.
 
 Walk the candidates in array order through the three gates against the one intake snapshot, and choose the first that passes.
 `spendPriority` is still read and shown as evidence, but it neither ranks the array nor overrides the order.
