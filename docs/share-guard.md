@@ -36,10 +36,11 @@ A publish hidden behind an unreadable value stays allowed and is listed here.
 A `VAR=value lavish-axi share file` prefix does not count as an approval.
 A runner the policy does not name passes its payload through untouched.
 A script file passed to `sh`, `bash`, `node`, or `python` is read and scanned.
+A script the scan cannot classify is judged by its text, so naming lavish passes and a `lavish-axi share` or upload to the outside host is refused.
 A module loaded with `python -m` is not resolved.
 An `ssh` remote command is not scanned.
 A value built only at runtime with no share marker is not classified.
-A value that mentions a share marker but resists classification is refused.
+A typed command value that mentions a share marker but resists classification is refused.
 
 ## Prefilter coupling
 
@@ -60,4 +61,5 @@ Pi and OMP block through their `fm-primary-turnend-guard.ts` extensions.
 `tests/fm-share-guard-pretool-check.test.sh` drives the shell transport through every entry form.
 It pins refusal of each publish shape and passage of views and unrelated commands.
 It pins approval expiry, post approval edits, wrong path approvals, and the unpublish path.
+It pins passage of scripts that only name lavish or shared words, and refusal of the same scripts once they publish.
 The suite ran green against the real `bun` runtime with a scratch home.
