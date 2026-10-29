@@ -1612,7 +1612,7 @@ test_watcher_exits_when_its_state_directory_is_removed() {
   mkdir -p "$home/data"
   start_owned_watcher "$home" "$state" "$fakebin" "$armout"
 
-  rm -rf "$state"
+  remove_dir_at_once "$state" || fail "the fixture could not remove the state directory"
   wait_for_pid_gone "$WATCH_PID" 400 \
     || { kill -TERM "$WATCH_PID" 2>/dev/null; fail "watcher pid $WATCH_PID outlived its deleted state directory"; }
   wait_for_exit "$ARM_PID" 100 >/dev/null 2>&1 || true
