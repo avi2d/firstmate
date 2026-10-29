@@ -162,7 +162,6 @@ _dispatch_proof_record_ok() {
     printf '%s' "selection record chosen profile does not match the launch"
     return 1
   }
-  override_note=""
   if grep -Eq '^override:' "$file"; then
     grep -Eq '^override:[[:space:]]*[^[:space:]]' "$file" || {
       printf '%s' "override names no stated reason"

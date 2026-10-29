@@ -3,7 +3,6 @@ set -u
 
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
-SPAWN="$ROOT/bin/fm-spawn.sh"
 TMP_ROOT=$(fm_test_tmproot fm-spawn-dispatch-proof)
 
 make_proof_pi_probe() {
