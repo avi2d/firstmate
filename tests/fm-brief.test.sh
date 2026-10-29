@@ -1758,6 +1758,22 @@ test_ship_and_scout_name_the_per_task_scratch_root() {
   pass "fm-brief.sh: ship and scout briefs pin scratch to /tmp/fm-<id>/"
 }
 
+test_scout_brief_requires_references_section() {
+  local home id brief
+  home="$TMP_ROOT/references-home"
+  mkdir -p "$home/data"
+  id="brief-references-scout"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1 \
+    || fail "fm-brief.sh scout scaffold exited non-zero"
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "scout brief was not scaffolded"
+  assert_grep 'End the report with a `## References` heading listing the sources' "$brief" \
+    "scout brief must end the report with the References heading the teardown check accepts"
+  printf '## References\n' | grep -Eq '^#{1,6}[[:space:]]+References[[:space:]]*$' \
+    || fail "the brief heading does not satisfy the teardown check pattern"
+  pass "fm-brief.sh: scout brief ends the report with the teardown-accepted References heading"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1787,6 +1803,7 @@ test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_completion_write_exception_is_task_scoped
 test_scout_and_secondmate_scaffold
+test_scout_brief_requires_references_section
 test_scout_lavish_line_follows_presentation_floor
 test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns
