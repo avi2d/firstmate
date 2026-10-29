@@ -158,3 +158,8 @@ The duty to account for every candidate, including those after the chosen one, i
 Account for every candidate visibly before selecting or escalating, naming its catalog evidence, provider relation, applicable quota and authentication facts, remaining uncertainty, fit and reasoning class, `spendPriority`, and runway-versus-horizon result.
 A blocked credential report must name `harness`, `model`, authentication surface, and concrete failure evidence; never emit a bare `Grok unauthenticated` statement.
 Never conclude with an unexplained "best quota" label.
+Save that accounting as the task selection record at `data/<id>/dispatch-selection.md` when it drives the launch, because `fm-spawn.sh` refuses a launch its proof does not cover.
+The record names the matched rule by index such as `rule_1` or `default` for the default array, carries exactly one `candidate:` line per entry of that rule's `use` array, and ends with the `chosen:` profile.
+Each candidate line names its entry's harness and model with the quota reading, for example `candidate: grok:grok-4 provider=grok remaining=50% spendPriority=10 runway=through_reset -> eligible`.
+The chosen profile must be one of those candidates and equal the launch, and a stated `override:` reason line is the only way to launch a profile outside the listed candidates.
+[`docs/configuration.md`](../../../docs/configuration.md#crew-dispatch-profiles-configcrew-dispatchjson) owns the proof contract.

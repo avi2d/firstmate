@@ -130,9 +130,115 @@ task_inbox_export() {  # <home> <id>
 }
 
 
+write_test_dispatch_proof() {
+  local home=$1 ref=$2 candidates=$3 chosen=$4 override=$5 id
+  shift 5
+  for id in "$@"; do
+    [ -d "$home/data/$id" ] || continue
+    {
+      printf '%s\n' 'dispatch-selection:' "rule: $ref"
+      printf '%s\n' "$candidates"
+      printf '%s\n' "$chosen"
+      [ -z "$override" ] || printf '%s\n' "override: $override"
+    } > "$home/data/$id/dispatch-selection.md"
+  done
+}
+
+auto_test_dispatch_proof() {
+  local home=$1 arg ids=() positional=() words=()
+  local harness='' model='' effort='' account='' want_value='' raw='' word=''
+  shift
+  for arg in "$@"; do
+    if [ -n "$want_value" ]; then
+      case "$want_value" in
+      harness) harness=$arg ;;
+      model) model=$arg ;;
+      effort) effort=$arg ;;
+      claude-account) account=$arg ;;
+      esac
+      want_value=
+      continue
+    fi
+    case "$arg" in
+    --harness=*|--model=*|--effort=*|--claude-account=*)
+      case "$arg" in
+      --harness=*) harness=${arg#--harness=} ;;
+      --model=*) model=${arg#--model=} ;;
+      --effort=*) effort=${arg#--effort=} ;;
+      --claude-account=*) account=${arg#--claude-account=} ;;
+      esac
+      ;;
+    --harness|--model|--effort|--claude-account) want_value=${arg#--} ;;
+    --backend|--mode|--yolo|--weight|--branch-prefix|--base-branch|--upstream-consent|--traceparent|--quota-override-reason) want_value=skip ;;
+    --*) ;;
+    *=*)
+      case "$arg" in
+      *\ *) ;;
+      *) ids+=("${arg%%=*}") ;;
+      esac
+      ;;
+    *) positional+=("$arg") ;;
+    esac
+  done
+  if [ "${#ids[@]}" -eq 0 ] && [ "${#positional[@]}" -ge 1 ]; then
+    ids+=("${positional[0]}")
+  fi
+  if [ -z "$harness" ] && [ "${#positional[@]}" -ge 3 ]; then
+    harness=${positional[2]}
+  fi
+  case "$harness" in
+  *\ *)
+    raw=$harness harness=
+    read -ra words <<< "$raw"
+    for word in "${words[@]}"; do
+      case "$word" in
+      [A-Za-z_]*=*) continue ;;
+      *) harness=$(basename "$word"); break ;;
+      esac
+    done
+    ;;
+  esac
+  [ -n "$harness" ] || return 0
+  [ "${#ids[@]}" -gt 0 ] || return 0
+  [ -f "$home/config/crew-dispatch.json" ] || return 0
+  local ref entries chosen candidates override entry eh
+  ref=$(jq -r --arg h "$harness" --arg hm "$harness:$model" '
+    def norm: if type == "array" then . elif type == "object" then [.] else [] end;
+    def lines: norm | map("\(.harness):\(.model // "")");
+    ([((.rules // []) | to_entries[]) | {ref: ("rule_" + ((.key + 1) | tostring)), e: (.value.use | lines)}]
+      + [{ref: "default", e: (.default | lines)}])
+    | map(select((.e | length) > 0)) as $r
+    | (($r | map(select(.e | index($hm))) | first | .ref)
+      // ($r | map(select(.e | map(split(":")[0]) | index($h))) | first | .ref)
+      // ($r | first | .ref)
+      // empty)' "$home/config/crew-dispatch.json") || return 0
+  [ -n "$ref" ] || return 0
+  if [ "$ref" = "default" ]; then
+    entries=$(jq -r '.default | (if type == "array" then . elif type == "object" then [.] else [] end) | .[] | "\(.harness):\(.model // "")"' "$home/config/crew-dispatch.json") || return 0
+  else
+    entries=$(jq -r --argjson n "${ref#rule_}" '((.rules // [])[$n - 1].use // null) | (if type == "array" then . elif type == "object" then [.] else [] end) | .[] | "\(.harness):\(.model // "")"' "$home/config/crew-dispatch.json") || return 0
+  fi
+  [ -n "$entries" ] || return 0
+  chosen="chosen: --harness $harness"
+  [ -z "$model" ] || chosen="$chosen --model $model"
+  [ -z "$effort" ] || chosen="$chosen --effort $effort"
+  [ -z "$account" ] || chosen="$chosen --claude-account $account"
+  candidates=""
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    eh=${entry%%:*}
+    entry_line="candidate: $entry provider=$eh remaining=50% spendPriority=10 runway=through_reset -> eligible: test proof"
+    candidates=${candidates:+$candidates$'\n'}$entry_line
+  done <<< "$entries"
+  override=""
+  printf '%s\n' "$entries" | grep -qxF "$harness:$model" || override="test launch uses a profile outside the dispatch rules"
+  write_test_dispatch_proof "$home" "$ref" "$candidates" "$chosen" "$override" "${ids[@]}"
+}
+
 run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
   shift 4
+  auto_test_dispatch_proof "$home" "$@"
   : > "$launchlog"
   # CLAUDE_CONFIG_DIR is forwarded onto claude launches by fm-spawn, so pin it
   # explicitly (empty by default) instead of leaking the invoking shell's value,
