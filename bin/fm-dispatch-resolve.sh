@@ -58,6 +58,7 @@ Output (stdout, TOON-style block):
     array_order: preference (first eligible candidate in array order)   (when declared)
     fallback: <runner-up rule taken when the picked rule missed its own floor>
     reason: <why the status is not clear>
+    preferred_provider: <family and preference or fallback decision, when applied>
     candidate: <harness>:<model> [account=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked|uncertain: <reason> | not eligible: <reason>
     profile: --harness <h> [--model <m>] [--effort <e>] [--claude-account <a>]     (status clear only)
   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
@@ -182,6 +183,7 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
   def account_error: "claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude";
   if type != "object" then "top-level value must be an object"
   elif has("array_order") and .array_order != "preference" then "array_order must be \"preference\" when present"
+  elif has("preferred_provider") and (provider_id(.preferred_provider) | not) then "preferred_provider must be a lowercase provider ID (for example codex)"
   elif has("rules") and (.rules | type) != "array" then "rules must be an array"
   elif any((.rules // [])[]; type != "object") then "each rule must be an object"
   elif any((.rules // [])[]; (.when | type) != "string" or (.when | length) == 0) then "each rule needs non-empty when"
@@ -572,8 +574,16 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
   elif ($sel.use | length) == 0 then $ev + {status: "escalate", reason: "no profiles configured for \($sel.source)", note: $sel.note, candidates: []}
   else
     (haiku_first($sel.use; $q) | map(evaluate(.))) as $cands |
+    ([$cands[] | select(.provider == $cfg.preferred_provider)]) as $family |
+    ([$family[] | select(.eligible)]) as $preferred |
+    (if ($preferred | length) > 0 then $preferred else $cands end) as $pool |
+    ($ev + (if $cfg.preferred_provider == null then {}
+      else {preferred_provider: ($cfg.preferred_provider + ": " +
+        (if ($family | length) == 0 then "not in matched profiles; preserve the selected rule"
+         elif ($preferred | length) > 0 then "prefer eligible family candidates"
+         else "fall back; every matched family candidate is ineligible" end))} end)) as $ev |
     if $cfg.array_order == "preference" then
-      ([$cands[] | select(.eligible)] | first) as $first |
+      ([$pool[] | select(.eligible)] | first) as $first |
       if $first == null then $ev + {status: "escalate", reason: "no eligible candidate in preference order", note: $sel.note, candidates: $cands}
       elif $first.floor_unverified then
         $ev + {status: "escalate", reason: "preferred candidate \($first.profile.harness):\($first.profile.model // "-") profile floor \($first.profile.floor.scope) is unverifiable", note: $sel.note, candidates: $cands}
@@ -581,9 +591,12 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         + (if $first.unranked then {unranked_note: "chosen candidate quota uncertain: \($first.reason)"} else {} end)
       end
     else
-      ([$cands[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
+      ([$pool[] | select(.eligible and ((.unranked // false) | not))]) as $elig |
       ([$cands[] | select(.unranked)]) as $unranked |
-      if ($elig | length) == 0 then $ev + {status: "escalate", reason: "no rankable eligible candidate", note: $sel.note, candidates: $cands}
+      if ($elig | length) == 0 then $ev + {status: "escalate",
+        reason: ("no rankable eligible candidate" +
+          (if ($preferred | length) > 0 then " in preferred provider \($cfg.preferred_provider); uncertainty does not authorize fallback" else "" end)),
+        note: $sel.note, candidates: $cands}
       else
         ($elig | max_by(.spendPriority)) as $best |
         ([$elig[] | select(.spendPriority == $best.spendPriority)] | length) as $ties |
@@ -611,6 +624,7 @@ TEXT=$(jq -r '
   (if .fallback then "  fallback: \(.fallback | flat)" else empty end),
   (if .reason then "  reason: \(.reason | flat)" else empty end),
   (if .note then "  note: \(.note | flat)" else empty end),
+  (if .preferred_provider then "  preferred_provider: \(.preferred_provider | flat)" else empty end),
   (if .unranked_note then "  note: \(.unranked_note | flat)" else empty end),
   (.candidates[]? | "  candidate: \(.profile.harness | flat):\(show(.profile.model))"
       + (if .profile.claude_account then "  account=\(.profile.claude_account | flat)" else "" end)
