@@ -4219,10 +4219,30 @@ test_capture_preserves_pane_read_failure() {
   status=$?
   [ "$status" -ne 0 ] || fail "capture should fail when pane read fails, got output '$out'"
   assert_contains "$(cat "$log")" "HERDR_SESSION=default"$'\x1f''status'$'\x1f''--json' \
-    "capture did not ensure the herdr server before reading the pane"
+    "capture did not check the herdr server before reading the pane"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' \
     "capture did not try to read the requested pane"
-  pass "fm_backend_herdr_capture: ensures the session and preserves pane read failure"
+  pass "fm_backend_herdr_capture: checks the session server and preserves pane read failure"
+}
+
+test_reads_on_stopped_session_never_start_a_server() {
+  local fn dir log resp fb out status
+  for fn in capture busy_state current_path; do
+    dir="$TMP_ROOT/stopped-read-$fn"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+    printf '{"client":{"version":"0.9.5","protocol":22},"server":{"running":false}}\n' > "$resp/1.out"
+    fb=$(make_herdr_fakebin "$dir")
+    out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+      bash -c '. "$0/bin/backends/herdr.sh"; "fm_backend_herdr_$1" stopped:w1:p2 40' "$ROOT" "$fn" 2>/dev/null )
+    status=$?
+    assert_not_contains "$(cat "$log")" $'\x1f''server' "$fn on a stopped session started a herdr server"
+    assert_not_contains "$(cat "$log")" $'\x1f''pane' "$fn on a stopped session still queried the pane"
+    case "$fn" in
+      capture) [ "$status" -ne 0 ] || fail "capture on a stopped session should fail, got '$out'" ;;
+      busy_state) [ "$out" = unknown ] || fail "busy_state on a stopped session should read unknown, got '$out'" ;;
+      current_path) [ -z "$out" ] || fail "current_path on a stopped session should be empty, got '$out'" ;;
+    esac
+  done
+  pass "herdr capture, busy_state, and current_path on a stopped session read as unreachable instead of starting its server"
 }
 
 test_send_key_normalizes_and_targets_pane() {
@@ -6553,6 +6573,7 @@ test_normalize_key
 test_capture_calls_pane_read
 test_capture_works_around_small_lines_bug
 test_capture_preserves_pane_read_failure
+test_reads_on_stopped_session_never_start_a_server
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort
 test_current_path_reads_cwd
