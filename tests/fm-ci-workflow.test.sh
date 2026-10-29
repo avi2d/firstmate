@@ -183,7 +183,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-PR_TIER_JOBS='lint invariants'
+PR_TIER_JOBS='lint invariants secrets'
 FAST_TIER_JOBS='test-coverage tests-timing-aggregate daily-test-issue'
 NORMAL_TIER_JOBS='tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr'
@@ -334,9 +334,11 @@ puts steps[index].fetch("timeout-minutes", "none")
 # FM_CI_SKIP_PUSH=1 empties only the push run, and FM_CI_SKIP_MACOS=1 removes
 # only the macOS job from the daily run. A "-" in the table means unset.
 test_fork_skip_variables_are_opt_in() {
-  local all pr daily event skip_push skip_macos expected want actual
+  local all pr push_gate daily event skip_push skip_macos expected want actual
   all=$(workflow_jobs | LC_ALL=C sort) || fail "could not list ci.yml jobs"
   pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
+  # Push runs the PR gate without the pull-request-only secrets scan.
+  push_gate=$(printf '%s\n' "$pr" | grep -vx secrets)
   daily=$(comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$pr"))
   printf '%s\n' "$all" | grep -qx macos-stock-bash \
     || fail "the macOS job is missing from ci.yml, so the table below would prove nothing"
@@ -345,6 +347,7 @@ test_fork_skip_variables_are_opt_in() {
     [ "$skip_macos" != - ] || skip_macos=
     case $expected in
       pr) want=$pr ;;
+      pushgate) want=$push_gate ;;
       daily) want=$daily ;;
       daily-but-macos) want=$(printf '%s\n' "$daily" | grep -vx macos-stock-bash) ;;
       none) want= ;;
@@ -355,12 +358,12 @@ test_fork_skip_variables_are_opt_in() {
     [ "$actual" = "$(printf '%s' "$want")" ] \
       || fail "$event with FM_CI_SKIP_PUSH=$skip_push FM_CI_SKIP_MACOS=$skip_macos must run $expected jobs"$'\n'"ran: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"wanted: $(printf '%s' "$want" | tr '\n' ' ')"
   done <<'TABLE'
-push                - - pr
+push                - - pushgate
 pull_request        - - pr
 push                1 - none
 pull_request        1 - pr
 pull_request        - 1 pr
-push                - 1 pr
+push                - 1 pushgate
 schedule            - - daily
 workflow_dispatch   - - daily
 schedule            - 1 daily-but-macos
@@ -369,19 +372,23 @@ TABLE
   pass "the fork skip variables change nothing unless set, and each skips only its own run or job"
 }
 
-# Pull request and push runs carry only the static gate, each capped at 10 minutes.
-test_pull_request_and_push_runs_carry_only_the_capped_static_gate() {
-  local pr event actual job
+# Pull request runs carry the capped static gate, and push runs carry it
+# without the pull-request-only secrets scan.
+test_pull_request_and_push_runs_carry_only_their_capped_gates() {
+  local pr push_gate event actual want job
   pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
+  # Push runs the PR gate without the pull-request-only secrets scan.
+  push_gate=$(printf '%s\n' "$pr" | grep -vx secrets)
   for event in pull_request push; do
     actual=$(jobs_running_under "$event" '' '' | LC_ALL=C sort) || fail "could not resolve the jobs $event runs"
-    [ "$actual" = "$pr" ] || fail "$event must run only the static gate ($(printf '%s' "$pr" | tr '\n' ' ')), ran: $(printf '%s' "$actual" | tr '\n' ' ')"
+    case $event in pull_request) want=$pr ;; push) want=$push_gate ;; esac
+    [ "$actual" = "$want" ] || fail "$event must run only its capped gate ($(printf '%s' "$want" | tr '\n' ' ')), ran: $(printf '%s' "$actual" | tr '\n' ' '))"
   done
   while read -r job; do
     [ "$(job_timeout "$job")" = 10 ] \
       || fail "$job must cap at 10 minutes on a pull request or push run, got $(job_timeout "$job")"
   done <<<"$pr"
-  pass "pull request and push runs carry only the static gate, each capped at 10 minutes"
+  pass "pull request and push runs carry only their capped gates"
 }
 
 # Only the failure issue job may write issues, and it must need every other daily
@@ -479,7 +486,7 @@ test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
 test_fork_skip_variables_are_opt_in
-test_pull_request_and_push_runs_carry_only_the_capped_static_gate
+test_pull_request_and_push_runs_carry_only_their_capped_gates
 test_daily_run_reports_failures_through_one_issue_job
 test_timing_aggregate_still_runs_after_a_failed_lane
 test_every_job_has_a_finite_timeout
