@@ -6,6 +6,12 @@ unset TYPESAFE_API_KEY
 OPENROUTER_API_KEY_PRIVATE=${OPENROUTER_API_KEY:-}
 export -n OPENROUTER_API_KEY_PRIVATE 2>/dev/null || true
 unset OPENROUTER_API_KEY
+OPENAI_API_KEY_PRIVATE=${OPENAI_API_KEY:-}
+export -n OPENAI_API_KEY_PRIVATE 2>/dev/null || true
+unset OPENAI_API_KEY
+DISPATCH_API_KEY_PRIVATE=${FM_DISPATCH_API_KEY:-}
+export -n DISPATCH_API_KEY_PRIVATE 2>/dev/null || true
+unset FM_DISPATCH_API_KEY
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -35,6 +41,9 @@ TS_BASE=https://api.typesafe.ai
 TS_TIMEOUT=10
 OR_BASE=https://openrouter.ai/api
 OR_TIMEOUT=10
+SO_TIMEOUT=10
+OA_BASE=https://api.openai.com
+OA_TIMEOUT=10
 DEFAULT_WHEN="No listed rule applies to this task."
 SIZE_HINT=' Judge size by the whole pull request a worker will merge for this brief, not only the core code: new or changed tests, fixtures, docs, schema and config all count, and so does a decision record where the repository keeps them. A new option, field, check or command carried through code, schema, docs and tests, a fix that must first be reproduced by a new test, or work across several source files usually changes more than 150 lines. A version bump, a pin, a release, a single setting flip, or copying an existing file or workflow usually changes far fewer.'
 
@@ -69,12 +78,14 @@ Output (stdout, TOON-style block):
   Every outcome exits 0 so an intake is never blocked by this tool.
   Exit 2 only for a usage or configuration error (unreadable brief, an
   existing unreadable rules file, malformed rules, missing jq, an unknown
-  provider, or OpenRouter without a model), which is actionable, never
-  selected around.
+  provider, a selected non-typesafe provider without a model, or systemone
+  without a valid base URL), which is actionable, never selected around.
 
 Environment:
-  FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, and OPENROUTER_API_KEY are read from
-    the environment or $FM_HOME/.env.
+  FM_DISPATCH_PROVIDER, FM_DISPATCH_MODEL, OPENROUTER_API_KEY, OPENAI_API_KEY,
+    and FM_DISPATCH_API_KEY are read from the environment or $FM_HOME/.env.
+  FM_DISPATCH_BASE_URL is required for the systemone provider; the systemone
+    key is optional and the request carries no Authorization header without it.
   TYPESAFE_API_KEY is fetched through bws at run time (bin/fm-bws-lib.sh).
 USAGE
 }
@@ -124,8 +135,36 @@ case "$DISPATCH_PROVIDER" in
       exit 0
     fi
     ;;
-  *) die "unknown FM_DISPATCH_PROVIDER: $DISPATCH_PROVIDER (expected typesafe or openrouter)" ;;
+  systemone)
+    [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=systemone"
+    DISPATCH_BASE_URL=${FM_DISPATCH_BASE_URL:-}
+    [ -n "$DISPATCH_BASE_URL" ] || DISPATCH_BASE_URL=$(fmx_env_get FM_DISPATCH_BASE_URL "$FM_HOME/.env")
+    [ -n "$DISPATCH_BASE_URL" ] || die "FM_DISPATCH_BASE_URL required when FM_DISPATCH_PROVIDER=systemone"
+    case "$DISPATCH_BASE_URL" in
+      http://?*|https://?*) ;;
+      *) die "FM_DISPATCH_BASE_URL must start with http:// or https://" ;;
+    esac
+    DISPATCH_BASE_URL=${DISPATCH_BASE_URL%/}
+    # The key is optional: a local host may need none.
+    [ -n "$DISPATCH_API_KEY_PRIVATE" ] || DISPATCH_API_KEY_PRIVATE=$(fmx_env_get FM_DISPATCH_API_KEY "$FM_HOME/.env")
+    ;;
+  openai)
+    [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openai"
+    [ -n "$OPENAI_API_KEY_PRIVATE" ] || OPENAI_API_KEY_PRIVATE=$(fmx_env_get OPENAI_API_KEY "$FM_HOME/.env")
+    if [ -z "$OPENAI_API_KEY_PRIVATE" ]; then
+      echo "dispatch-resolve: off (OPENAI_API_KEY absent from the environment and $FM_HOME/.env)" >&2
+      exit 0
+    fi
+    ;;
+  *) die "unknown FM_DISPATCH_PROVIDER: $DISPATCH_PROVIDER (expected typesafe, openrouter, systemone, or openai)" ;;
 esac
+case "$DISPATCH_PROVIDER" in
+  typesafe) ENDPOINT=$TS_BASE/v1/systemone TIMEOUT=$TS_TIMEOUT KEY_PRIVATE=$TYPESAFE_API_KEY_PRIVATE ;;
+  openrouter) ENDPOINT=$OR_BASE/alpha/decisions TIMEOUT=$OR_TIMEOUT KEY_PRIVATE=$OPENROUTER_API_KEY_PRIVATE ;;
+  systemone) ENDPOINT=$DISPATCH_BASE_URL/v1/systemone TIMEOUT=$SO_TIMEOUT KEY_PRIVATE=$DISPATCH_API_KEY_PRIVATE ;;
+  openai) ENDPOINT=$OA_BASE/v1/decisions TIMEOUT=$OA_TIMEOUT KEY_PRIVATE=$OPENAI_API_KEY_PRIVATE ;;
+esac
+export -n KEY_PRIVATE 2>/dev/null || true
 
 # ---- inputs --------------------------------------------------------------------
 [ -n "$BRIEF" ] || die "brief file required (see --help)"
@@ -263,8 +302,10 @@ never_send_off() {
   exit 0
 }
 
-# Checks every string the request carries, so no text reaches the network
-# unchecked. grep's own stderr is discarded because it can echo the pattern.
+# Checks the endpoint and every string the final request body carries,
+# including strings inside JSON text such as OpenAI's serialized input, so no
+# text reaches the network unchecked. grep's own stderr is discarded because
+# it can echo the pattern.
 never_send_check() {
   local list value n=0 rc
   [ -e "$NEVER_SEND_PATH" ] || [ -L "$NEVER_SEND_PATH" ] || return 0
@@ -272,7 +313,9 @@ never_send_check() {
     || never_send_off "$NEVER_SEND_PATH is not a readable regular file"
   # Collapse whitespace runs on both sides so a value the brief wraps across
   # lines or spaces differently still matches
-  jq -r '.. | strings | gsub("\\s+"; " ")' <<<"$REQUEST" > "$SEND_TEXT" 2>/dev/null \
+  jq -r --arg endpoint "$ENDPOINT" '
+    $endpoint, (.. | strings | ., (try (fromjson | .. | strings) catch empty))
+    | gsub("\\s+"; " ")' <<<"$BODY" > "$SEND_TEXT" 2>/dev/null \
     || never_send_off "could not extract the request text to check"
   list=$(jq -Rr 'gsub("\\s+"; " ")' "$NEVER_SEND_PATH" 2>/dev/null) \
     || never_send_off "could not read $NEVER_SEND_PATH"
@@ -350,20 +393,33 @@ else
         }
       }
     }')
+  # OpenAI's Decisions API takes text input and a named choices array, so the
+  # same state and Choice question are rewritten into its shape.
+  if [ "$DISPATCH_PROVIDER" = openai ]; then
+    BODY=$(jq -c '{
+      model,
+      input: (.state | tojson),
+      questions: [{
+        type: "choice", name: "rule", instructions: .questions.rule.instructions,
+        choices: [.questions.rule.criteria | to_entries[] | {value: .key, description: .value}]
+      }]
+    }' <<<"$REQUEST") || emit_error "could not build the OpenAI request"
+  else
+    BODY=$REQUEST
+  fi
   never_send_check
   T0=$(fm_timing_now_ms)
   ATTEMPT=1
   while :; do
-    if [ "$DISPATCH_PROVIDER" = openrouter ]; then
-      HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$OR_TIMEOUT" -o "$RESP_FILE" -w '%{http_code}' \
-        -X POST "$OR_BASE/alpha/decisions" -H 'Content-Type: application/json' \
-        -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$OPENROUTER_API_KEY_PRIVATE") \
+    if [ -n "$KEY_PRIVATE" ]; then
+      HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
+        -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
+        -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$KEY_PRIVATE") \
         --data-binary @- 2>/dev/null) || HTTP=000
     else
-    HTTP=$(printf '%s' "$REQUEST" | curl -sS --max-time "$TS_TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
-      -X POST "$TS_BASE/v1/systemone" -H 'Content-Type: application/json' \
-      -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE") \
-      --data-binary @- 2>/dev/null) || HTTP=000
+      HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
+        -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
+        --data-binary @- 2>/dev/null) || HTTP=000
     fi
     # Only transient statuses merit the one retry; anything else would repeat the same answer.
     case "$HTTP" in
@@ -376,6 +432,35 @@ else
   UPSTREAM_MS=$(grep -i '^x-envoy-upstream-service-time:' "$RESP_HEADERS" 2>/dev/null | tail -n 1 | tr -d '\r' | sed 's/^[^:]*:[[:space:]]*//;s/[[:space:]]*$//')
   [ "$HTTP" = 200 ] || emit_error "http $HTTP after ${LAT_MS} ms${UPSTREAM_MS:+ (upstream ${UPSTREAM_MS} ms)}: $(head -c 200 "$RESP_FILE" 2>/dev/null | tr '\n' ' ')"
 fi
+  # Map an OpenAI answer back to the System One shape the shared validation
+  # below checks. A refusal, a missing or duplicated rule answer, or duplicated
+  # option values is not a rule Choice answer. Usage is display-only, so it is
+  # kept only when both token counts are numeric.
+  if [ "$DISPATCH_PROVIDER" = openai ]; then
+    jq -e '
+      (.answers | type) == "array" and
+      ([.answers[] | select(type == "object" and .name == "rule")]) as $rule |
+      ($rule | length) == 1 and $rule[0].type == "choice" and
+      ($rule[0].probabilities | type) == "array" and
+      all($rule[0].probabilities[]; type == "object" and (.value | type) == "string") and
+      ($rule[0].probabilities | map(.value) | length) == ($rule[0].probabilities | map(.value) | unique | length)' \
+      "$RESP_FILE" >/dev/null 2>&1 || emit_error "response is not a rule Choice answer"
+    if ! jq --arg model "$DISPATCH_MODEL" '
+      ([.answers[] | select(type == "object" and .name == "rule")][0]) as $a |
+      {
+        model: (if (.model | type) == "string" then .model else $model end),
+        answers: {rule: {
+          choice: $a.choice, confidence: $a.confidence,
+          probabilities: ($a.probabilities | map({key: .value, value: .probability}) | from_entries)
+        }}
+      }
+      + (if (.usage.input_tokens | type) == "number" and (.usage.output_tokens | type) == "number"
+         then {usage: {input_tokens: .usage.input_tokens, output_tokens: .usage.output_tokens}} else {} end)' \
+      "$RESP_FILE" > "$RESP_FILE.mapped" 2>/dev/null || ! mv "$RESP_FILE.mapped" "$RESP_FILE"; then
+      rm -f "$RESP_FILE.mapped"
+      emit_error "response is not a rule Choice answer"
+    fi
+  fi
 jq -e --argjson scout "$SCOUT_BRIEF" --slurpfile rules "$RULES" '
     ((($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) | map(select(. != "rule_5" or $scout == 1))) + ["default"] | sort) as $choices |
     (.answers.rule.choice | type) == "string" and
