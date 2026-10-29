@@ -646,7 +646,10 @@ Workspace and tab ids support verification and cleanup but are not inferred from
 
 ### Named server and session routing
 
-The adapter starts and polls a named server before workspace, tab, pane, or agent calls.
+The adapter starts and polls a named server before a call that creates, sends to, or closes a workspace, tab, or pane.
+A read-only probe never starts one, whether it reads a capture, busy state, current path, composer state, agent state, or existence.
+A server started by a probe would be the probe's own child, inherit its identity and open pipes, and keep a caller reading the probe's output waiting for the server's lifetime.
+With the recorded session's server stopped, those probes report the endpoint unreachable instead.
 Every Herdr invocation goes through `fm_backend_herdr_cli`, which sets the environment and passes an explicit trailing `--session <name>`.
 An environment variable alone is not reliable when another Herdr server is running.
 
@@ -1045,6 +1048,7 @@ tests/fm-herdr-pi-fullscreen-scrollbar-live-e2e.test.sh
 tests/fm-herdr-restore-isolation-live-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
 tests/fm-control-herdr-smoke.test.sh
+tests/fm-crew-state-herdr-no-server-e2e.test.sh
 tests/fm-herdr-session-cleanup.test.sh
 tests/fm-herdr-session-cleanup-e2e.test.sh
 tests/fm-herdr-groups.test.sh
