@@ -1759,7 +1759,7 @@ test_ship_and_scout_name_the_per_task_scratch_root() {
 }
 
 test_scout_brief_requires_references_section() {
-  local home id brief
+  local home id brief teardown_pattern
   home="$TMP_ROOT/references-home"
   mkdir -p "$home/data"
   id="brief-references-scout"
@@ -1767,10 +1767,13 @@ test_scout_brief_requires_references_section() {
     || fail "fm-brief.sh scout scaffold exited non-zero"
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "scout brief was not scaffolded"
-  assert_grep 'End the report with a `## References` heading listing the sources' "$brief" \
+  assert_grep "End the report with a \`## References\` heading listing the sources" "$brief" \
     "scout brief must end the report with the References heading the teardown check accepts"
-  printf '## References\n' | grep -Eq '^#{1,6}[[:space:]]+References[[:space:]]*$' \
-    || fail "the brief heading does not satisfy the teardown check pattern"
+  teardown_pattern=$(sed -n "s/.*grep -Eq '\([^']*\)' \"\$REPORT\".*/\\1/p" "$ROOT/bin/fm-teardown.sh" | head -1)
+  [ -n "$teardown_pattern" ] \
+    || fail "could not read the teardown References pattern from bin/fm-teardown.sh"
+  printf '## References\n' | grep -Eq "$teardown_pattern" \
+    || fail "the brief heading does not satisfy the teardown check"
   pass "fm-brief.sh: scout brief ends the report with the teardown-accepted References heading"
 }
 
