@@ -422,7 +422,7 @@ test_quota_gate_records_override_and_unmatched_skip() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex --model gpt-5)
   status=$?
   expect_code 0 "$status" "unmatched profile should skip the quota gate: $out"
-  assert_contains "$out" 'quota gate skipped: no dispatch profile matches' "unmatched launch should explain the skip"
+  assert_contains "$out" 'warning: this launch was not quota-checked: no profile in config/crew-dispatch.json matches harness=codex model=gpt-5 effort=default; report it to the captain' "unmatched launch should warn that it ran unchecked"
   assert_grep 'quota_gate=skipped:no matching dispatch profile' "$HOME_DIR/state/$id.meta" "skip reason must be recorded in task metadata"
 
   id=quota-config-absent-z7
