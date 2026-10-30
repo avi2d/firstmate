@@ -1910,6 +1910,10 @@ Firstmate resolves the rule's profile object or array under `AGENTS.md` section 
 - A resolver clear result satisfies the check on its own.
 - An explicit per-task captain override stays possible with the stated reason recorded on an `override` line in that same selection record.
 - A stated override keeps the full candidate accounting and waives only the requirement that the chosen profile is one of those candidates.
+- The same spawn, and any relaunch, checks quota against every profile whose harness, model, and effort match the launch, and refuses one exhausted now or below a profile `floor` unless `--quota-override-reason` states why.
+- A profile without `claude_account` also matches a launch that passes `--claude-account`, and is checked against that account's clauth reading.
+- A launch that matches no profile prints a warning naming the launch and records `quota_gate=skipped:no matching dispatch profile` instead of refusing, because a stated captain override may choose a profile outside the rules.
+  Firstmate reports that warning to the captain.
 - Relaunches reuse the recorded task and its original proof.
 - Batch spawns satisfy the harness requirement with a shared `--harness`, and each pair needs its own proof under its own task data directory.
 - Secondmate spawns are exempt and resolve through `config/secondmate-harness` using the registered mate's id; see [Choose the secondmate harness](#choose-the-secondmate-harness) for pin precedence and legacy parsing.

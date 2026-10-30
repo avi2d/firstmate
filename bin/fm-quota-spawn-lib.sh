@@ -8,7 +8,7 @@ fm_quota_spawn_profiles() {
       map(select(.harness == $harness and
         ((has("model") | not) or .model == $model) and
         ((has("effort") | not) or .effort == $effort) and
-        (.claude_account // "") == $account)))
+        ((.claude_account // "") as $named | $named == "" or $named == $account))))
   ' "$path"
 }
 
@@ -41,7 +41,7 @@ fm_quota_spawn_gate_note() {
 }
 fm_quota_spawn_gate() {
   local config=$1 harness=$2 model=$3 effort=$4 account=$5 override=$6
-  local profiles count snapshot='' profile provider lane floor row assessment blocked=0 unmeasured=0 result reason reset account_name clauth_snapshot=''
+  local profiles count snapshot='' profile provider lane floor row assessment blocked=0 unmeasured=0 result reason reset clauth_snapshot=''
   FM_QUOTA_GATE_NOTE=
   if [ ! -e "$config" ] && [ ! -L "$config" ]; then
     FM_QUOTA_GATE_NOTE='skipped:no dispatch profile file'
@@ -59,7 +59,8 @@ fm_quota_spawn_gate() {
   count=$(jq 'length' <<< "$profiles")
   if [ "$count" -eq 0 ]; then
     FM_QUOTA_GATE_NOTE='skipped:no matching dispatch profile'
-    printf '%s\n' 'quota gate skipped: no dispatch profile matches the selected launch' >&2
+    printf 'warning: this launch was not quota-checked: no profile in config/crew-dispatch.json matches harness=%s model=%s effort=%s%s; report it to the captain unless a recorded captain override chose this profile\n' \
+      "$harness" "$model" "$effort" "${account:+ claude_account=$account}" >&2
     return 0
   fi
   local resolved_profiles='[]'
@@ -85,8 +86,8 @@ fm_quota_spawn_gate() {
     provider=$(jq -r '._quota_provider' <<< "$profile")
     lane=$(jq -rn --arg h "$harness" --arg m "$model" "$FM_QUOTA_ROW_JQ"'quota_lane($h; $m)')
     floor=$(jq -c '.floor // null' <<< "$profile")
-    account_name=$(jq -r '.claude_account // empty' <<< "$profile")
-    if [ -n "$account_name" ]; then
+    # A matched profile names either no account or this launch's account, so the launch's account is the one whose quota applies.
+    if [ -n "$account" ]; then
       if [ -z "$clauth_snapshot" ]; then
         clauth_snapshot=$(fm_clauth_status 2>/dev/null) || {
           FM_QUOTA_GATE_NOTE='skipped:clauth reading unavailable'
@@ -94,10 +95,10 @@ fm_quota_spawn_gate() {
           return 0
         }
       fi
-      row=$(jq -c --arg account "$account_name" "$FM_CLAUTH_ROW_JQ"'clauth_row(.; $account)' <<< "$clauth_snapshot")
+      row=$(jq -c --arg account "$account" "$FM_CLAUTH_ROW_JQ"'clauth_row(.; $account)' <<< "$clauth_snapshot")
       if jq -e 'has("unusable")' <<< "$row" >/dev/null; then
         FM_QUOTA_GATE_NOTE='skipped:clauth account reading unusable'
-        printf 'quota gate skipped: clauth cannot verify account %s\n' "$account_name" >&2
+        printf 'quota gate skipped: clauth cannot verify account %s\n' "$account" >&2
         return 0
       fi
     else
