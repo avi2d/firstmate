@@ -151,6 +151,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
@@ -196,6 +197,55 @@ apply_session_host() {  # <artifact>
   export LAVISH_AXI_HOST LAVISH_AXI_PORT
 }
 
+# Sets LISTENER_ARTIFACT and LISTENER_REPLY_FILE. A recorded --state-dir is
+# exported as LAVISH_AXI_STATE_DIR, so the session lookup and every lavish-axi
+# call after it reach the board's own server whatever the caller's environment.
+parse_listener_args() {  # <artifact> [--state-dir <dir>] [--agent-reply-file <path>]
+  local state_dir=''
+  LISTENER_ARTIFACT=${1-}
+  LISTENER_REPLY_FILE=''
+  [ -n "$LISTENER_ARTIFACT" ] || usage
+  shift
+  while [ "$#" -gt 0 ]; do
+    [ "$#" -ge 2 ] || usage
+    case "$1" in
+      --state-dir)
+        [ -z "$state_dir" ] && [ -n "$2" ] || usage
+        state_dir=$2
+        ;;
+      --agent-reply-file)
+        [ -z "$LISTENER_REPLY_FILE" ] && [ -n "$2" ] || usage
+        LISTENER_REPLY_FILE=$2
+        ;;
+      *) usage ;;
+    esac
+    shift 2
+  done
+  if [ -n "$state_dir" ]; then
+    LAVISH_AXI_STATE_DIR=$state_dir
+    export LAVISH_AXI_STATE_DIR
+  fi
+}
+
+recorded_state_dir() {  # <source-id>
+  local file
+  file="$(fm_procevent_registry_dir "$STATE")/$1.source"
+  [ -f "$file" ] && [ ! -L "$file" ] || return 0
+  sed -n '/^argv:$/,$p' "$file" | awk 'previous == "--state-dir" { print; exit } { previous = $0 }'
+}
+
+# The registration is the only place a restart learns which server owns the
+# board, so an explicit LAVISH_AXI_STATE_DIR wins, then the dir the board was
+# last armed with, then Lavish's own default.
+board_state_dir() {  # <source-id>
+  local dir=${LAVISH_AXI_STATE_DIR-}
+  [ -n "$dir" ] || dir=$(recorded_state_dir "$1")
+  [ -n "$dir" ] || dir="$HOME/.lavish-axi"
+  case "$dir" in *$'\n'*) die "Lavish state dir cannot contain newlines" ;; esac
+  [ -d "$dir" ] || die "Lavish state dir does not exist: $dir"
+  (cd -- "$dir" && pwd) || die "cannot resolve the Lavish state dir: $dir"
+}
+
 lavish_reply_compatible() {
   local status=0
   "$FM_ROOT/bin/fm-bootstrap.sh" lavish-reply-compatible >/dev/null 2>&1 || status=$?
@@ -231,7 +281,7 @@ cmd_source_id() {
 }
 
 cmd_arm() {
-  local artifact='' task='' reply_file='' id real owner listening
+  local artifact='' task='' reply_file='' id real owner listening state_dir
   local -a listener=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -260,7 +310,8 @@ cmd_arm() {
   id=$(cmd_source_id "$artifact") || exit 1
   real=$(perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$artifact" 2>/dev/null) \
     || die "cannot resolve the artifact path: $artifact"
-  listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real")
+  state_dir=$(board_state_dir "$id") || exit 1
+  listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real" --state-dir "$state_dir")
   [ -z "$reply_file" ] || listener+=(--agent-reply-file "$reply_file")
   if [ -n "$task" ]; then
     FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-procevent.sh" register-task lavish "$id" "$task" -- \
@@ -299,10 +350,16 @@ cmd_arm() {
 }
 
 cmd_deliver_reply() {
-  [ "$#" -eq 4 ] && [ "$1" = poll ] && [ "$3" = --agent-reply-file ] || usage
+  local artifact reply_file
+  [ "${1-}" = poll ] || usage
+  shift
+  parse_listener_args "$@"
+  artifact=$LISTENER_ARTIFACT
+  reply_file=$LISTENER_REPLY_FILE
+  [ -n "$reply_file" ] || usage
   lavish_reply_compatible || exit 3
-  apply_session_host "$2"
-  post_lavish_reply "$2" "$4"
+  apply_session_host "$artifact"
+  post_lavish_reply "$artifact" "$reply_file"
 }
 
 cmd_retire() {
@@ -403,15 +460,12 @@ poll_iteration_floor_wait() {
 }
 
 cmd_poll() {
-  local artifact=${1-} delay attempt=0 response cleanup_command rc filter_rc iteration_started
-  local pipeline_status reply_file=''
+  local artifact delay attempt=0 response cleanup_command rc filter_rc iteration_started
+  local pipeline_status reply_file
   local reply_text='' reply_pending=0
-  [ -n "$artifact" ] || usage
-  if [ "$#" -eq 3 ] && [ "${2-}" = --agent-reply-file ]; then
-    reply_file=$3
-  elif [ "$#" -ne 1 ]; then
-    usage
-  fi
+  parse_listener_args "$@"
+  artifact=$LISTENER_ARTIFACT
+  reply_file=$LISTENER_REPLY_FILE
   command -v lavish-axi >/dev/null 2>&1 || die "lavish-axi is not installed"
   delay=$(poll_retry_delay) || exit 1
   response=$(mktemp "${TMPDIR:-/tmp}/fm-lavish-poll.XXXXXX") || die "cannot stage the poll response"
