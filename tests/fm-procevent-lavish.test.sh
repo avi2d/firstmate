@@ -93,4 +93,81 @@ touch "$LAVISH_RELEASE"
 PATH="$LAVISH_BIN:$PATH" FM_HOME="$UNOPENED_HOME" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$UNOPENED_ART" >/dev/null 2>&1 || true
 
+SD_ROOT="$TMP_ROOT/state-dir"
+SD_HOME="$SD_ROOT/home"
+SD_CUSTOM="$SD_ROOT/custom"
+mkdir -p "$SD_HOME/.lavish-axi" "$SD_CUSTOM"
+SD_BIN=$(fm_fakebin "$SD_ROOT/lavish-stub")
+cat > "$SD_BIN/lavish-axi" <<SH
+#!/usr/bin/env bash
+[ "\${1-}" != --version ] || { printf '0.1.81\n'; exit 0; }
+log="$SD_ROOT/polls-\$(basename "\${2-}" .html).log"
+printf 'port=%s state_dir=%s\n' "\$LAVISH_AXI_PORT" "\${LAVISH_AXI_STATE_DIR-unset}" >> "\$log"
+if [ "\$(wc -l < "\$log")" -le 2 ]; then printf 'session:\n  status: browser_disconnected\n'; exit 0; fi
+while [ ! -e "$SD_ROOT/release" ]; do
+  [ "\$SECONDS" -lt "\${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ] || exit 75
+  sleep 0.05
+done
+SH
+chmod +x "$SD_BIN/lavish-axi"
+sd_session() {  # <store-dir> <artifact> <port>
+  perl -MJSON::PP -MCwd=realpath -e '
+    my ($path, $artifact, $url) = @ARGV;
+    my $real = realpath($artifact) // die "missing fixture artifact";
+    my $state = { sessions => {} };
+    if (-f $path) { open my $in, "<", $path or die $!; local $/; $state = decode_json(<$in>); }
+    $state->{sessions}{$real} = { key => "k", file => $real, status => "open", url => $url };
+    open my $out, ">", $path or die $!;
+    print $out encode_json($state);
+  ' "$1/state.json" "$2" "http://127.0.0.1:$3/session/0123456789abcdef"
+}
+sd_run() { env -u LAVISH_AXI_STATE_DIR HOME="$SD_HOME" PATH="$SD_BIN:$PATH" "$@"; }
+sd_poll() {  # <board-name> <poll-number> [command retried until that poll arrives...]
+  local log="$SD_ROOT/polls-$1.log" n=$2 _
+  shift 2
+  for _ in $(seq 100); do
+    [ "$({ wc -l < "$log"; } 2>/dev/null || echo 0)" -ge "$n" ] && { sed -n "${n}p" "$log"; return 0; }
+    [ "$#" -eq 0 ] || "$@" >/dev/null 2>&1 || true
+    sleep 0.2
+  done
+  printf 'board %s never reached poll %s\n' "$1" "$n"
+}
+
+SD_ART="$SD_ROOT/own.html"
+printf '<h1>own server</h1>\n' > "$SD_ART"
+sd_session "$SD_HOME/.lavish-axi" "$SD_ART" 14001
+sd_session "$SD_CUSTOM" "$SD_ART" 14002
+SD_FM="$SD_ROOT/fm-home"
+new_home "$SD_FM"
+sd_run LAVISH_AXI_STATE_DIR="$SD_CUSTOM" FM_HOME="$SD_FM" \
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$SD_ART" >/dev/null \
+  || fail "arm against a non-default Lavish server failed"
+assert_equals "port=14002 state_dir=$SD_CUSTOM" "$(sd_poll own 1)" \
+  "the first listener did not poll the board's own server"
+assert_equals "port=14002 state_dir=$SD_CUSTOM" "$(sd_poll own 2 sd_run FM_HOME="$SD_FM" "$ROOT/bin/fm-procevent.sh" reconcile)" \
+  "a listener restart without LAVISH_AXI_STATE_DIR polled the default server"
+pass "a listener restart without LAVISH_AXI_STATE_DIR re-arms against the board's own server, not the default"
+
+sd_run FM_HOME="$SD_FM" "$ROOT/bin/fm-procevent-lavish.sh" arm "$SD_ART" >/dev/null \
+  || fail "a hand re-arm without LAVISH_AXI_STATE_DIR failed"
+assert_equals "port=14002 state_dir=$SD_CUSTOM" "$(sd_poll own 3)" \
+  "a hand re-arm without LAVISH_AXI_STATE_DIR polled the default server"
+pass "a hand re-arm without LAVISH_AXI_STATE_DIR keeps the board's recorded server instead of the default"
+
+SD_OLD_ART="$SD_ROOT/old.html"
+printf '<h1>pre-fix registration</h1>\n' > "$SD_OLD_ART"
+sd_session "$SD_HOME/.lavish-axi" "$SD_OLD_ART" 14001
+sd_session "$SD_CUSTOM" "$SD_OLD_ART" 14002
+SD_OLD_ID=$("$ROOT/bin/fm-procevent-lavish.sh" source-id "$SD_OLD_ART")
+pe "$SD_FM" register lavish "$SD_OLD_ID" -- \
+  "$ROOT/bin/fm-procevent-lavish.sh" poll "$SD_OLD_ART" >/dev/null
+sd_run FM_HOME="$SD_FM" "$ROOT/bin/fm-procevent.sh" ensure-listening "$SD_OLD_ID" >/dev/null 2>&1 || true
+assert_equals "port=14001 state_dir=unset" "$(sd_poll old 1)" \
+  "a registration without a recorded state dir left the default server"
+pass "a registration without a recorded state dir still polls the default server"
+
+touch "$SD_ROOT/release"
+sd_run FM_HOME="$SD_FM" "$ROOT/bin/fm-procevent-lavish.sh" retire "$SD_ART" >/dev/null 2>&1 || true
+sd_run FM_HOME="$SD_FM" "$ROOT/bin/fm-procevent-lavish.sh" retire "$SD_OLD_ART" >/dev/null 2>&1 || true
+
 printf '\nall procevent-lavish tests passed\n'
