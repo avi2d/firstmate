@@ -349,12 +349,8 @@ test_quota_gate_refuses_exhausted_now() {
   pass "quota gate refuses exhausted windows at their own reset, choosing the latest when several limit"
 }
 
-test_quota_gate_uses_the_named_clauth_account() {
-  local rec id out status
-  id=quota-cla-account-z6
-  rec=$(make_spawn_case quota-cla-account claude "$id")
-  read_case_record "$rec"
-  printf '%s\n' '{"default":{"harness":"claude","model":"sonnet","provider":"claude","claude_account":"work","floor":{"scope":"all_models","min_percent":20}}}' > "$HOME_DIR/config/crew-dispatch.json"
+make_clauth_work_account_fixture() {
+  local seven_day_used=$1
   mkdir -p "$CASE_DIR/claude-work"
   printf '%s\n' "work $CASE_DIR/claude-work" > "$HOME_DIR/config/claude-accounts"
   cat > "$FAKEBIN_DIR/claude" <<'SH'
@@ -362,16 +358,49 @@ test_quota_gate_uses_the_named_clauth_account() {
 exit 0
 SH
   chmod +x "$FAKEBIN_DIR/claude"
-  cat > "$FAKEBIN_DIR/clauth" <<'SH'
+  cat > "$FAKEBIN_DIR/clauth" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '{"active_profile":"work","profiles":[{"name":"work","auth_status":"ok","fetch_status":"OK","stale":false,"windows":[{"label":"5h","utilization_pct":10},{"label":"7d","utilization_pct":95}]}]}'
+printf '%s\n' '{"active_profile":"work","profiles":[{"name":"work","auth_status":"ok","fetch_status":"OK","stale":false,"windows":[{"label":"5h","utilization_pct":10},{"label":"7d","utilization_pct":$seven_day_used}]}]}'
 SH
   chmod +x "$FAKEBIN_DIR/clauth"
+}
+
+test_quota_gate_uses_the_named_clauth_account() {
+  local rec id out status
+  id=quota-cla-account-z6
+  rec=$(make_spawn_case quota-cla-account claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"default":{"harness":"claude","model":"sonnet","provider":"claude","claude_account":"work","floor":{"scope":"all_models","min_percent":20}}}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_clauth_work_account_fixture 95
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness claude --model sonnet --claude-account work)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn below the named clauth account floor should refuse"
   assert_contains "$out" 'below 20%' "quota gate should assess the named clauth account"
   pass "quota gate uses the configured Claude account reading"
+}
+
+test_quota_gate_does_not_skip_an_accountless_profile_launched_on_an_account() {
+  local rec id out status
+  id=quota-spawn-account-z9
+  rec=$(make_spawn_case quota-spawn-account claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"rules":[{"when":"big work","use":[{"harness":"claude","model":"sonnet","effort":"high","provider":"claude","floor":{"scope":"all_models","min_percent":20}}]}]}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_clauth_work_account_fixture 95
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness claude --model sonnet --effort high --claude-account work)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a profile without an account launched on an exhausted account should refuse: $out"
+  assert_contains "$out" 'below 20%' "quota gate should assess the launch's own account against the profile floor"
+
+  id=quota-spawn-account-ok-z10
+  rec=$(make_spawn_case quota-spawn-account-ok claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"rules":[{"when":"big work","use":[{"harness":"claude","model":"sonnet","effort":"high","provider":"claude","floor":{"scope":"all_models","min_percent":20}}]}]}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_clauth_work_account_fixture 40
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness claude --model sonnet --effort high --claude-account work)
+  status=$?
+  expect_code 0 "$status" "a profile without an account launched on a healthy account should proceed: $out"
+  assert_grep 'quota_gate=checked:available' "$HOME_DIR/state/$id.meta" "the account launch must record a real quota check"
+  pass "quota gate checks the launch's account when the matching profile names none"
 }
 
 test_quota_gate_records_override_and_unmatched_skip() {
@@ -3011,6 +3040,7 @@ test_quota_gate_refuses_profile_below_floor_with_reset
 test_quota_gate_uses_strictest_matching_floor
 test_quota_gate_refuses_exhausted_now
 test_quota_gate_uses_the_named_clauth_account
+test_quota_gate_does_not_skip_an_accountless_profile_launched_on_an_account
 test_quota_gate_records_override_and_unmatched_skip
 test_claude_launch_brief_publishes_record_doorbell
 test_claude_secondmate_launch_brief_publishes_into_its_own_home
