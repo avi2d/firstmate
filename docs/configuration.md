@@ -3102,6 +3102,9 @@ A long-polling external process is registered as a *source* through its adapter,
 **Open the Lavish artifact first**
 
 Before arming any Lavish source, open its artifact with `lavish-axi` so the saved session identifies the board's server; reply and poll attempts derive their host and port from that session and refuse missing or invalid session evidence before posting or consuming a staged worker reply.
+`arm` records the board's Lavish state directory in the registration, so a listener restart or a later re-arm reaches the board's own server whatever the restarting environment sets.
+The recorded directory is `LAVISH_AXI_STATE_DIR` when set, otherwise the directory the board's existing registration recorded, otherwise `~/.lavish-axi`.
+A registration with no recorded directory keeps using `LAVISH_AXI_STATE_DIR` or `~/.lavish-axi`, so its owner arms a board served from another state directory once with `LAVISH_AXI_STATE_DIR` set to record it.
 
 **Retry interrupted Lavish polls**
 
