@@ -168,6 +168,12 @@ assert_logged_gh_merge() {
 add_gh_mocks() {
   local case_dir=$1 head=$2
   write_github_live_json "$case_dir" "$head"
+  printf '%s\n' '{"data":{"repository":{"pullRequest":{"stackEntry":null,"stack":null}}}}' \
+    > "$case_dir/github-stack.json"
+  printf '%s\n' "{\"status\":\"pending\",\"details\":{\"message\":\"Merge request enqueued.\",\"uuid\":\"async-uuid-1\",\"merge_method\":\"squash\",\"merge_action\":\"direct_merge\",\"expected_head_sha\":\"$head\",\"bypass_rules\":false}}" \
+    > "$case_dir/github-async-put.json"
+  printf '%s\n' "{\"status\":\"merged\",\"details\":{\"message\":\"Pull request was merged.\",\"sha\":\"$head\"}}" \
+    > "$case_dir/github-async-poll.json"
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
@@ -261,6 +267,16 @@ case "${1:-} ${2:-}" in
       echo 'error: could not reach the GitHub API' >&2
       exit 1
     fi
+    case " $* " in
+      *stackEntry*)
+        if [ -f "${FM_TEST_GH_STACK_FAIL:-}" ]; then
+          cat "${FM_TEST_GH_STACK_FAIL}" >&2
+          exit 1
+        fi
+        cat "$FM_TEST_GH_STACK_JSON"
+        exit 0
+        ;;
+    esac
     cat "$FM_TEST_GH_OUTCOME"
     exit 0
     ;;
@@ -276,6 +292,38 @@ case "${1:-} ${2:-}" in
     # The required-check reads: the branch itself, and its rules read without
     # the merge-queue filter the queue reader below applies.
     case " $* " in
+      *" repos/"*"/pulls/"*"/merge-async/"*)
+        if [ -n "${FM_TEST_GH_ASYNC_POLL_SEQUENCE:-}" ]; then
+          call_n=$(( $(cat "$FM_TEST_GH_ASYNC_POLL_CALLS" 2>/dev/null || echo 0) + 1 ))
+          printf '%s\n' "$call_n" > "$FM_TEST_GH_ASYNC_POLL_CALLS"
+          call_m=$(sed -n "${call_n}p" "$FM_TEST_GH_ASYNC_POLL_SEQUENCE")
+          [ -n "$call_m" ] || call_m=$(tail -n1 "$FM_TEST_GH_ASYNC_POLL_SEQUENCE")
+          printf '%s\n' "$call_m"
+        else
+          cat "$FM_TEST_GH_ASYNC_POLL"
+        fi
+        exit 0
+        ;;
+      *" repos/"*"/pulls/"*"/merge-async"*)
+        case " $* " in
+          *"-X PUT"*)
+            input='' prev=''
+            for token in "$@"; do
+              [ "$prev" = --input ] && input=$token
+              prev=$token
+            done
+            if [ -n "$input" ] && [ -n "${FM_TEST_GH_ASYNC_REQUEST:-}" ]; then
+              cat "$input" > "$FM_TEST_GH_ASYNC_REQUEST" 2>/dev/null || true
+            fi
+            if [ -f "${FM_TEST_GH_ASYNC_PUT_FAIL:-}" ]; then
+              cat "${FM_TEST_GH_ASYNC_PUT_FAIL}"
+              exit 1
+            fi
+            cat "$FM_TEST_GH_ASYNC_PUT"
+            exit 0
+            ;;
+        esac
+        ;;
       *" repos/"*"/pulls/"*"/files"*)
         [ ! -e "$FM_TEST_GH_FILES_FAIL" ] || exit 1
         case "$*" in
@@ -722,6 +770,14 @@ run_pr_merge() {
   FM_TEST_GH_MERGE_RC_FILE="$case_dir/github-merge-rc" \
   FM_TEST_GH_MERGE_OUTPUT="$(cat "$case_dir/github-merge-output" 2>/dev/null || true)" \
   FM_TEST_GH_GRAPHQL_FAIL="$case_dir/github-graphql-fail" \
+  FM_TEST_GH_STACK_JSON="$case_dir/github-stack.json" \
+  FM_TEST_GH_STACK_FAIL="$case_dir/github-stack-fail" \
+  FM_TEST_GH_ASYNC_PUT="$case_dir/github-async-put.json" \
+  FM_TEST_GH_ASYNC_PUT_FAIL="$case_dir/github-async-put-fail" \
+  FM_TEST_GH_ASYNC_POLL="$case_dir/github-async-poll.json" \
+  FM_TEST_GH_ASYNC_POLL_SEQUENCE="${FM_TEST_GH_ASYNC_POLL_SEQUENCE:-}" \
+  FM_TEST_GH_ASYNC_POLL_CALLS="$case_dir/async-poll-calls" \
+  FM_TEST_GH_ASYNC_REQUEST="$case_dir/github-async-request.json" \
   FM_TEST_GH_RULES_FAIL="$case_dir/github-rules-fail" \
   FM_TEST_GH_RULES_FAIL_BODY="$case_dir/github-rules-fail-body" \
   FM_TEST_GH_BRANCH="$case_dir/github-branch.json" \
@@ -752,6 +808,61 @@ run_pr_merge() {
     return 1
   fi
   return "$rc"
+}
+
+write_github_stack_json() {
+  local case_dir=$1 position='' size=2 number=12 bottom='' lower_state='OPEN'
+  [ $# -ge 2 ] || position=none
+  [ $# -ge 2 ] && position=$2
+  [ $# -ge 3 ] && size=$3
+  [ $# -ge 4 ] && number=$4
+  [ $# -ge 5 ] && bottom=$5
+  [ $# -ge 6 ] && lower_state=$6
+  if [ "$position" = none ]; then
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"stackEntry":null,"stack":null}}}}' \
+      > "$case_dir/github-stack.json"
+    return 0
+  fi
+  if [ -z "$bottom" ]; then
+    if [ "$position" -eq 1 ]; then
+      bottom=9
+    else
+      bottom=8
+    fi
+  fi
+  cat > "$case_dir/github-stack.json" <<JSON
+{"data":{"repository":{"pullRequest":{"stackEntry":{"position":$position},"stack":{"number":$number,"size":$size,"entries":{"nodes":[{"position":1,"pullRequest":{"number":$bottom,"state":"$lower_state"}},{"position":$position,"pullRequest":{"number":9}}]}}}}}}
+JSON
+}
+
+write_github_async_put() {
+  local case_dir=$1 status=pending expected='' method=squash action=direct_merge message=''
+  [ $# -ge 2 ] && status=$2
+  [ $# -ge 3 ] && expected=$3
+  [ $# -ge 4 ] && method=$4
+  [ $# -ge 5 ] && action=$5
+  [ $# -ge 6 ] && message=$6
+  [ -n "$expected" ] || expected=$(cat "$case_dir/github-head")
+  if [ -z "$message" ]; then
+    case "$status" in
+      pending) message='Merge request enqueued.' ;;
+      merged) message='Pull request is already merged.' ;;
+      failed) message='Pull request head branch was modified.' ;;
+      *) message='Something went wrong.' ;;
+    esac
+  fi
+  printf '%s\n' "{\"status\":\"$status\",\"details\":{\"message\":\"$message\",\"uuid\":\"async-uuid-1\",\"merge_method\":\"$method\",\"merge_action\":\"$action\",\"expected_head_sha\":\"$expected\",\"bypass_rules\":false}}" \
+    > "$case_dir/github-async-put.json"
+}
+
+write_github_async_poll_sequence() {
+  local case_dir=$1 status
+  shift
+  : > "$case_dir/async-poll-sequence"
+  for status in "$@"; do
+    printf '%s\n' "{\"status\":\"$status\",\"details\":{\"message\":\"poll answer\",\"sha\":\"5225225225225225225225225225225225225225\"}}" \
+      >> "$case_dir/async-poll-sequence"
+  done
 }
 
 write_github_outcome() {
@@ -5477,3 +5588,372 @@ test_uncompilable_security_path_pattern_fails_closed
 test_config_security_paths_replace_the_default_list
 test_gitlab_security_path_diff_is_refused
 test_forgejo_security_path_diff_is_refused
+
+test_stacked_bottom_is_not_left_to_the_refused_legacy_merge() {
+  local case_dir rc request_sha request_method request_action
+  case_dir=$(make_case stacked-bottom-async)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  write_github_outcome "$case_dir" MERGED true false main
+  write_github_stack_json "$case_dir" 1 2 12
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stacked-bottom-async: a stack bottom must merge"
+  assert_grep 'is the bottom of native stack 12' "$case_dir/stderr" \
+    "stacked-bottom-async: the run did not say it was merging a stack bottom"
+  assert_grep 'verified: https://github.com/example/repo/pull/9 is merged (state=MERGED, merged=true, isInMergeQueue=false)' "$case_dir/stdout" \
+    "stacked-bottom-async: the merge was not reported as landed"
+  assert_grep 'pr=https://github.com/example/repo/pull/9' "$case_dir/state/task-x1.meta" \
+    "stacked-bottom-async: pr= was not recorded"
+  assert_grep 'merge-async' "$case_dir/gh.log" \
+    "stacked-bottom-async: the asynchronous merge API was never called"
+  [ -z "$(grep -F 'pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-bottom-async: the legacy merge ran for a stack member"
+  request_sha=$("$JQ_BIN" -r .sha "$case_dir/github-async-request.json")
+  [ "$request_sha" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ] \
+    || fail "stacked-bottom-async: the async request bound $request_sha instead of the verified head"
+  request_method=$("$JQ_BIN" -r .merge_method "$case_dir/github-async-request.json")
+  [ "$request_method" = squash ] \
+    || fail "stacked-bottom-async: the async request used $request_method instead of squash"
+  request_action=$("$JQ_BIN" -r .merge_action "$case_dir/github-async-request.json")
+  [ "$request_action" = direct_merge ] \
+    || fail "stacked-bottom-async: the async request used $request_action instead of direct_merge"
+  pass "a stack bottom merges through the asynchronous merge API with every guard intact"
+}
+
+test_stacked_landed_lowers_are_not_refused_as_members() {
+  local case_dir rc
+  case_dir=$(make_case stacked-landed-lowers-bottom)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 1234567890abcdef1234567890abcdef12345678
+  write_github_outcome "$case_dir" MERGED true false main
+  write_github_stack_json "$case_dir" 2 2 12 8 MERGED
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stacked-landed-lowers: a member with landed lowers must merge"
+  assert_grep 'every pull request below it has already landed' "$case_dir/stderr" \
+    "stacked-landed-lowers: the run did not say the lowers had landed"
+  assert_grep 'merge-async' "$case_dir/gh.log" \
+    "stacked-landed-lowers: the asynchronous merge API was never called"
+  [ -z "$(grep -F 'pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-landed-lowers: the legacy merge ran"
+  pass "a member whose lowers have all landed merges as the bottom"
+}
+
+test_stacked_non_bottom_refuses_naming_bottom() {
+  local case_dir rc
+  case_dir=$(make_case stacked-non-bottom-refused)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  write_github_stack_json "$case_dir" 2 2 12 8
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-non-bottom: a non-bottom member must refuse"
+  assert_grep 'it is position 2 of 2 in its stack' "$case_dir/stderr" \
+    "stacked-non-bottom: the refusal did not name the stack position"
+  assert_grep 'https://github.com/example/repo/pull/8 first' "$case_dir/stderr" \
+    "stacked-non-bottom: the refusal did not name the bottom pull request"
+  [ -z "$(grep -F 'merge-async' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-non-bottom: the asynchronous merge API was called"
+  [ -z "$(grep -F 'pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-non-bottom: the legacy merge ran for a refused stack member"
+  pass "a non-bottom stack member refuses and names the bottom pull request"
+}
+
+test_stacked_red_check_refuses_before_async() {
+  local case_dir rc head
+  head=cccccccccccccccccccccccccccccccccccccccc
+  case_dir=$(make_case stacked-red-check-refused)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" ci
+  write_github_stack_json "$case_dir" 1 2 12
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-red-check: a red check must refuse"
+  assert_grep "check 'ci' is not green" "$case_dir/stderr" \
+    "stacked-red-check: the refusal did not name the red check"
+  [ -z "$(grep -F 'merge-async' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-red-check: the asynchronous merge API was called"
+  pass "a red check refuses before any stacked merge is attempted"
+}
+
+test_stacked_failed_head_refuses() {
+  local case_dir rc head
+  head=dddddddddddddddddddddddddddddddddddddddd
+  case_dir=$(make_case stacked-failed-head-refused)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_outcome "$case_dir" OPEN false false main
+  write_github_stack_json "$case_dir" 1 2 12
+  write_github_async_put "$case_dir" failed
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-failed-head: a failed async request must refuse"
+  assert_grep 'the asynchronous merge request failed: Pull request head branch was modified' "$case_dir/stderr" \
+    "stacked-failed-head: the refusal did not carry the server reason"
+  assert_no_grep 'verified: https://github.com/example/repo/pull/9 is merged' "$case_dir/stdout" \
+    "stacked-failed-head: a failed request was reported as landed"
+  assert_grep 'pr=https://github.com/example/repo/pull/9' "$case_dir/state/task-x1.meta" \
+    "stacked-failed-head: pr= was not recorded before the forge call"
+  pass "a failed asynchronous merge request refuses with the server reason"
+}
+
+test_stacked_pending_poll_exhausts_with_poll_armed() {
+  local case_dir rc
+  case_dir=$(make_case stacked-poll-exhausted)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  write_github_stack_json "$case_dir" 1 2 12
+  write_github_async_poll_sequence "$case_dir" pending pending pending
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  FM_TEST_GH_ASYNC_POLL_SEQUENCE="$case_dir/async-poll-sequence" \
+  FM_PR_GITHUB_ASYNC_POLL_ATTEMPTS=3 FM_PR_GITHUB_ASYNC_POLL_DELAY=0 \
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-poll-exhausted: an unreadable merge must refuse"
+  assert_grep 'is still pending after 3 polls' "$case_dir/stderr" \
+    "stacked-poll-exhausted: the refusal did not count the polls"
+  assert_grep 'the merge poll remain recorded' "$case_dir/stderr" \
+    "stacked-poll-exhausted: the refusal did not keep the recovery pointers"
+  assert_grep 'pr=https://github.com/example/repo/pull/9' "$case_dir/state/task-x1.meta" \
+    "stacked-poll-exhausted: pr= was not recorded before the forge call"
+  pass "an asynchronous merge that never turns terminal refuses with its poll record intact"
+}
+
+test_stacked_away_refuses_async() {
+  local case_dir rc
+  case_dir=$(make_case stacked-away-refused)
+  mkdir -p "$case_dir/wt" "$case_dir/home"
+  add_gh_mocks "$case_dir" ffffffffffffffffffffffffffffffffffffffff
+  write_github_stack_json "$case_dir" 1 2 12
+  write_away_record "$case_dir"
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 2 "$rc" "stacked-away: an away stacked merge must refuse"
+  assert_grep 'only a synchronous merge may run under it' "$case_dir/stderr" \
+    "stacked-away: the refusal did not say why the async path is closed while away"
+  [ -z "$(grep -F 'merge-async' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-away: the asynchronous merge API was called while away"
+  pass "an away stacked merge refuses before handing anything to the forge"
+}
+
+test_stacked_head_mismatch_refuses() {
+  local case_dir rc head
+  head=1111111111111111111111111111111111111111
+  case_dir=$(make_case stacked-head-mismatch-refused)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_outcome "$case_dir" OPEN false false main
+  write_github_stack_json "$case_dir" 1 2 12
+  write_github_async_put "$case_dir" pending 2222222222222222222222222222222222222222
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-head-mismatch: a rebound head must refuse"
+  assert_grep 'bound head 2222222222222222222222222222222222222222, not the verified 1111111111111111111111111111111111111111' "$case_dir/stderr" \
+    "stacked-head-mismatch: the refusal did not name both heads"
+  pass "an async request bound to another head refuses without merging"
+}
+
+test_stacked_unreadable_stack_is_not_refused_outright() {
+  local case_dir rc
+  case_dir=$(make_case stacked-unreadable-fallback)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 3333333333333333333333333333333333333333
+  printf '%s\n' 'error: the stack read blew up' > "$case_dir/github-stack-fail"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stacked-unreadable: an unreadable stack must still merge"
+  assert_grep 'the native stack state for https://github.com/example/repo/pull/9 could not be read' "$case_dir/stderr" \
+    "stacked-unreadable: the run did not say the stack read failed"
+  assert_logged_gh_merge "$case_dir" 9 example/repo --squash
+  [ -z "$(grep -F 'merge-async' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-unreadable: the asynchronous merge API was called"
+  pass "an unreadable stack read falls back to the legacy merge, which the forge refuses for a stack member"
+}
+
+test_stacked_old_server_is_not_sent_to_the_async_api() {
+  local case_dir rc head
+  head=4444444444444444444444444444444444444444
+  case_dir=$(make_case stacked-old-server-legacy)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_outcome "$case_dir" MERGED true false main
+  printf '%s\n' "gh: Field 'stackEntry' doesn't exist on type 'PullRequest'" > "$case_dir/github-stack-fail"
+  : > "$case_dir/gh-axi.log"
+  : > "$case_dir/gh.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stacked-old-server: a server without stacks must merge"
+  assert_logged_gh_merge "$case_dir" 9 example/repo --squash
+  [ -z "$(grep -F 'merge-async' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-old-server: the asynchronous merge API was called"
+  pass "a server without stack fields keeps the legacy merge path"
+}
+
+test_stacked_conflicting_pending_request_is_not_adopted() {
+  local case_dir rc head
+  head=5555555555555555555555555555555555555555
+  case_dir=$(make_case stacked-conflict-refused)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_outcome "$case_dir" OPEN false false main
+  write_github_stack_json "$case_dir" 1 2 12
+  write_github_async_put "$case_dir" pending "" rebase
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-conflict: a conflicting pending request must refuse"
+  assert_grep 'requests method rebase, not squash' "$case_dir/stderr" \
+    "stacked-conflict: the refusal did not name the conflicting method"
+  assert_no_grep 'verified: https://github.com/example/repo/pull/9 is merged' "$case_dir/stdout" \
+    "stacked-conflict: a conflicting request was reported as landed"
+  pass "a pending request with conflicting options is refused, not adopted"
+}
+
+test_stacked_extra_title_is_not_dropped_from_the_request() {
+  local case_dir rc head
+  head=6666666666666666666666666666666666666666
+  case_dir=$(make_case stacked-extra-title)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_outcome "$case_dir" MERGED true false main
+  write_github_stack_json "$case_dir" 1 2 12
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 -- --subject 'Custom title' --body 'Custom body' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stacked-extra-title: titled extras must merge"
+  [ "$("$JQ_BIN" -r .commit_title "$case_dir/github-async-request.json")" = 'Custom title' ] \
+    || fail "stacked-extra-title: the async request lost the subject"
+  [ "$("$JQ_BIN" -r .commit_message "$case_dir/github-async-request.json")" = 'Custom body' ] \
+    || fail "stacked-extra-title: the async request lost the body"
+  pass "subject and body extras reach the asynchronous merge request"
+}
+
+test_stacked_extra_body_file_refuses_unreadable() {
+  local case_dir rc
+  case_dir=$(make_case stacked-body-file-refused)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 7777777777777777777777777777777777777777
+  write_github_stack_json "$case_dir" 1 2 12
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 -- --body-file /nonexistent-fm-stack-test-body \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-body-file: an unreadable body file must refuse"
+  assert_grep 'cannot be read' "$case_dir/stderr" \
+    "stacked-body-file: the refusal did not say the body file cannot be read"
+  [ -z "$(grep -F 'merge-async' "$case_dir/gh.log" || true)" ] \
+    || fail "stacked-body-file: the asynchronous merge API was called"
+  pass "an unreadable body file refuses before any stacked merge is attempted"
+}
+
+test_stacked_auto_does_not_pin_direct_merge() {
+  local case_dir rc
+  case_dir=$(make_case stacked-auto-default)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 8888888888888888888888888888888888888888
+  write_github_outcome "$case_dir" MERGED true false main
+  write_github_stack_json "$case_dir" 1 2 12
+  : > "$case_dir/gh-axi.log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/9 --attended-override -- --auto \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stacked-auto: an auto merge must merge"
+  [ "$("$JQ_BIN" -r .merge_action "$case_dir/github-async-request.json")" = default ] \
+    || fail "stacked-auto: the async request did not use the default action"
+  pass "an auto stacked merge uses the endpoint default action"
+}
+
+test_stacked_bottom_is_not_left_to_the_refused_legacy_merge
+test_stacked_non_bottom_refuses_naming_bottom
+test_stacked_landed_lowers_are_not_refused_as_members
+test_stacked_red_check_refuses_before_async
+test_stacked_failed_head_refuses
+test_stacked_pending_poll_exhausts_with_poll_armed
+test_stacked_away_refuses_async
+test_stacked_head_mismatch_refuses
+test_stacked_unreadable_stack_is_not_refused_outright
+test_stacked_old_server_is_not_sent_to_the_async_api
+test_stacked_conflicting_pending_request_is_not_adopted
+test_stacked_extra_title_is_not_dropped_from_the_request
+test_stacked_extra_body_file_refuses_unreadable
+test_stacked_auto_does_not_pin_direct_merge
