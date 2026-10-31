@@ -2552,6 +2552,8 @@ Arm the check once per home with `bin/fm-fork-drift-check.sh arm`.
 - The script reads both histories from a commits-only fetch at merge time.
 - An upstream sync merges as a merge commit when no method is named, and an explicit squash or rebase is refused before anything is recorded.
 - A pull request into a listed fork whose histories cannot be read is refused unless `--merge` is passed.
+- A GitHub pull request into a repository not listed here, merged with no method named, is refused when it looks like a sync: its title or head branch says sync, or a commit headline merges another remote, an upstream, or another repository's URL.
+  The refusal names this file and `--merge`, and a pull request with an explicit method merges as named.
 - Every other pull request keeps the script's default merge method.
 
 ## Local copy drift

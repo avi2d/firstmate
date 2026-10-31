@@ -118,6 +118,7 @@ case "${1:-} ${2:-}" in
         printf '%s\n' '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
         ;;
       *headRefOid*) printf '%s\n' 1111111111111111111111111111111111111111 ;;
+      *" --json title"*) printf '%s\n' '{"title":"feat: held change"}' ;;
     esac
     ;;
   "pr merge") printf 'merged:\n  number: %s\n  status: ok\n' "${3:-}" ;;

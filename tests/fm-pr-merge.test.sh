@@ -970,6 +970,77 @@ test_unclassifiable_fork_pull_request_refuses_unless_merged() {
   pass "fm-pr-merge refuses a fork pull request it cannot classify unless asked for a merge commit"
 }
 
+write_github_sync_signals() {
+  local case_dir=$1 title=$2 branch=$3 commits
+  shift 3
+  commits=$(jq -cn '$ARGS.positional | map({messageHeadline: .})' --args "$@")
+  jq -c --arg t "$title" --arg b "$branch" --argjson c "$commits" \
+    '.title = $t | .headRefName = $b | .commits = $c' \
+    "$case_dir/github-view.json" > "$case_dir/github-view.json.new"
+  mv "$case_dir/github-view.json.new" "$case_dir/github-view.json"
+}
+
+test_unregistered_sync_is_refused_not_squashed() {
+  local case_dir rc signal title branch headline
+  for signal in title branch remote-tracking pull-url upstream-merge; do
+    title='feat: task change' branch=fm/repo-change headline='feat: task change'
+    case "$signal" in
+      title) title='chore: sync upstream main' ;;
+      branch) branch=fm/pi-claude-bridge-sync-upstream-4601750 ;;
+      remote-tracking) headline="Merge remote-tracking branch 'upstream/main'" ;;
+      pull-url) headline="Merge branch 'main' of https://github.com/upstream-org/repo" ;;
+      upstream-merge) headline='Merge upstream/main (87f67d1..4601750)' ;;
+    esac
+    case_dir=$(make_case "unregistered-sync-$signal")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" 1616161616161616161616161616161616161616
+    write_github_sync_signals "$case_dir" "$title" "$branch" "$headline"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/16 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "unregistered-sync-$signal: an unregistered sync merged with no method named"
+    assert_grep "$case_dir/home/config/fork-upstream.json" "$case_dir/stderr" \
+      "unregistered-sync-$signal: the refusal did not name the fork registry"
+    assert_grep '--merge' "$case_dir/stderr" \
+      "unregistered-sync-$signal: the refusal did not name --merge"
+    assert_no_grep 'pr merge ' "$case_dir/gh.log" \
+      "unregistered-sync-$signal: the forge was asked to merge (squash) an unregistered sync"
+    assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" \
+      "unregistered-sync-$signal: the refused merge recorded pr="
+  done
+
+  for title in 'fix: async handler' 'feat: merge settings'; do
+    case_dir=$(make_case "unregistered-not-sync-${title//[^a-z]/}")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" 1717171717171717171717171717171717171717
+    write_github_sync_signals "$case_dir" "$title" fm/repo-change "$title" \
+      "Merge remote-tracking branch 'origin/main' into fm/repo-change" \
+      "Merge branch 'main' of github.com:example/repo"
+    set +e
+    run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/17 \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 0 "$rc" "unregistered-not-sync: '$title' was refused as a sync"
+    assert_logged_gh_merge "$case_dir" 17 example/repo --squash
+  done
+
+  case_dir=$(make_case unregistered-sync-explicit-squash)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 1818181818181818181818181818181818181818
+  write_github_sync_signals "$case_dir" 'chore: sync upstream main' fm/repo-sync-upstream
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/18 -- --squash \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "unregistered-sync-explicit-squash: an explicit method should keep today's behavior"
+  assert_logged_gh_merge "$case_dir" 18 example/repo --squash
+  pass "fm-pr-merge refuses, not squashes, an unregistered upstream sync unless a method is named"
+}
+
 # A push after the classification read could turn the head into a sync the
 # squash default would then flatten, so the classified head must be the one
 # merged.
@@ -3161,6 +3232,7 @@ test_upstream_sync_merges_as_a_merge_commit
 test_upstream_sync_refuses_squash_and_rebase
 test_non_sync_pull_requests_keep_the_squash_default
 test_unclassifiable_fork_pull_request_refuses_unless_merged
+test_unregistered_sync_is_refused_not_squashed
 test_head_moved_after_classification_refuses
 test_merge_failure_propagates_after_recording
 test_github_open_unqueued_outcome_refuses

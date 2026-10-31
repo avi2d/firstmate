@@ -155,6 +155,10 @@ case "${1:-} ${2:-}" in
         printf '%s\n' "{\"state\":\"OPEN\",\"isDraft\":false,\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"baseRefName\":\"main\",\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"name\":\"ci\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}]}"
         exit 0
         ;;
+      *" --json title"*)
+        printf '%s\n' '{"title":"feat: enterprise change"}'
+        exit 0
+        ;;
       *" --json isDraft "*)
         printf '%s\n' "{\"isDraft\":${FM_TEST_GH_DRAFT:-false}}"
         exit 0
@@ -203,6 +207,9 @@ case " $* " in
     ;;
   *" api repos/"*"/branches/"*)
     printf '%s\n' '{"name":"main","protected":false}'
+    ;;
+  *" api repos/"*"/pulls/"*"/files?"*)
+    printf '%s\n' '[]'
     ;;
   *" api repos/"*"/pulls/"*)
     printf '%s\n' "{\"state\":\"open\",\"user\":{\"login\":\"author\"},\"head\":{\"sha\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\"},\"draft\":false,\"mergeable\":true,\"merged_at\":null}"

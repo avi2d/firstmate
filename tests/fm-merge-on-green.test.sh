@@ -11,7 +11,7 @@ HEAD_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 HEAD_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
 write_view() {  # <case> <head> <rollup-json> [draft] [mergeable] [head-branch] [url]
-  printf '{"state":"OPEN","isDraft":%s,"mergeable":"%s","mergeStateStatus":"CLEAN","headRefOid":"%s","headRefName":"%s","baseRefName":"main","url":"%s","statusCheckRollup":%s}\n' \
+  printf '{"state":"OPEN","isDraft":%s,"title":"feat: task change","mergeable":"%s","mergeStateStatus":"CLEAN","headRefOid":"%s","headRefName":"%s","baseRefName":"main","url":"%s","statusCheckRollup":%s}\n' \
     "${4:-false}" "${5:-MERGEABLE}" "$2" "${6:-fm/task-x1}" "${7:-$URL}" "$3" > "$1/view.json"
 }
 
