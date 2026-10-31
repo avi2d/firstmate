@@ -1468,6 +1468,508 @@ refuse_github_queue_while_away() {
   return 2
 }
 
+FM_PR_GITHUB_STACK=unknown
+FM_PR_GITHUB_STACK_NUMBER=
+FM_PR_GITHUB_STACK_SIZE=
+FM_PR_GITHUB_STACK_POSITION=
+FM_PR_GITHUB_STACK_BOTTOM_PR=
+
+# Whether the pull request is a member of a GitHub native stack. A stack
+# member cannot merge through gh pr merge: the server refuses its GraphQL
+# merge with "must be merged using the asynchronous merge REST API". Only
+# the bottom of a stack merges here, because merging any other member also
+# lands every open pull request below it, which this run did not verify.
+# A member whose lowers have all landed counts as the bottom: merging it
+# lands nothing else.
+# Sets FM_PR_GITHUB_STACK to none, bottom, member, or unknown.
+github_detect_stack() {
+  local response fields line total=0 named=0
+  local stack='' position='' number='' size='' bottom='' landed=''
+  FM_PR_GITHUB_STACK=unknown
+  FM_PR_GITHUB_STACK_NUMBER=
+  FM_PR_GITHUB_STACK_SIZE=
+  FM_PR_GITHUB_STACK_POSITION=
+  FM_PR_GITHUB_STACK_BOTTOM_PR=
+  if ! response=$(gh api graphql \
+    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){stackEntry{position}stack{number size entries(first:100){nodes{position pullRequest{number state}}}}}}}' \
+    -F "owner=$PR_OWNER" -F "repo=$PR_REPO" -F "number=$PR_NUMBER" 2>&1) \
+    || [ -z "$response" ]; then
+    case "$response" in
+      # A server whose schema has no stack fields has no stacks either, so
+      # the pull request keeps the legacy merge path. Any other read
+      # failure refuses rather than guessing.
+      *stackEntry*"doesn't exist"*|*stack*"doesn't exist"*)
+        FM_PR_GITHUB_STACK=none
+        return 0
+        ;;
+    esac
+    echo "warning: the native stack state for $URL could not be read; merging through the legacy path, which the forge refuses for a stack member" >&2
+    return 1
+  fi
+  if ! fields=$(printf '%s' "$response" | jq -r '
+      .data.repository.pullRequest as $pr
+      | if ($pr | type) != "object" then error("pull request is missing")
+        elif ($pr.stackEntry // null) == null and ($pr.stack // null) == null then
+          "stack=none", "position=", "number=", "size=", "bottom=", "landed="
+        elif ($pr.stackEntry | type) != "object" or ($pr.stackEntry.position | type) != "number" then
+          error("stack position is unreadable")
+        else
+          ($pr.stackEntry.position) as $pos
+          | "stack=member",
+            ("position=" + ($pos | tostring)),
+            ("number=" + (if ($pr.stack // null) == null then ""
+              elif ($pr.stack.number | type) == "number" then ($pr.stack.number | tostring)
+              else error("stack number is unreadable") end)),
+            ("size=" + (if ($pr.stack // null) == null then ""
+              elif ($pr.stack.size | type) == "number" then ($pr.stack.size | tostring)
+              else error("stack size is unreadable") end)),
+            ("bottom=" + (if ($pr.stack.entries.nodes? // null | type) != "array" then ""
+              else ([$pr.stack.entries.nodes[]
+                | select((.position | type) == "number" and .position == 1)
+                | (.pullRequest.number? // empty)
+                | select(type == "number")] | first // "" | tostring) end)),
+            ([$pr.stack.entries.nodes? // [] | .[]
+              | select((.position | type) == "number" and .position < $pos)
+              | (.pullRequest.state? // "")] | . as $lowers
+              | ("landed=" + (if ($lowers | length) > 0
+                  and (([$lowers[] | select(. == "MERGED" or . == "CLOSED")] | length) == ($lowers | length))
+                then "true" else "false" end)))
+        end' 2>/dev/null); then
+    echo "warning: the native stack state for $URL could not be read; merging through the legacy path, which the forge refuses for a stack member" >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    total=$((total + 1))
+    case "$line" in
+      stack=*) stack=${line#stack=} ;;
+      position=*) position=${line#position=} ;;
+      number=*) number=${line#number=} ;;
+      size=*) size=${line#size=} ;;
+      bottom=*) bottom=${line#bottom=} ;;
+      landed=*) landed=${line#landed=} ;;
+      *) continue ;;
+    esac
+    named=$((named + 1))
+  done <<FIELDS
+$fields
+FIELDS
+  if [ "$named" -ne 6 ] || [ "$total" -ne 6 ]; then
+    echo "warning: the native stack state for $URL could not be read; merging through the legacy path, which the forge refuses for a stack member" >&2
+    return 1
+  fi
+  if [ "$stack" = none ]; then
+    FM_PR_GITHUB_STACK=none
+    return 0
+  fi
+  if [ "$stack" != member ]; then
+    echo "warning: the native stack state for $URL could not be read; merging through the legacy path, which the forge refuses for a stack member" >&2
+    return 1
+  fi
+  case "$position" in
+    ''|*[!0-9]*)
+      echo "warning: the native stack state for $URL could not be read; merging through the legacy path, which the forge refuses for a stack member" >&2
+      return 1
+      ;;
+  esac
+  FM_PR_GITHUB_STACK_NUMBER=$number
+  FM_PR_GITHUB_STACK_SIZE=$size
+  FM_PR_GITHUB_STACK_POSITION=$position
+  FM_PR_GITHUB_STACK_BOTTOM_PR=$bottom
+  if [ "$position" -eq 1 ]; then
+    FM_PR_GITHUB_STACK=bottom
+  elif [ "$landed" = true ]; then
+    # Every pull request below this one has already landed, so merging it
+    # lands nothing else: it is the bottom in every way that matters.
+    FM_PR_GITHUB_STACK=bottom
+  else
+    FM_PR_GITHUB_STACK=member
+  fi
+}
+
+FM_PR_GITHUB_ASYNC_METHOD=squash
+FM_PR_GITHUB_ASYNC_ACTION=direct_merge
+FM_PR_GITHUB_ASYNC_TITLE=
+FM_PR_GITHUB_ASYNC_BODY=
+
+# Extra forge arguments a stacked merge understands. The asynchronous merge
+# endpoint takes the method, the bound head, and optionally a commit title
+# and message; anything without an equivalent there is refused rather than
+# silently dropped. Sets FM_PR_GITHUB_ASYNC_TITLE and FM_PR_GITHUB_ASYNC_BODY.
+github_stacked_extra_args() {
+  local arg expect=''
+  FM_PR_GITHUB_ASYNC_TITLE=
+  FM_PR_GITHUB_ASYNC_BODY=
+  for arg in "$@"; do
+    if [ -n "$expect" ]; then
+      case "$expect" in
+        title) FM_PR_GITHUB_ASYNC_TITLE=$arg ;;
+        body) FM_PR_GITHUB_ASYNC_BODY=$arg ;;
+        bodyfile)
+          case "$arg" in
+            -|"")
+              echo "error: --body-file for a stacked merge names a file; nothing was merged" >&2
+              return 1
+              ;;
+          esac
+          if [ ! -r "$arg" ]; then
+            echo "error: --body-file '$arg' for a stacked merge cannot be read; nothing was merged" >&2
+            return 1
+          fi
+          FM_PR_GITHUB_ASYNC_BODY=$(cat "$arg") || return 1
+          ;;
+      esac
+      expect=
+      continue
+    fi
+    case "$arg" in
+      --merge|--squash|--rebase|-m|-s|-r|--method|--method=*|--auto|--auto=*|--disable-auto) ;;
+      -t|--subject) expect=title ;;
+      --subject=*) FM_PR_GITHUB_ASYNC_TITLE=${arg#--subject=} ;;
+      -b|--body) expect=body ;;
+      --body=*) FM_PR_GITHUB_ASYNC_BODY=${arg#--body=} ;;
+      -F|--body-file) expect=bodyfile ;;
+      --body-file=*)
+        if ! FM_PR_GITHUB_ASYNC_BODY=$(cat "${arg#--body-file=}"); then
+          echo "error: --body-file '${arg#--body-file=}' for a stacked merge cannot be read; nothing was merged" >&2
+          return 1
+        fi
+        ;;
+      *)
+        echo "error: extra merge argument '$arg' has no equivalent for a stacked merge (a stacked merge takes --merge/--squash/--rebase/--method, --auto, and --subject/--body/--body-file); nothing was merged" >&2
+        return 1
+        ;;
+    esac
+  done
+  if [ -n "$expect" ]; then
+    echo "error: a stacked merge argument is missing its value; nothing was merged" >&2
+    return 1
+  fi
+}
+
+# The merge options a stacked merge carries to the asynchronous merge
+# endpoint. The method mirrors the synchronous default: an upstream sync
+# still merges as a merge commit, a named method still wins, otherwise
+# squash. A plain merge acts directly so a queue requirement still surfaces
+# its retry; --auto takes the endpoint default, which uses a merge queue
+# when one is configured and merges directly otherwise.
+github_stacked_merge_options() {
+  local method
+  FM_PR_GITHUB_ASYNC_METHOD=squash
+  FM_PR_GITHUB_ASYNC_ACTION=direct_merge
+  FM_PR_GITHUB_ASYNC_TITLE=
+  FM_PR_GITHUB_ASYNC_BODY=
+  github_stacked_extra_args "$@" || return 1
+  if [ "$UPSTREAM_SYNC" = sync ]; then
+    FM_PR_GITHUB_ASYNC_METHOD=merge
+  else
+    method=$(caller_merge_method "$@")
+    if [ -n "$method" ]; then
+      case "$method" in
+        [mM][eE][rR][gG][eE]) FM_PR_GITHUB_ASYNC_METHOD=merge ;;
+        [sS][qQ][uU][aA][sS][hH]) FM_PR_GITHUB_ASYNC_METHOD=squash ;;
+        [rR][eE][bB][aA][sS][eE]) FM_PR_GITHUB_ASYNC_METHOD=rebase ;;
+        *)
+          echo "error: unsupported merge method '$method' for a stacked merge; nothing was merged" >&2
+          return 1
+          ;;
+      esac
+    fi
+  fi
+  if [ "$FM_PR_GITHUB_AUTO_REQUESTED" = true ]; then
+    FM_PR_GITHUB_ASYNC_ACTION=default
+  fi
+}
+
+# Whether a reported merge option contradicts the requested one. A default
+# on either side matches anything: the endpoint normalises the requested
+# action, and a 409 echoes the pending request's own options.
+github_async_option_conflicts() {
+  [ "$1" = default ] && return 1
+  [ "$2" = default ] && return 1
+  [ -n "$2" ] && [ "$1" = "$2" ] && return 1
+  return 0
+}
+
+FM_PR_GITHUB_ASYNC_STATUS=
+FM_PR_GITHUB_ASYNC_MESSAGE=
+FM_PR_GITHUB_ASYNC_RESPONSE=
+FM_PR_GITHUB_ASYNC_POLLS=0
+
+# Poll the result of an accepted asynchronous merge until it turns terminal.
+# Sets FM_PR_GITHUB_ASYNC_STATUS to merged, enqueued, failed, pending, or
+# unreadable: terminal when the server said so, otherwise what the last
+# polls showed. Returns 0 on a terminal state, 1 when the polls run out.
+github_async_poll() {
+  local uuid=$1 response='' status='' message='' fields='' line='' total='' named='' last=pending
+  local delay=${FM_PR_GITHUB_ASYNC_POLL_DELAY:-3}
+  local attempts=${FM_PR_GITHUB_ASYNC_POLL_ATTEMPTS:-40}
+  local attempt=1
+  FM_PR_GITHUB_ASYNC_STATUS=unreadable
+  FM_PR_GITHUB_ASYNC_MESSAGE=
+  FM_PR_GITHUB_ASYNC_RESPONSE=
+  FM_PR_GITHUB_ASYNC_POLLS=0
+  case "$delay" in [0-9]|10) ;; *) delay=3 ;; esac
+  case "$attempts" in ''|*[!0-9]*|????*) attempts=40 ;; esac
+  if [ "$attempts" -lt 1 ] || [ "$attempts" -gt 120 ]; then
+    attempts=40
+  fi
+  while :; do
+    status=unreadable
+    message=
+    if response=$(gh api "repos/$PR_OWNER/$PR_REPO/pulls/$PR_NUMBER/merge-async/$uuid" 2>/dev/null) \
+      && [ -n "$response" ] \
+      && fields=$(printf '%s' "$response" | jq -r '
+        if type != "object" then error("merge result is unreadable")
+        else
+          ("status=" + (if (.status | type) == "string" then .status else "unreadable" end)),
+          ("message=" + (if (.details.message? // null | type) == "string" then .details.message else "" end))
+        end' 2>/dev/null); then
+      total=0
+      named=0
+      while IFS= read -r line; do
+        total=$((total + 1))
+        case "$line" in
+          status=*) status=${line#status=} ;;
+          message=*) message=${line#message=} ;;
+          *) continue ;;
+        esac
+        named=$((named + 1))
+      done <<FIELDS
+$fields
+FIELDS
+      if [ "$named" -ne 2 ] || [ "$total" -ne 2 ]; then
+        status=unreadable
+      fi
+    fi
+    case "$status" in
+      merged|enqueued|failed)
+        FM_PR_GITHUB_ASYNC_STATUS=$status
+        FM_PR_GITHUB_ASYNC_MESSAGE=$message
+        FM_PR_GITHUB_ASYNC_RESPONSE=$response
+        FM_PR_GITHUB_ASYNC_POLLS=$attempt
+        return 0
+        ;;
+    esac
+    if [ "$status" = pending ]; then
+      last=pending
+    else
+      last=unreadable
+    fi
+    if [ "$attempt" -ge "$attempts" ]; then
+      break
+    fi
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+  FM_PR_GITHUB_ASYNC_STATUS=$last
+  FM_PR_GITHUB_ASYNC_POLLS=$attempt
+  return 1
+}
+
+# Prove a server-reported merge through the usual outcome read. A reported
+# merged or queued state that does not read back refuses instead of
+# claiming the merge.
+github_async_confirm_landed() {
+  if ! github_read_outcome; then
+    github_report_forge_output "$1"
+    exit 1
+  fi
+  if [ "$FM_PR_GITHUB_MERGED" = true ]; then
+    printf 'verified: %s is merged (state=%s, merged=%s, isInMergeQueue=%s)\n' \
+      "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
+  elif [ "$FM_PR_GITHUB_QUEUED" = true ]; then
+    printf 'verified: %s is queued (state=%s, merged=%s, isInMergeQueue=%s)\n' \
+      "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
+    exit 0
+  else
+    github_report_forge_output "$1"
+    github_report_unmerged_outcome
+    exit 1
+  fi
+}
+
+# The failure tail every refused asynchronous merge shares: when the
+# outcome still reads, say whether the pull request contradicts the
+# failure, and otherwise record the unmerged state like the synchronous
+# failure path does.
+github_async_refuse_after_outcome() {
+  if github_read_outcome; then
+    if [ "$FM_PR_GITHUB_MERGED" != true ] && [ "$FM_PR_GITHUB_QUEUED" != true ]; then
+      github_report_unmerged_outcome
+    else
+      printf 'actionable: the asynchronous merge for %s was refused, but the pull request reads back as state=%s, merged=%s, isInMergeQueue=%s\n' \
+        "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED" >&2
+    fi
+  fi
+  exit 1
+}
+
+# Merge the bottom of a native stack through the asynchronous merge REST
+# API. Every pre-merge gate already passed for FM_PR_MERGE_HEAD, the PUT
+# binds that same head, and only a polled terminal state plus the usual
+# outcome read proves the merge. Runs where the synchronous merge ran, so
+# the same locks are held until the forge accepts the request.
+github_merge_stack_async() {
+  local request_file='' response='' status='' uuid='' expected=''
+  local reported_method='' reported_action='' bypass='' message=''
+  local fields='' line='' total='' named='' abort=''
+  if [ "$FM_PR_AWAY_POSTURE" = true ]; then
+    fm_afk_contract_lock_release || true
+    fm_lock_release "$MERGE_CONTROL_LOCK" || true
+    MERGE_CONTROL_LOCK=
+    echo "error: GitHub merge refused while away: a stacked merge lands in the background after this run's authority lock releases, so only a synchronous merge may run under it; nothing was handed to the forge" >&2
+    exit 2
+  fi
+  request_file=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge-async.XXXXXX") || {
+    echo "error: no temporary file was available for the asynchronous merge request; nothing was merged" >&2
+    fm_afk_contract_lock_release || true
+    fm_lock_release "$MERGE_CONTROL_LOCK" || true
+    MERGE_CONTROL_LOCK=
+    exit 1
+  }
+  if ! jq -n --arg sha "$FM_PR_MERGE_HEAD" --arg method "$FM_PR_GITHUB_ASYNC_METHOD" \
+    --arg action "$FM_PR_GITHUB_ASYNC_ACTION" --arg title "$FM_PR_GITHUB_ASYNC_TITLE" \
+    --arg body "$FM_PR_GITHUB_ASYNC_BODY" \
+    '{sha: $sha, merge_method: $method, merge_action: $action}
+     + (if $title != "" then {commit_title: $title} else {} end)
+     + (if $body != "" then {commit_message: $body} else {} end)' >"$request_file"; then
+    echo "error: the asynchronous merge request for $URL could not be built; nothing was merged" >&2
+    rm -f "$request_file"
+    fm_afk_contract_lock_release || true
+    fm_lock_release "$MERGE_CONTROL_LOCK" || true
+    MERGE_CONTROL_LOCK=
+    exit 1
+  fi
+  # A failed PUT still prints its response body, which the parse below
+  # turns into the refusal; only a transport failure leaves nothing.
+  response=$(gh api "repos/$PR_OWNER/$PR_REPO/pulls/$PR_NUMBER/merge-async" \
+    -X PUT --input "$request_file" 2>&1) || true
+  rm -f "$request_file"
+  if fields=$(printf '%s' "$response" | jq -r '
+      if type != "object" then error("merge response is unreadable")
+      else
+        ("status=" + (if (.status | type) == "string" then .status else "unreadable" end)),
+        ("uuid=" + (if (.details.uuid? // null | type) == "string" then .details.uuid else "" end)),
+        ("expected=" + (if (.details.expected_head_sha? // null | type) == "string" then .details.expected_head_sha else "" end)),
+        ("method=" + (if (.details.merge_method? // null | type) == "string" then .details.merge_method else "" end)),
+        ("action=" + (if (.details.merge_action? // null | type) == "string" then .details.merge_action else "" end)),
+        ("bypass=" + (if (.details.bypass_rules? // null | type) == "boolean"
+          then (if .details.bypass_rules then "true" else "false" end) else "" end)),
+        ("message=" + (if (.message? // null | type) == "string" then .message
+          elif (.details.message? // null | type) == "string" then .details.message else "" end))
+      end' 2>/dev/null); then
+    total=0
+    named=0
+    while IFS= read -r line; do
+      total=$((total + 1))
+      case "$line" in
+        status=*) status=${line#status=} ;;
+        uuid=*) uuid=${line#uuid=} ;;
+        expected=*) expected=${line#expected=} ;;
+        method=*) reported_method=${line#method=} ;;
+        action=*) reported_action=${line#action=} ;;
+        bypass=*) bypass=${line#bypass=} ;;
+        message=*) message=${line#message=} ;;
+        *) continue ;;
+      esac
+      named=$((named + 1))
+    done <<FIELDS
+$fields
+FIELDS
+    if [ "$named" -ne 7 ] || [ "$total" -ne 7 ]; then
+      status=unreadable
+    fi
+  else
+    status=unreadable
+  fi
+  case "$status" in
+    pending)
+      if [ -z "$uuid" ]; then
+        abort="the asynchronous merge response named no merge request"
+      fi
+      if [ -z "$abort" ] && [ "$expected" != "$FM_PR_MERGE_HEAD" ]; then
+        abort="the asynchronous merge bound head ${expected:-<unreadable>}, not the verified $FM_PR_MERGE_HEAD"
+      fi
+      if [ -z "$abort" ] && github_async_option_conflicts "$FM_PR_GITHUB_ASYNC_METHOD" "$reported_method"; then
+        abort="the pending asynchronous merge requests method ${reported_method:-<unreadable>}, not $FM_PR_GITHUB_ASYNC_METHOD"
+      fi
+      if [ -z "$abort" ] && github_async_option_conflicts "$FM_PR_GITHUB_ASYNC_ACTION" "$reported_action"; then
+        abort="the pending asynchronous merge requests action ${reported_action:-<unreadable>}, not $FM_PR_GITHUB_ASYNC_ACTION"
+      fi
+      if [ -z "$abort" ] && [ "$bypass" = true ]; then
+        abort="the pending asynchronous merge bypasses repository rules"
+      fi
+      ;;
+    merged|enqueued) ;;
+    failed)
+      if [ -n "$message" ]; then
+        abort="the asynchronous merge request failed: $message"
+      else
+        abort="the asynchronous merge request failed"
+      fi
+      ;;
+    *)
+      if [ -n "$message" ]; then
+        abort="the asynchronous merge request was not accepted: $message"
+      else
+        abort="the asynchronous merge request was not accepted and its response could not be read"
+      fi
+      ;;
+  esac
+  if [ -n "$abort" ]; then
+    fm_afk_contract_lock_release || true
+    fm_lock_release "$MERGE_CONTROL_LOCK" || true
+    MERGE_CONTROL_LOCK=
+    echo "error: $abort; nothing was merged" >&2
+    github_async_refuse_after_outcome
+  fi
+  FM_PR_GITHUB_MERGE_ACCEPTED=true
+  persist_accepted_merge_authority || exit 1
+  fm_afk_contract_lock_release || true
+  fm_lock_release "$MERGE_CONTROL_LOCK" || true
+  MERGE_CONTROL_LOCK=
+  case "$status" in
+    merged|enqueued)
+      github_async_confirm_landed "$response" || exit 1
+      ;;
+    *)
+      if github_async_poll "$uuid"; then
+        case "$FM_PR_GITHUB_ASYNC_STATUS" in
+          merged|enqueued)
+            github_async_confirm_landed "$FM_PR_GITHUB_ASYNC_RESPONSE" || exit 1
+            ;;
+          *)
+            if [ -n "$FM_PR_GITHUB_ASYNC_MESSAGE" ]; then
+              echo "error: the asynchronous merge for $URL failed: $FM_PR_GITHUB_ASYNC_MESSAGE" >&2
+            else
+              echo "error: the asynchronous merge for $URL failed" >&2
+            fi
+            github_async_refuse_after_outcome
+            ;;
+        esac
+      else
+        if [ "$FM_PR_GITHUB_ASYNC_STATUS" = pending ]; then
+          abort="is still pending after $FM_PR_GITHUB_ASYNC_POLLS polls"
+        else
+          abort="could not be read"
+        fi
+        echo "error: the result of the asynchronous merge for $URL $abort (merge request $uuid); the pull request metadata and the merge poll remain recorded" >&2
+        if github_read_outcome; then
+          if [ "$FM_PR_GITHUB_MERGED" = true ]; then
+            printf 'verified: %s is merged (state=%s, merged=%s, isInMergeQueue=%s)\n' \
+              "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
+          elif [ "$FM_PR_GITHUB_QUEUED" = true ]; then
+            printf 'verified: %s is queued (state=%s, merged=%s, isInMergeQueue=%s)\n' \
+              "$URL" "$FM_PR_GITHUB_STATE" "$FM_PR_GITHUB_MERGED" "$FM_PR_GITHUB_QUEUED"
+            exit 0
+          fi
+        fi
+        exit 1
+      fi
+      ;;
+  esac
+}
+
 require_recorded_pr_identity() {
   local existing
   existing=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
@@ -1902,6 +2404,41 @@ case "$PROVIDER" in
       fi
       exit 1
     fi
+    if ! github_detect_stack; then
+      # Without a stack read there is no proof either way, so the legacy
+      # merge runs: refusing here would skip merges the legacy path still
+      # proves, and the forge itself refuses a stack member there.
+      FM_PR_GITHUB_STACK=none
+    fi
+    case "$FM_PR_GITHUB_STACK" in
+      none) ;;
+      bottom)
+        github_stacked_merge_options "$@" || exit 1
+        if [ "$FM_PR_GITHUB_STACK_POSITION" != 1 ] && [ -n "$FM_PR_GITHUB_STACK_NUMBER" ]; then
+          printf 'stacked: %s sits above the bottom of native stack %s, but every pull request below it has already landed; it merges through the asynchronous merge API, which lands only this pull request\n' \
+            "$URL" "$FM_PR_GITHUB_STACK_NUMBER" >&2
+        elif [ -n "$FM_PR_GITHUB_STACK_NUMBER" ]; then
+          printf 'stacked: %s is the bottom of native stack %s; it merges through the asynchronous merge API, which lands only this pull request\n' \
+            "$URL" "$FM_PR_GITHUB_STACK_NUMBER" >&2
+        else
+          printf 'stacked: %s is the bottom of its native stack; it merges through the asynchronous merge API, which lands only this pull request\n' \
+            "$URL" >&2
+        fi
+        ;;
+      *)
+        if [ -n "$FM_PR_GITHUB_STACK_BOTTOM_PR" ]; then
+          printf 'error: refusing to merge %s: it is position %s of %s in its stack, and merging it would also merge every open pull request below it, which this run did not verify; merge https://%s/%s/pull/%s first\n' \
+            "$URL" "$FM_PR_GITHUB_STACK_POSITION" "${FM_PR_GITHUB_STACK_SIZE:-?}" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_GITHUB_STACK_BOTTOM_PR" >&2
+        elif [ -n "$FM_PR_GITHUB_STACK_NUMBER" ]; then
+          printf 'error: refusing to merge %s: it is position %s of %s in native stack %s, and merging it would also merge every open pull request below it, which this run did not verify; merge the bottom of the stack first\n' \
+            "$URL" "$FM_PR_GITHUB_STACK_POSITION" "${FM_PR_GITHUB_STACK_SIZE:-?}" "$FM_PR_GITHUB_STACK_NUMBER" >&2
+        else
+          printf 'error: refusing to merge %s: it sits above the bottom of its native stack, and merging it would also merge every open pull request below it, which this run did not verify; merge the bottom of the stack first\n' \
+            "$URL" >&2
+        fi
+        exit 1
+        ;;
+    esac
     autonomous_security_path_gate || exit 1
     if [ -n "$UPSTREAM_SYNC_HEAD" ] && [ "$UPSTREAM_SYNC_HEAD" != "$FM_PR_MERGE_HEAD" ]; then
       printf 'error: refusing to merge %s: its head moved from %s, whose upstream sync classification was read, to %s; retry so the new head is classified\n' \
@@ -1915,6 +2452,9 @@ case "$PROVIDER" in
     require_current_away_authority || away_status=$?
     [ "$away_status" -eq 0 ] || exit "$away_status"
     refuse_github_queue_while_away || exit 2
+    if [ "$FM_PR_GITHUB_STACK" = bottom ]; then
+      github_merge_stack_async
+    else
     merge_status=0
     merge_output=$(gh pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
       --match-head-commit "$FM_PR_MERGE_HEAD" \
@@ -1955,6 +2495,7 @@ case "$PROVIDER" in
       github_report_forge_output "$merge_output"
       github_report_unmerged_outcome
       exit 1
+    fi
     fi
     ;;
   gitlab)
