@@ -1165,7 +1165,7 @@ crew_dispatch_validate() {
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else
-    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp","devin","commandcode","polytoken","cortex"]'
+    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp","devin","commandcode","polytoken","cortex","kiro"]'
   fi
   err=$(jq -r --argjson typed "$typed_active" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" --arg account_re "$FM_CLAUDE_ACCOUNT_NAME_RE" '
     def verified($h): $verified_harnesses | index($h);
@@ -1178,6 +1178,7 @@ crew_dispatch_validate() {
       elif $h == "codex" then ((["low","medium","high","xhigh"] | index($e)) != null or ($e == "max" and $m == "gpt-5.6-luna"))
       elif $h == "grok" then (["low","medium","high"] | index($e))
       elif $h == "agy" then (["low","medium","high"] | index($e))
+      elif $h == "kiro" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "pi" or $h == "pi-signed" or $h == "omp" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "muse" then (["low","medium","high","xhigh","max"] | index($e))
       elif $h == "rovo" then (["low","medium","high","max"] | index($e))
@@ -1247,6 +1248,7 @@ crew_dispatch_validate() {
       "unknown select: " + ([ (.rules // [])[]? | .select? // empty | select(. != "quota-balanced") ] | unique | join(", "))
     elif .array_order == "preference" and ([(.rules // [])[]? | select(has("select"))] | length > 0) then "select quota-balanced conflicts with array_order preference"
     elif malformed_claude_accounts(configured_profiles) then "claude_account needs a clauth profile name and the claude harness or a Pi claude-bridge/ model with provider claude"
+    elif has("shared_quota") and (.shared_quota | type) != "boolean" then "shared_quota must be true or false when present"
     elif has("default") and ((.default | type) != "object" and (.default | type) != "array") then "default must be a profile object or non-empty profile array"
     elif has("default") and ((.default | type) == "array" and (.default | length) == 0) then "default needs at least one profile"
     elif has("default") and ([profiles(.default)[]? | select(type != "object")] | length) > 0 then "each default profile must be an object"

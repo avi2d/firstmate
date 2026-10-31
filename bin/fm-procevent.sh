@@ -920,7 +920,8 @@ EOF
           ring_target=$(fm_backend_target_of_meta "$ring_meta" 2>/dev/null || true)
           if [ -n "$ring_backend" ] && [ -n "$ring_target" ]; then
             ring_rc=0
-            fm_task_inbox_ring "$ring_backend" "$ring_target" "$record" "fm-$owner_task" >/dev/null 2>&1 || ring_rc=$?
+            FM_COMPOSER_HARNESS=$(fm_meta_get "$ring_meta" harness 2>/dev/null || true) \
+              fm_task_inbox_ring "$ring_backend" "$ring_target" "$record" "fm-$owner_task" >/dev/null 2>&1 || ring_rc=$?
             # An exited owner never reads its inbox, and the inbox's own
             # escalation of the unread note waits out its re-ring grace.
             if [ "$ring_rc" -eq 3 ] && fm_wake_append check "procevent:$id:$seq" "check: $line"; then
