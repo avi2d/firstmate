@@ -1490,6 +1490,7 @@ github_detect_stack() {
   FM_PR_GITHUB_STACK_SIZE=
   FM_PR_GITHUB_STACK_POSITION=
   FM_PR_GITHUB_STACK_BOTTOM_PR=
+  # shellcheck disable=SC2016  # GraphQL variables are literal query syntax.
   if ! response=$(gh api graphql \
     -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){stackEntry{position}stack{number size entries(first:100){nodes{position pullRequest{number state}}}}}}}' \
     -F "owner=$PR_OWNER" -F "repo=$PR_REPO" -F "number=$PR_NUMBER" 2>&1) \
