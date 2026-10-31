@@ -1671,7 +1671,7 @@ github_classify_upstream_sync() {
   local records pr_identity fork upstream trigger branch entry_identity
   local found=false view head base dir up_url up_branch ref merge_base
   local up_refspecs=()
-  UPSTREAM_SYNC=none
+  UPSTREAM_SYNC=unlisted
   UPSTREAM_SYNC_REASON=
   UPSTREAM_SYNC_HEAD=
   [ -e "$FORK_REGISTRY" ] || return 0
@@ -1752,6 +1752,43 @@ EOF
   rm -rf -- "$dir"
 }
 
+# Without a registry entry there is no upstream history to compare against, so
+# only the pull request's title, head branch, and merge headlines can say sync.
+github_unlisted_sync_reason() {
+  local view title branch headline lowered src repo
+  if ! view=$(gh pr view "$URL" --json title,headRefName,commits 2>/dev/null) \
+    || ! title=$(printf '%s' "$view" | jq -er 'objects | .title // ""' 2>/dev/null); then
+    printf 'its title, head branch, and commits could not be read'
+    return 0
+  fi
+  branch=$(printf '%s' "$view" | jq -r '.headRefName // ""' 2>/dev/null) || branch=
+  if printf '%s\n%s\n' "$title" "$branch" | grep -qiE '(^|[^[:alnum:]])sync(s|ed|ing)?([^[:alnum:]]|$)'; then
+    printf 'its title or head branch says sync'
+    return 0
+  fi
+  repo=$(printf '%s/%s' "$PR_OWNER" "$PR_REPO" | tr '[:upper:]' '[:lower:]')
+  while IFS= read -r headline; do
+    lowered=$(printf '%s' "$headline" | tr '[:upper:]' '[:lower:]')
+    case "$lowered" in
+      "merge remote-tracking branch 'origin/"*) continue ;;
+      "merge remote-tracking branch '"*/*) ;;
+      "merge "*" of "*)
+        src=${lowered#* of }
+        src=${src%% *}
+        src=${src%.git}
+        case "$src" in */"$repo"|*:"$repo") continue ;; esac
+        ;;
+      merge*upstream*) ;;
+      *) continue ;;
+    esac
+    printf 'its history carries "%s"' "$headline"
+    return 0
+  done <<EOF
+$(printf '%s' "$view" | jq -r '.commits[]?.messageHeadline // empty' 2>/dev/null)
+EOF
+  return 1
+}
+
 # A squash or rebase of an upstream sync drops the upstream parent, so the next
 # drift check counts the same upstream commits as missing again.
 UPSTREAM_SYNC=none
@@ -1774,6 +1811,13 @@ if [ "$PROVIDER" = github ]; then
         printf 'error: refusing to merge %s: it targets a fork in the fork registry, and whether it is an upstream sync could not be told because %s; retry, or pass --merge if it is one\n' \
           "$URL" "$UPSTREAM_SYNC_REASON" >&2
         exit 1
+        ;;
+      unlisted)
+        if [ -z "$sync_caller_method" ] && UPSTREAM_SYNC_REASON=$(github_unlisted_sync_reason); then
+          printf 'error: refusing to merge %s: it may be an upstream sync (%s), and its repository is not in the fork registry %s, so the default squash could drop the upstream parent; list the fork there, or pass --merge for a sync or --squash if it is not one\n' \
+            "$URL" "$UPSTREAM_SYNC_REASON" "$FORK_REGISTRY" >&2
+          exit 1
+        fi
         ;;
     esac
   fi
