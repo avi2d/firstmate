@@ -4,9 +4,10 @@
 # Drives the public argv and environment interface with a fake curl on PATH
 # that records argv, the request body it read from stdin, and the header it
 # read from file descriptor 3, and answers with a canned provider response.
-# A fake quota-axi serves the selected schema-5 fixture. No case touches the
-# network, and the absent-key case proves the tool makes no call
-# at all.
+# A fake quota-axi serves the selected schema-5 fixture. A fake security and a
+# fake uname stand in for the macOS Keychain, so no case reads the real one.
+# No case touches the network, and the absent-key case proves the tool makes
+# no call at all.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -17,17 +18,28 @@ TMP_ROOT=$(fm_test_tmproot fm-dispatch-resolve)
 HOME_DIR="$TMP_ROOT/home"
 FAKEBIN=$(fm_fakebin "$TMP_ROOT")
 NO_CURL_BIN="$TMP_ROOT/no-curl-bin"
+NO_SECURITY_BIN="$TMP_ROOT/no-security-bin"
+NO_JQ_BIN="$TMP_ROOT/no-jq-bin"
 LOG="$TMP_ROOT/log"
 BRIEF="$TMP_ROOT/brief.md"
 BASE_RULES="$TMP_ROOT/rules.json"
 RULES="$HOME_DIR/config/crew-dispatch.json"
 QUOTA="$TMP_ROOT/quota.json"
 BASE_PATH=$PATH
-mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN" "$TMP_ROOT/userhome"
+mkdir -p "$HOME_DIR/config" "$LOG" "$NO_CURL_BIN" "$NO_SECURITY_BIN" "$NO_JQ_BIN" "$TMP_ROOT/userhome"
 printf '%s\n' 'test-secret-id' > "$HOME_DIR/config/bws-typesafe-secret-id"
 for command_name in bash chmod cp dirname jq mktemp rm tr; do
   ln -s "$(command -v "$command_name")" "$NO_CURL_BIN/$command_name"
+  ln -s "$(command -v "$command_name")" "$NO_SECURITY_BIN/$command_name"
 done
+# The minimal PATHs that simulate one missing command: no security, or no jq.
+# Both keep the fake macOS uname, and the no-jq one keeps the fake security.
+for command_name in bash chmod cp dirname mktemp rm tr; do
+  ln -s "$(command -v "$command_name")" "$NO_JQ_BIN/$command_name"
+done
+ln -s "$FAKEBIN/uname" "$NO_SECURITY_BIN/uname"
+ln -s "$FAKEBIN/uname" "$NO_JQ_BIN/uname"
+ln -s "$FAKEBIN/security" "$NO_JQ_BIN/security"
 
 cat > "$BRIEF" <<'MD'
 # Task
@@ -120,6 +132,16 @@ if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ] ||
 else
   printf 'curl:clean\n' >> "${CHILD_ENV_LOG:?}"
 fi
+# With a canary file named, also look for the canary's VALUE in this process's
+# environment and in the directories the test lists, where the tool's own
+# files live while the request is in flight.
+if [ -n "${FAKE_CANARY_FILE:-}" ]; then
+  canary=$(cat "$FAKE_CANARY_FILE")
+  env | grep -qF -- "$canary" && printf 'curl:canary-in-env\n' >> "${CHILD_ENV_LOG:?}"
+  for dir in ${FAKE_CANARY_DIRS:-}; do
+    grep -rqF -- "$canary" "$dir" 2>/dev/null && printf 'curl:canary-in-file\n' >> "${CHILD_ENV_LOG:?}"
+  done
+fi
 out=''
 headers=''
 while [ $# -gt 0 ]; do
@@ -163,6 +185,9 @@ if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ] ||
 else
   printf 'quota-axi:clean\n' >> "${CHILD_ENV_LOG:?}"
 fi
+if [ -n "${FAKE_CANARY_FILE:-}" ] && env | grep -qF -- "$(cat "$FAKE_CANARY_FILE")"; then
+  printf 'quota-axi:canary-in-env\n' >> "${CHILD_ENV_LOG:?}"
+fi
 printf '%s\n' "$*" >> "${QUOTA_AXI_CALLS:?}"
 [ "${FAKE_QUOTA_FAIL:-0}" = 1 ] && exit 1
 [ "${1:-}" = --json ] || exit 2
@@ -182,17 +207,67 @@ SH
 
 cat > "$FAKEBIN/security" <<'SH'
 #!/usr/bin/env bash
+# Fake security: the Keychain stand-in. The bws access-token item answers from
+# FAKE_SECURITY_TOKEN, or fails under FAKE_SECURITY_FAIL, and is neither logged
+# nor environment-checked. Any other query must be an exact
+# `find-generic-password -s <service> [-a <account>] -w`, answered from the item
+# file FAKE_SECURITY_STORE/<service>, and records argv and whether a key
+# variable reached its environment. FAKE_SECURITY_EXIT fails the query after
+# printing the item to stdout and stderr as a decoy, and FAKE_SECURITY_HANG
+# names a file to receive its pid before it stops answering.
 set -u
-[ "${FAKE_SECURITY_FAIL:-0}" = 1 ] && exit 44
-[ "$*" = 'find-generic-password -s bws-access-token -w' ] || exit 44
-[ -n "${FAKE_SECURITY_TOKEN:-}" ] || exit 44
-printf '%s\n' "$FAKE_SECURITY_TOKEN"
+if [ "$*" = 'find-generic-password -s bws-access-token -w' ]; then
+  [ "${FAKE_SECURITY_FAIL:-0}" = 1 ] && exit 44
+  [ -n "${FAKE_SECURITY_TOKEN:-}" ] || exit 44
+  printf '%s\n' "$FAKE_SECURITY_TOKEN"
+  exit 0
+fi
+printf '%s\n' "$*" >> "${FAKE_SECURITY_LOG:?}"
+if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ] ||
+  [ -n "${OPENROUTER_API_KEY+x}" ] || [ -n "${OPENROUTER_API_KEY_PRIVATE+x}" ]; then
+  printf 'security:secret-present\n' >> "${CHILD_ENV_LOG:?}"
+else
+  printf 'security:clean\n' >> "${CHILD_ENV_LOG:?}"
+fi
+[ "${1:-}" = find-generic-password ] || exit 2
+shift
+service='' wants_password=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s) [ $# -ge 2 ] || exit 2; service=$2; shift 2 ;;
+    -a) { [ $# -ge 2 ] && [ -n "$2" ]; } || exit 2; shift 2 ;;
+    -w) wants_password=1; shift ;;
+    *) exit 2 ;;
+  esac
+done
+[ -n "$service" ] && [ "$wants_password" = 1 ] || exit 2
+if [ -n "${FAKE_SECURITY_HANG:-}" ]; then
+  printf '%s\n' "$$" > "$FAKE_SECURITY_HANG"
+  exec sleep 60
+fi
+item="${FAKE_SECURITY_STORE:?}/$service"
+if [ -n "${FAKE_SECURITY_EXIT:-}" ]; then
+  if [ -r "$item" ]; then
+    cat "$item"
+    printf 'security: could not use the item holding %s\n' "$(cat "$item")" >&2
+  fi
+  exit "$FAKE_SECURITY_EXIT"
+fi
+[ -r "$item" ] || exit 44
+cat "$item"
 SH
 chmod +x "$FAKEBIN/bws" "$FAKEBIN/security"
 cp "$FAKEBIN/bws" "$FAKEBIN/security" "$NO_CURL_BIN/"
 
+cat > "$FAKEBIN/uname" <<'SH'
+#!/usr/bin/env bash
+# Fake uname: the host is macOS unless FAKE_UNAME names another system.
+printf '%s\n' "${FAKE_UNAME:-Darwin}"
+SH
+chmod +x "$FAKEBIN/uname"
+
 RESPONSE="$TMP_ROOT/response.json"
-export FAKE_CURL_LOG="$LOG" FAKE_CURL_RESPONSE="$RESPONSE" QUOTA_AXI_CALLS="$LOG/quota-axi.calls" QUOTA_AXI_FIXTURE="$QUOTA" CHILD_ENV_LOG="$LOG/child-env"
+export FAKE_CURL_LOG="$LOG" FAKE_CURL_RESPONSE="$RESPONSE" QUOTA_AXI_CALLS="$LOG/quota-axi.calls" QUOTA_AXI_FIXTURE="$QUOTA" CHILD_ENV_LOG="$LOG/child-env" FAKE_SECURITY_LOG="$LOG/security.argv"
 
 reset_log() {
   rm -rf "$LOG"
@@ -215,6 +290,18 @@ run_without_curl() {
   local __exit=$1 __out=$2 __err=$3 _out _code
   shift 3
   _out=$(HOME="$TMP_ROOT/userhome" PATH="$NO_CURL_BIN" FM_HOME="$HOME_DIR" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
+  _code=$?
+  printf -v "$__exit" '%s' "$_code"
+  printf -v "$__out" '%s' "$_out"
+  printf -v "$__err" '%s' "$(cat "$TMP_ROOT/stderr")"
+}
+
+# run_on_path <path> <exit-var> <out-var> <err-var> [args...]: the tool on a
+# caller-built PATH, for the cases that simulate a missing command.
+run_on_path() {
+  local __path=$1 __exit=$2 __out=$3 __err=$4 _out _code
+  shift 4
+  _out=$(HOME="$TMP_ROOT/userhome" PATH="$__path" FM_HOME="$HOME_DIR" "$TOOL" "$@" 2> "$TMP_ROOT/stderr")
   _code=$?
   printf -v "$__exit" '%s' "$_code"
   printf -v "$__out" '%s' "$_out"
@@ -509,6 +596,282 @@ FM_DISPATCH_PROVIDER=unknown OPENROUTER_API_KEY=$OR_KEY run code out err "$BRIEF
 expect_code 2 "$code" "unknown provider is a configuration error"
 assert_contains "$err" 'unknown FM_DISPATCH_PROVIDER' "unknown provider is actionable"
 pass "OpenRouter ambiguous, malformed, HTTP, and missing-model paths are handled"
+
+# --- credential source declaration: where a key lives, never the key -----------
+# $CONFIG/dispatch-credential-sources.json names a source for the OpenRouter key.
+# It is read only when neither the environment nor .env supplied that key. The
+# typesafe key comes only from bws, so a typesafe entry is an unknown provider.
+# The fake Keychain holds one item file per service name.
+SECRET='kc-openrouter-8b21f6c3-never-on-argv'
+EFFECTIVE_SECRET='kc-effective-c07e5a12-never-on-argv'
+STORE="$TMP_ROOT/keychain"
+CRED="$HOME_DIR/config/dispatch-credential-sources.json"
+mkdir -p "$STORE"
+printf '%s\n' "$SECRET" > "$STORE/openrouter-svc"
+printf '%s\n' "$EFFECTIVE_SECRET" > "$STORE/effective-svc"
+: > "$STORE/empty-svc"
+export FAKE_SECURITY_STORE="$STORE"
+
+# declare_source <file> <provider> <service> [<account>]: add or replace one
+# provider's macos-keychain entry, keeping the other providers' entries.
+declare_source() {
+  local file=$1 provider=$2 service=$3 account=${4:-}
+  [ -f "$file" ] || printf '{}\n' > "$file"
+  jq --arg p "$provider" --arg s "$service" --arg a "$account" \
+    '.[$p] = ({source: "macos-keychain", service: $s} + (if $a == "" then {} else {account: $a} end))' \
+    "$file" > "$file.next" && mv "$file.next" "$file"
+}
+
+# run_openrouter <exit-var> <out-var> <err-var> [args...]: run with OpenRouter selected.
+run_openrouter() {
+  FM_DISPATCH_PROVIDER=openrouter FM_DISPATCH_MODEL=typesafe/jev-1.13 FAKE_CURL_RESPONSE=$OR_RESPONSE run "$@"
+}
+
+# mapping: the declared service and optional account become the lookup
+reset_log
+write_openrouter_response rule_4 0.9
+declare_source "$CRED" openrouter openrouter-svc mike
+run_openrouter code out err "$BRIEF" --project pager
+expect_code 0 "$code" "a declared source resolves"
+assert_contains "$out" '  status: clear' "a declared source turns the tool on"
+assert_equals 'find-generic-password -s openrouter-svc -a mike -w' "$(cat "$LOG/security.argv")" "the declared service and account are the whole Keychain lookup"
+assert_equals "Authorization: Bearer $SECRET" "$(cat "$LOG/header")" "the declared key reaches curl on the fd header"
+assert_contains "$(cat "$LOG/argv")" 'https://openrouter.ai/api/alpha/decisions' "the declared key goes to OpenRouter's endpoint"
+rm -f "$CRED"
+declare_source "$CRED" openrouter openrouter-svc
+reset_log
+run_openrouter code out err "$BRIEF" --project pager
+assert_contains "$out" '  status: clear' "a declaration without an account resolves"
+assert_equals 'find-generic-password -s openrouter-svc -w' "$(cat "$LOG/security.argv")" "an omitted account is omitted from the lookup"
+pass "mapping: a declared macos-keychain service and optional account become the lookup, and the key rides the fd header"
+
+# precedence: environment, then .env, then the declared source
+reset_log
+OPENROUTER_API_KEY=env-wins run_openrouter code out err "$BRIEF" --project pager
+assert_equals 'Authorization: Bearer env-wins' "$(cat "$LOG/header")" "the environment key wins over a declared source"
+assert_absent "$LOG/security.argv" "the environment key wins before the declared source is read"
+printf '%s\n' 'OPENROUTER_API_KEY=dotenv-wins' > "$HOME_DIR/.env"
+reset_log
+run_openrouter code out err "$BRIEF" --project pager
+assert_equals 'Authorization: Bearer dotenv-wins' "$(cat "$LOG/header")" ".env key wins over a declared source"
+assert_absent "$LOG/security.argv" ".env key wins before the declared source is read"
+rm -f "$HOME_DIR/.env" "$CRED"
+printf '%s\n' '{"openrouter":' > "$CRED"
+reset_log
+OPENROUTER_API_KEY=$OR_KEY run_openrouter code out err "$BRIEF" --project pager
+expect_code 0 "$code" "a key from the environment never consults an invalid declaration"
+assert_contains "$out" '  status: clear' "an unread declaration cannot break a configured resolver"
+assert_absent "$LOG/security.argv" "an invalid declaration is not read when the environment has the key"
+rm -f "$CRED"
+pass "precedence: environment, then .env, then the declared source, which is read only when needed"
+
+# provider isolation: the typesafe key comes only from bws, and a declaration never selects a provider
+declare_source "$CRED" openrouter openrouter-svc
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+run code out err "$BRIEF" --project pager
+assert_contains "$out" '  status: clear' "typesafe still resolves through bws beside an OpenRouter declaration"
+assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "the bws key, not the declared OpenRouter key, reaches the typesafe request"
+assert_contains "$(cat "$LOG/argv")" 'https://api.typesafe.ai/v1/systemone' "the bws key goes to the typesafe.ai endpoint"
+assert_absent "$LOG/security.argv" "an OpenRouter declaration is never read for typesafe"
+rm -f "$HOME_DIR/config/bws-typesafe-secret-id"
+reset_log
+run code out err "$BRIEF" --project pager
+assert_equals '' "$out" "an OpenRouter declaration does not select OpenRouter"
+assert_contains "$err" 'dispatch-resolve: off (no typesafe secret id at' "with no provider set the typesafe off gate still holds"
+assert_absent "$LOG/security.argv" "an OpenRouter declaration is not read while typesafe is off"
+printf '%s\n' 'test-secret-id' > "$HOME_DIR/config/bws-typesafe-secret-id"
+printf '%s\n' '{"typesafe":{"source":"macos-keychain","service":"openrouter-svc"}}' > "$CRED"
+reset_log
+run code out err "$BRIEF" --project pager
+assert_contains "$out" '  status: clear' "a typesafe entry leaves the bws path untouched"
+assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "a typesafe entry never supplies the typesafe key"
+assert_absent "$LOG/security.argv" "a typesafe entry is never read for typesafe"
+rm -f "$CRED"
+pass "provider isolation: the typesafe key comes only from bws, and a declaration never selects a provider"
+
+# effective-home isolation: the effective config directory's declaration, and no other
+declare_source "$CRED" openrouter openrouter-svc
+OTHER_HOME="$TMP_ROOT/other-home"
+mkdir -p "$OTHER_HOME/config"
+cp "$BASE_RULES" "$OTHER_HOME/config/crew-dispatch.json"
+PRIMARY_HOME=$HOME_DIR
+HOME_DIR=$OTHER_HOME
+reset_log
+run_openrouter code out err "$BRIEF" --project pager
+HOME_DIR=$PRIMARY_HOME
+assert_equals '' "$out" "a declaration in another home is not consulted"
+assert_contains "$err" "dispatch-resolve: off (OPENROUTER_API_KEY absent from the environment and $OTHER_HOME/.env)" "a home with no declaration is off"
+assert_absent "$LOG/security.argv" "another home's declaration is never read"
+EFFECTIVE_CONFIG="$TMP_ROOT/effective-config"
+mkdir -p "$EFFECTIVE_CONFIG"
+cp "$BASE_RULES" "$EFFECTIVE_CONFIG/crew-dispatch.json"
+declare_source "$EFFECTIVE_CONFIG/dispatch-credential-sources.json" openrouter effective-svc
+reset_log
+FM_CONFIG_OVERRIDE=$EFFECTIVE_CONFIG run_openrouter code out err "$BRIEF" --project pager
+assert_contains "$out" '  status: clear' "an overridden config directory supplies its own declaration"
+assert_equals 'find-generic-password -s effective-svc -w' "$(cat "$LOG/security.argv")" "only the effective directory's declaration is read"
+assert_equals "Authorization: Bearer $EFFECTIVE_SECRET" "$(cat "$LOG/header")" "the effective directory's key is the one sent"
+rm -f "$EFFECTIVE_CONFIG/dispatch-credential-sources.json"
+reset_log
+FM_CONFIG_OVERRIDE=$EFFECTIVE_CONFIG run_openrouter code out err "$BRIEF" --project pager
+assert_equals '' "$out" "the home's own config declaration is ignored when another directory is effective"
+assert_absent "$LOG/security.argv" "a declaration outside the effective directory is never read"
+rm -f "$CRED"
+pass "effective-home isolation: only the effective config directory's declaration is consulted"
+
+# failure distinctions: off, a configuration error, and an unavailable source are three different things
+printf '{}\n' > "$CRED"
+reset_log
+run_openrouter code out err "$BRIEF" --project pager
+expect_code 0 "$code" "a declaration with no entries is off"
+assert_equals '' "$out" "off prints nothing on stdout"
+assert_contains "$err" 'dispatch-resolve: off (OPENROUTER_API_KEY absent from the environment and' "off says so on stderr"
+assert_absent "$LOG/security.argv" "an empty declaration never reaches the Keychain"
+assert_absent "$LOG/argv" "off never calls curl"
+
+for bad in \
+  '{"openrouter":|not JSON' \
+  '|must hold exactly one JSON object' \
+  '[]|top-level value must be an object keyed by provider' \
+  '{"typesafe":{"source":"macos-keychain","service":"s"}}|unknown provider typesafe (expected openrouter)' \
+  '{"openroutr":{"source":"macos-keychain","service":"s"}}|unknown provider openroutr (expected openrouter)' \
+  '{"openrouter":"kc-planted-value"}|openrouter must be an object with a source' \
+  '{"openrouter":{"service":"s"}}|openrouter needs a source' \
+  '{"openrouter":{"source":"kc-planted-value","service":"s"}}|openrouter source must be one of macos-keychain' \
+  '{"openrouter":{"source":"macos-keychain"}}|openrouter service must be a non-empty string without control characters' \
+  '{"openrouter":{"source":"macos-keychain","service":""}}|openrouter service must be a non-empty string without control characters' \
+  '{"openrouter":{"source":"macos-keychain","service":7}}|openrouter service must be a non-empty string without control characters' \
+  '{"openrouter":{"source":"macos-keychain","service":"a\nb"}}|openrouter service must be a non-empty string without control characters' \
+  '{"openrouter":{"source":"macos-keychain","service":"s","account":""}}|openrouter account must be a non-empty string without control characters when present' \
+  '{"openrouter":{"source":"macos-keychain","service":"s","key":"kc-planted-value"}}|openrouter has unknown field key (allowed: source, service, account); credential values do not belong in this file' \
+  '{"openrouter":{"source":"macos-keychain","service":"s","token":"kc-planted-value"}}|openrouter has unknown field token (allowed: source, service, account); credential values do not belong in this file'; do
+  printf '%s\n' "${bad%%|*}" > "$CRED"
+  reset_log
+  run_openrouter code out err "$BRIEF" --project pager
+  expect_code 2 "$code" "an invalid declaration exits 2: ${bad#*|}"
+  assert_contains "$err" "malformed credential source declaration: $CRED - ${bad#*|}" "the problem is named: ${bad#*|}"
+  assert_not_contains "$err" 'kc-planted-value' "an invalid declaration never echoes a declared value"
+  assert_equals '' "$out" "an invalid declaration prints nothing on stdout: ${bad#*|}"
+  assert_equals '1' "$(grep -c . <<<"$err")" "an invalid declaration is one diagnostic line: ${bad#*|}"
+  assert_absent "$LOG/security.argv" "an invalid declaration never reaches the Keychain: ${bad#*|}"
+  assert_absent "$LOG/argv" "an invalid declaration never reaches the network: ${bad#*|}"
+done
+rm -f "$CRED"
+ln -s "$TMP_ROOT/missing-declaration.json" "$CRED"
+reset_log
+run_openrouter code out err "$BRIEF" --project pager
+expect_code 2 "$code" "a broken declaration symlink exits 2"
+assert_contains "$err" "credential source declaration not readable: $CRED" "an unreadable declaration is named"
+rm -f "$CRED"
+declare_source "$CRED" openrouter openrouter-svc
+reset_log
+FM_DISPATCH_PROVIDER=openrouter FM_DISPATCH_MODEL=typesafe/jev-1.13 run_on_path "$NO_JQ_BIN" code out err "$BRIEF" --project pager
+expect_code 2 "$code" "a declaration cannot be read without jq"
+assert_contains "$err" 'error: jq required' "missing jq is named"
+assert_absent "$LOG/security.argv" "missing jq never reaches the Keychain"
+
+# expect_unavailable <label> <reason>: a declared source that cannot supply the key
+expect_unavailable() {
+  local label=$1 reason=$2
+  expect_code 0 "$code" "$label exits 0"
+  assert_contains "$out" '  status: error' "$label is a structured error outcome"
+  assert_contains "$out" "  reason: $reason" "$label names the source and why on stdout"
+  assert_contains "$err" "dispatch-resolve: error ($reason)" "$label reports the same reason on stderr"
+  assert_not_contains "$err" 'dispatch-resolve: off' "$label is not mistaken for an unconfigured resolver"
+  assert_absent "$LOG/argv" "$label never calls curl"
+  assert_absent "$LOG/quota-axi.calls" "$label never reads quota"
+  assert_not_contains "$out$err" "$SECRET" "$label never prints a stored key"
+}
+UNAVAILABLE='credential source macos-keychain declared for openrouter is unavailable; nothing sent'
+UNSUPPORTED='credential source macos-keychain declared for openrouter is not supported on this host; nothing sent'
+declare_source "$CRED" openrouter absent-svc mike
+reset_log
+run_openrouter code out err "$BRIEF" --project pager
+expect_unavailable "a declared item that is not in the Keychain" "$UNAVAILABLE"
+assert_equals 'find-generic-password -s absent-svc -a mike -w' "$(cat "$LOG/security.argv")" "the missing item was looked up once, by its declared identity"
+declare_source "$CRED" openrouter empty-svc
+reset_log
+run_openrouter code out err "$BRIEF" --project pager
+expect_unavailable "a declared item with an empty secret" "$UNAVAILABLE"
+declare_source "$CRED" openrouter openrouter-svc
+reset_log
+FAKE_SECURITY_EXIT=36 run_openrouter code out err "$BRIEF" --project pager
+expect_unavailable "a Keychain that refuses with the item in its output" "$UNAVAILABLE"
+assert_not_contains "$out$err" 'could not use the item' "the tool's own output is never relayed"
+reset_log
+FAKE_UNAME=Linux run_openrouter code out err "$BRIEF" --project pager
+expect_unavailable "a declared macOS source on another system" "$UNSUPPORTED"
+assert_absent "$LOG/security.argv" "an unsupported host never runs the credential tool"
+reset_log
+FM_DISPATCH_PROVIDER=openrouter FM_DISPATCH_MODEL=typesafe/jev-1.13 run_on_path "$NO_SECURITY_BIN" code out err "$BRIEF" --project pager
+expect_unavailable "a declared source whose tool is missing" "$UNSUPPORTED"
+reset_log
+started=$SECONDS
+FAKE_SECURITY_HANG="$LOG/hang.pid" run_openrouter code out err "$BRIEF" --project pager
+elapsed=$((SECONDS - started))
+expect_unavailable "a declared source that never answers" 'credential source macos-keychain declared for openrouter did not answer in time; nothing sent'
+[ "$elapsed" -lt 30 ] || fail "an unanswered Keychain read held the resolver for ${elapsed}s"
+[ -s "$LOG/hang.pid" ] || fail "the fake security that never answers was not started"
+hang_pid=$(cat "$LOG/hang.pid")
+for _ in $(seq 1 50); do
+  kill -0 "$hang_pid" 2>/dev/null || break
+  sleep 0.1
+done
+! kill -0 "$hang_pid" 2>/dev/null || fail "the unanswered Keychain read was left running"
+rm -f "$CRED"
+pass "failure distinctions: off, a configuration error, and an unavailable source each read differently and send nothing"
+
+# secret containment: the key lives in one private variable and reaches curl on fd 3 only
+declare_source "$CRED" openrouter openrouter-svc mike
+SCAN_TMP="$TMP_ROOT/scan-tmp"
+mkdir -p "$SCAN_TMP"
+printf '%s' "$SECRET" > "$TMP_ROOT/canary"
+reset_log
+TMPDIR=$SCAN_TMP FAKE_CANARY_FILE="$TMP_ROOT/canary" FAKE_CANARY_DIRS="$SCAN_TMP $HOME_DIR" \
+  run_openrouter code out err "$BRIEF" --project pager
+assert_contains "$out" '  status: clear' "the containment run resolves"
+assert_equals "Authorization: Bearer $SECRET" "$(cat "$LOG/header")" "the key arrives only as the bearer header on the descriptor"
+assert_not_contains "$out" "$SECRET" "the key never reaches stdout"
+assert_not_contains "$err" "$SECRET" "the key never reaches stderr"
+assert_not_contains "$(cat "$LOG/argv")" "$SECRET" "the key never appears on curl argv"
+assert_not_contains "$(cat "$LOG/security.argv")" "$SECRET" "the key never appears on security argv"
+assert_not_contains "$(cat "$LOG/body")" "$SECRET" "the key never rides in the request body"
+assert_equals $'security:clean\ncurl:clean\nquota-axi:clean' "$(cat "$LOG/child-env")" "the key is in no child environment, and in no file the tool holds while the request is in flight"
+! grep -rqF -- "$SECRET" "$HOME_DIR" || fail "the key was written under the home"
+! grep -rqF -- "$SECRET" "$SCAN_TMP" || fail "the key was left in the temporary directory"
+rm -f "$CRED"
+pass "secret containment: the declared key is on no argv, in no output, environment, or file, and only on the fd header"
+
+# capability probe: a supported/unsupported answer that reads no declaration and runs no credential tool
+printf '%s\n' '{"openrouter":' > "$CRED"
+reset_log
+run code out err --supports-credential-source macos-keychain
+expect_code 0 "$code" "macos-keychain is supported on a macOS host with security"
+assert_equals 'supported' "$out" "the probe answers supported"
+assert_equals '' "$err" "the probe prints nothing on stderr, and an invalid declaration does not matter to it"
+assert_absent "$LOG/security.argv" "the probe never runs security, so it retrieves no credential"
+assert_absent "$LOG/argv" "the probe never calls curl"
+FAKE_UNAME=Linux run code out err --supports-credential-source macos-keychain
+expect_code 1 "$code" "macos-keychain is unsupported on another system"
+assert_equals 'unsupported' "$out" "the probe answers unsupported"
+run_on_path "$NO_SECURITY_BIN" code out err --supports-credential-source macos-keychain
+expect_code 1 "$code" "macos-keychain is unsupported without security"
+assert_equals 'unsupported' "$out" "the probe answers unsupported without the tool"
+run code out err --supports-credential-source vault
+expect_code 1 "$code" "an unknown source is unsupported"
+assert_equals 'unsupported' "$out" "the probe answers unsupported for an unknown source"
+run_on_path "$NO_JQ_BIN" code out err --supports-credential-source macos-keychain
+expect_code 0 "$code" "the probe needs no jq"
+run code out err --supports-credential-source
+expect_code 2 "$code" "the probe without a source is a usage error"
+assert_contains "$err" '--supports-credential-source needs a value' "the usage error is named"
+run code out err --help
+assert_contains "$out" '--supports-credential-source <source>' "--help documents the probe"
+assert_contains "$out" 'dispatch-credential-sources.json' "--help names the declaration file"
+assert_absent "$LOG/security.argv" "no probe or help request ran security"
+rm -f "$CRED"
+pass "capability probe: supported or unsupported, with no declaration read and no credential tool run"
 
 # --- off stays off: no provider and no typesafe key, whatever else is set ----
 # The fork keeps its Bitwarden gate, so no typesafe key here means no secret id file.
@@ -1614,6 +1977,8 @@ for bad in \
   '{"array_order":"spend","rules":[{"when":"x","use":{"harness":"claude"}}]}|array_order must be "preference" when present' \
   '{"array_order":true,"rules":[{"when":"x","use":{"harness":"claude"}}]}|array_order must be "preference" when present' \
   '{"array_order":"preference","rules":[{"when":"x","use":[{"harness":"claude"},{"harness":"codex"}],"select":"quota-balanced"}]}|select quota-balanced conflicts with array_order preference' \
+  '{"shared_quota":"yes","rules":[{"when":"x","use":{"harness":"claude"}}]}|shared_quota must be true or false when present' \
+  '{"shared_quota":1,"rules":[{"when":"x","use":{"harness":"claude"}}]}|shared_quota must be true or false when present' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"min_confidence":"high"}]}|min_confidence must be a number from 0 through 1 when present' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"min_confidence":1.5}]}|min_confidence must be a number from 0 through 1 when present' \
   '{"rules":[{"when":"x","use":{"harness":"claude"},"floor":{"scope":"model:fable","min_percent":20}}]}|rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\z' \
@@ -1878,5 +2243,88 @@ FAKE_CURL_RESPONSE="$HAIKU_RESPONSE" QUOTA_AXI_FIXTURE="$PROMO_QUOTA-argmax.json
 assert_contains "$out" "$MUSE_PROFILE" "without preference order the spendPriority argmax still picks, promotion or not"
 assert_not_contains "$out" 'array_order' "without array_order no ordering line is printed"
 pass "haiku-first promotion: a short Go month, week, or rolling window promotes Haiku ahead of Muse only while both Claude windows hold, at the inclusive bounds, and never without both candidates"
+# --- shared-quota opt-out: no quota call, declared-order pick ----------------
+cp "$BASE_RULES" "$RULES"
+jq '.shared_quota = true' "$BASE_RULES" > "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "shared-quota clear exits 0"
+assert_contains "$out" '  status: clear' "shared-quota clear status"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "shared-quota picks the first declared profile, not the argmax winner"
+assert_not_contains "$out" 'spendPriority=' "shared-quota prints no quota evidence"
+assert_not_contains "$out" '  remaining=' "shared-quota prints no remaining percentages"
+assert_not_contains "$out" '  runway=' "shared-quota prints no runway gates"
+assert_contains "$out" 'quota ranking off: home declares a single shared quota' "every candidate line states quota ranking is off"
+assert_absent "$LOG/quota-axi.calls" "shared-quota never reads quota-axi"
+[ "$(printf '%s\n' "$out" | grep -c 'quota ranking off')" -ge 3 ] || fail "shared-quota states the opt-out on every candidate line"
+pass "shared-quota opt-out: no quota snapshot, deterministic declared-order pick, opt-out stated on every candidate"
+
+# --- shared-quota: an unmet rule-level floor is bypassed too -----------------
+# rule_1 declares floor model:fable >= 20% but the fixture has 15% there, so the
+# quota-ranked path would fall through to default; the opt-out keeps the rule.
+jq '.shared_quota = true' "$BASE_RULES" > "$RULES"
+reset_log
+write_response "$RESPONSE" rule_1 0.9
+run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "shared-quota unmet rule floor exits 0"
+assert_contains "$out" '  status: clear' "shared-quota unmet rule floor status"
+assert_contains "$out" '  note: rule matched' "shared-quota skips the unmet rule floor instead of falling through to default"
+assert_not_contains "$out" 'fall through to default' "shared-quota unmet rule floor never falls through to default"
+assert_contains "$out" "  profile: --harness 'claude' --model 'fable' --effort 'xhigh'" "shared-quota unmet rule floor picks the rule's own declared profile"
+assert_contains "$out" 'quota ranking off: home declares a single shared quota' "unmet rule floor candidate states quota ranking is off"
+assert_absent "$LOG/quota-axi.calls" "shared-quota unmet rule floor never reads quota-axi"
+pass "shared-quota bypasses an unmet rule-level floor: the rule's own profile wins with no quota call"
+
+# --- shared-quota: an unmet profile-level floor is bypassed too ---------------
+# The codex profile declares floor all_models >= 50% but the fixture has 31%, so
+# the quota-ranked path marks it not eligible; the opt-out resolves the declared
+# order anyway. The use array is reversed so the floored profile is first.
+jq '.shared_quota = true | .rules[1].use |= reverse' "$BASE_RULES" > "$RULES"
+reset_log
+write_response "$RESPONSE" rule_2 0.99
+run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "shared-quota unmet profile floor exits 0"
+assert_contains "$out" '  status: clear' "shared-quota unmet profile floor status"
+assert_contains "$out" "  profile: --harness 'codex' --model 'gpt-5.6-sol'" "shared-quota unmet profile floor picks the floored profile first in declared order"
+assert_not_contains "$out" 'not eligible' "shared-quota unmet profile floor marks no candidate ineligible"
+assert_contains "$out" 'quota ranking off: home declares a single shared quota' "unmet profile floor candidates state quota ranking is off"
+assert_absent "$LOG/quota-axi.calls" "shared-quota unmet profile floor never reads quota-axi"
+pass "shared-quota bypasses an unmet profile-level floor: the first declared profile wins with no quota call"
+
+# --- shared-quota: preferred_provider still narrows the pool ------------------
+# The matched rule declares claude first, then two codex-family profiles; the
+# home prefers codex, so the first declared codex profile wins.
+jq '.shared_quota = true | .preferred_provider = "codex" | .rules[3].use = [
+  {harness:"claude",model:"sonnet",effort:"high"},
+  {harness:"pi",model:"openai-codex/gpt-5.6-sol",provider:"codex"},
+  {harness:"codex",model:"gpt-5.6-sol"}]' "$BASE_RULES" > "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "shared-quota preferred_provider exits 0"
+assert_contains "$out" '  status: clear' "shared-quota preferred_provider status"
+assert_contains "$out" '  preferred_provider: codex: prefer eligible family candidates' "shared-quota still applies the family preference"
+assert_contains "$out" "  profile: --harness 'pi' --model 'openai-codex/gpt-5.6-sol'" "shared-quota preferred_provider picks the first declared preferred-family profile"
+assert_absent "$LOG/quota-axi.calls" "shared-quota preferred_provider never reads quota-axi"
+[ "$(printf '%s\n' "$out" | grep -c '^  candidate: ')" -eq 3 ] || fail "shared-quota preferred_provider lists every candidate"
+[ "$(printf '%s\n' "$out" | grep '^  candidate: ' | grep -c 'quota ranking off: home declares a single shared quota')" -eq 3 ] ||
+  fail "shared-quota preferred_provider states the opt-out on every candidate line"
+pass "shared-quota keeps preferred_provider narrowing: the preferred family wins in declared order with no quota call"
+
+# restore the shared response fixture for the false-path test below
+write_response "$RESPONSE" rule_4 0.9
+
+# --- shared_quota false: byte-for-byte the quota-ranked path ------------------
+jq '.shared_quota = false' "$BASE_RULES" > "$RULES"
+reset_log
+run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "shared_quota false exits 0"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-medium'" "shared_quota false keeps the spendPriority argmax"
+assert_not_contains "$out" 'quota ranking off' "shared_quota false prints no opt-out wording"
+[ -f "$LOG/quota-axi.calls" ] || fail "shared_quota false still reads quota-axi"
+assert_contains "$out" 'spendPriority=' "shared_quota false prints quota evidence"
+pass "shared_quota false keeps the unchanged quota-ranked behavior"
+cp "$BASE_RULES" "$RULES"
 
 printf '# all fm-dispatch-resolve tests passed\n'
