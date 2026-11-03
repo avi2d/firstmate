@@ -1,0 +1,9 @@
+ok - fm_backend_herdr_version_check: accepts the current protocol (14)
+ok - herdr session binding: a stale Pi binding is cleared by one sessionless report from herdr:pi
+ok - herdr session binding: a live agent's binding is never cleared
+ok - herdr session binding: a binding Herdr kept is reported as not cleared
+ok - herdr session binding: an unbound placeholder is left alone
+ok - herdr session binding: agent_not_found reads as no binding, other read errors as unknown
+ok - herdr report seq: the whole-second fallback never runs ahead of now
+ok - herdr report seq: counts epoch microseconds
+rc=0
