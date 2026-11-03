@@ -1,172 +1,172 @@
 #!/usr/bin/env bash
-# fm-control.sh - the CONTROL PLANE for a firstmate-owned agent: allowlisted
-# lifecycle verbs addressed to an exact task id.
-#
-# Usage: fm-control.sh <task-id> interrupt
-#        fm-control.sh <task-id> exit
-#        fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
-#                                         [--effort <level>]
-#                                         (--note <text> | --note-file <path>)
-#
-# Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
-# DATA plane: conversational text for the agent to read, always routing-marked
-# for a kind=secondmate target so the reply returns through the status path.
-# That marking is right for a message and wrong for a lifecycle command - a
-# marked "/quit" arrives as ordinary chat the agent reasons ABOUT instead of
-# executing. This script is the control plane: semantic process control with a
-# closed verb list, per-harness mechanics owned by an executable adapter
-# (bin/fm-control-lib.sh) rather than improvised in agent prose, and a verified
-# postcondition for every action. There is deliberately NO arbitrary-text and
-# NO generic raw-key entry point here; fm-send remains the only way to send an
-# agent something to read.
-#
-#   interrupt  Deliver the harness's verified interrupt sequence. The agent
-#              keeps running. Postcondition: delivery succeeded, the endpoint
-#              still exists, and the agent is still alive where the backend can
-#              classify that. Cancellation is confirmed only from an adapter-
-#              owned acknowledgement and otherwise reported unconfirmed. Busy
-#              state is never rewritten as proof of the action. Devin
-#              cancellation invalidates it to unknown because its native hooks
-#              emit no cancellation close; this is not a success claim.
-#              An adapter whose repeated interrupt key does something else on
-#              an idle agent (Devin's revert picker) sends its later presses
-#              only after the first press rendered a running turn, and
-#              otherwise reports `cancel=not-running` having sent one press.
-#   exit       Stop the agent, preserving its terminal endpoint, worktree, and
-#              every uncommitted change. Interrupts first when the task reads
-#              busy, then submits the harness's exit command. A secondmate is
-#              first given up to FM_CONTROL_SECONDMATE_SETTLE_WAIT to finish
-#              its turn on its own, so the restart that follows its persist
-#              answer stops an idle agent rather than cutting that turn off.
-#              Postcondition:
-#              the backend's recovery-grade classifier reports the agent gone.
-#              Already-stopped is success (idempotent). An endpoint that reads
-#              `missing` (or, on Rex, `unreadable`, which is how a stopped Rex
-#              server reads without starting it) is put through the control
-#              plane's per-backend absence
-#              proof (fm_control_endpoint_absence_verdict) before anything is
-#              claimed about it, because `missing` also covers an endpoint that
-#              is merely unreachable from this seat. Herdr proves absence by
-#              reading the session the record names; REX proves it because its
-#              never-reused ids answer a structured not-found from the server
-#              the record names.
-#              Proven gone reports `endpoint-gone` rather than
-#              `already-stopped`, because the endpoint this verb normally
-#              preserves did not survive; a pane that turns out to be there and
-#              idle is the ordinary `already-stopped`; one whose agent is back
-#              takes the ordinary interrupt-then-exit path. A tmux `missing`
-#              always REFUSES: a task record carries no socket identity for its
-#              endpoint, so this verb cannot tell a destroyed window from one on
-#              a tmux server it cannot address, and it will not claim a stop it
-#              cannot see.
-#              Refused on t3code before anything is sent: T3's `/mcp` tools
-#              have no session stop (bin/fm-control-lib.sh
-#              fm_control_backend_exit_supported); interrupt ends its turn.
-#   relaunch   Transactionally replace the running agent with a new one, in the
-#              SAME worktree - and the same endpoint whenever that endpoint
-#              still exists - on the same or a newly chosen
-#              harness/model/effort - so switching harness is one ordinary use
-#              of this verb. When the recorded endpoint is instead proven gone -
-#              a Herdr pane or workspace destroyed in churn, or a Rex block or
-#              session gone with its server - the launch owner re-creates one in
-#              that worktree, in the herdr session the record names (Rex: the
-#              recorded session while it survives, otherwise the ordinary Rex
-#              placement), and the task's record rebinds to it; that is how a task
-#              whose terminal was destroyed is reclaimed by the home that owns
-#              it, rather than being stranded with a parked approval nobody can
-#              answer. Reclaim is HERDR- and REX-ONLY for the reason `exit` gives above:
-#              a tmux `missing` cannot be proven absent from a task record, so
-#              it refuses.
-#              An explicit `default` model or effort clears that
-#              axis for the replacement. With no explicit axis, a secondmate
-#              re-resolves its durable config/secondmate-harness pin (harness
-#              plus its optional model and effort tokens) exactly as any other
-#              respawn does, while a ship or scout keeps the exact adapter
-#              already recorded for it.
-#              A prefixed raw-command basename cannot reconstruct its launch
-#              command, so relaunch requires an explicit --harness for it.
-#              A replacement Claude or Pi profile must also pass this home's
-#              worker account pin (bin/fm-worker-account-lib.sh) here, so a pin
-#              that no longer resolves or is signed out refuses before the old
-#              agent stops.
-#              A recorded Claude account (claude_account=) follows a relaunch
-#              that keeps the same harness and model, under the same pre-stop
-#              sign-in check; any other profile relaunches without it.
-#              A replacement omp secondmate likewise passes its per-secondmate
-#              omp profile pin (bin/fm-omp-profile-lib.sh) before the old agent
-#              stops.
-#              The same pre-stop refusal applies to this home's worker tool
-#              exclusions (bin/fm-exclude-tools-lib.sh): a malformed list, or a
-#              replacement runtime that cannot hide the listed tools.
-#              Refused on t3code before anything is stopped: a T3 thread
-#              keeps its conversation, so a new turn or a provider change on
-#              it continues the same agent rather than a fresh one
-#              (fm_control_backend_relaunch_supported).
-#              --note is required for a ship or scout, whose replacement
-#              inherits the local copy but none of the conversation; a
-#              secondmate reconciles its own home's records at startup, so its
-#              standing charter is never rewritten.
-#              Records a durable checkpoint and that note, exits the old agent,
-#              then delegates the launch to its single owner,
-#              bin/fm-spawn.sh --relaunch. A failure before publication keeps
-#              the prior durable record in place and reports the concrete
-#              state; it never leaves a half-transitioned task claiming to be
-#              running.
-#
-# Teardown and discard are NOT verbs here and never will be. `exit` stops an
-# agent and preserves everything else; removing a worktree, killing an
-# endpoint, or discarding work stays with bin/fm-teardown.sh, which owns the
-# landed-work test.
-#
-# `resume` is not a verb: it is not deterministic across the verified adapters
-# (bin/fm-control-lib.sh's header owns that reasoning). `relaunch` covers the
-# same need where the backend can host a replacement because the brief on disk,
-# not a harness-private session, is the durable instruction.
-#
-# Targeting is EXACT: only a bare task id with a state/<id>.meta record in
-# THIS home is accepted, and the record must pass the shared endpoint-identity
-# validation (bin/fm-backend.sh's fm_backend_validate_task_endpoint). A legacy
-# fm-<id> label, an explicit session:window endpoint, and a bare window name
-# are all refused - a lifecycle command delivered to the wrong endpoint is far
-# worse than a loud refusal.
-#
-# A remotely placed secondmate is refused by name: its agent runs on another
-# host, so no postcondition this plane verifies could be read for it here.
-#
-# Fail-closed boundaries:
-#   - An unverified harness, or a harness whose control mechanics are unknown,
-#     is refused rather than guessed at.
-#   - A backend that cannot deliver the harness's interrupt key is refused
-#     (Orca's terminal API has no Escape).
-#   - `exit` and `relaunch` require a backend with a recovery-grade agent-state
-#     classifier (tmux, herdr, rex, or t3code), because without one the "the
-#     agent stopped" postcondition cannot be proven. Relaunch also requires
-#     replacement support, which t3code lacks. zellij, orca, cmux, paseo, and tern are
-#     refused rather than reported as successful blind.
-#   - An ambiguous or unreadable endpoint state refuses; only a positively
-#     classified state acts (a Rex `unreadable` first goes through the absence
-#     proof `exit` describes, and refuses unless that proof settles it).
-#   - A composer that visibly holds pending text refuses before an exit command
-#     is typed, so existing text is preserved instead of being concatenated.
-#
-# Environment knobs (all bounded waits, seconds):
-#   FM_CONTROL_POLL              poll interval for postcondition waits (0.5)
-#   FM_CONTROL_SETTLE_WAIT       adapter acknowledgement wait after interrupt (5)
-#   FM_CONTROL_ARM_WAIT          wait for an armed interrupt's rendered proof
-#                                after the press gap (1.5)
-#   FM_CONTROL_EXIT_WAIT         alive->dead wait after the exit command (30)
-#   FM_CONTROL_LAUNCH_WAIT       dead->alive wait after a relaunch (90)
-#   FM_CONTROL_EXIT_RETRIES      Enter retries for the exit command (3)
-#   FM_CONTROL_SECONDMATE_SETTLE_WAIT  wait for a secondmate's turn to end
-#                                before stopping it (180)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 usage() {
-  # The whole leading comment block, ending at the first non-comment line.
-  sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+fm-control.sh - the CONTROL PLANE for a firstmate-owned agent: allowlisted
+lifecycle verbs addressed to an exact task id.
+
+Usage: fm-control.sh <task-id> interrupt
+       fm-control.sh <task-id> exit
+       fm-control.sh <task-id> relaunch [--harness <name>] [--model <name>]
+                                        [--effort <level>]
+                                        (--note <text> | --note-file <path>)
+
+Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
+DATA plane: conversational text for the agent to read, always routing-marked
+for a kind=secondmate target so the reply returns through the status path.
+That marking is right for a message and wrong for a lifecycle command - a
+marked "/quit" arrives as ordinary chat the agent reasons ABOUT instead of
+executing. This script is the control plane: semantic process control with a
+closed verb list, per-harness mechanics owned by an executable adapter
+(bin/fm-control-lib.sh) rather than improvised in agent prose, and a verified
+postcondition for every action. There is deliberately NO arbitrary-text and
+NO generic raw-key entry point here; fm-send remains the only way to send an
+agent something to read.
+
+  interrupt  Deliver the harness's verified interrupt sequence. The agent
+             keeps running. Postcondition: delivery succeeded, the endpoint
+             still exists, and the agent is still alive where the backend can
+             classify that. Cancellation is confirmed only from an adapter-
+             owned acknowledgement and otherwise reported unconfirmed. Busy
+             state is never rewritten as proof of the action. Devin
+             cancellation invalidates it to unknown because its native hooks
+             emit no cancellation close; this is not a success claim.
+             An adapter whose repeated interrupt key does something else on
+             an idle agent (Devin's revert picker) sends its later presses
+             only after the first press rendered a running turn, and
+             otherwise reports `cancel=not-running` having sent one press.
+  exit       Stop the agent, preserving its terminal endpoint, worktree, and
+             every uncommitted change. Interrupts first when the task reads
+             busy, then submits the harness's exit command. A secondmate is
+             first given up to FM_CONTROL_SECONDMATE_SETTLE_WAIT to finish
+             its turn on its own, so the restart that follows its persist
+             answer stops an idle agent rather than cutting that turn off.
+             Postcondition:
+             the backend's recovery-grade classifier reports the agent gone.
+             Already-stopped is success (idempotent). An endpoint that reads
+             `missing` (or, on Rex, `unreadable`, which is how a stopped Rex
+             server reads without starting it) is put through the control
+             plane's per-backend absence
+             proof (fm_control_endpoint_absence_verdict) before anything is
+             claimed about it, because `missing` also covers an endpoint that
+             is merely unreachable from this seat. Herdr proves absence by
+             reading the session the record names; REX proves it because its
+             never-reused ids answer a structured not-found from the server
+             the record names.
+             Proven gone reports `endpoint-gone` rather than
+             `already-stopped`, because the endpoint this verb normally
+             preserves did not survive; a pane that turns out to be there and
+             idle is the ordinary `already-stopped`; one whose agent is back
+             takes the ordinary interrupt-then-exit path. A tmux `missing`
+             always REFUSES: a task record carries no socket identity for its
+             endpoint, so this verb cannot tell a destroyed window from one on
+             a tmux server it cannot address, and it will not claim a stop it
+             cannot see.
+             Refused on t3code before anything is sent: T3's `/mcp` tools
+             have no session stop (bin/fm-control-lib.sh
+             fm_control_backend_exit_supported); interrupt ends its turn.
+  relaunch   Transactionally replace the running agent with a new one, in the
+             SAME worktree - and the same endpoint whenever that endpoint
+             still exists - on the same or a newly chosen
+             harness/model/effort - so switching harness is one ordinary use
+             of this verb. When the recorded endpoint is instead proven gone -
+             a Herdr pane or workspace destroyed in churn, or a Rex block or
+             session gone with its server - the launch owner re-creates one in
+             that worktree, in the herdr session the record names (Rex: the
+             recorded session while it survives, otherwise the ordinary Rex
+             placement), and the task's record rebinds to it; that is how a task
+             whose terminal was destroyed is reclaimed by the home that owns
+             it, rather than being stranded with a parked approval nobody can
+             answer. Reclaim is HERDR- and REX-ONLY for the reason `exit` gives above:
+             a tmux `missing` cannot be proven absent from a task record, so
+             it refuses.
+             An explicit `default` model or effort clears that
+             axis for the replacement. With no explicit axis, a secondmate
+             re-resolves its durable config/secondmate-harness pin (harness
+             plus its optional model and effort tokens) exactly as any other
+             respawn does, while a ship or scout keeps the exact adapter
+             already recorded for it.
+             A prefixed raw-command basename cannot reconstruct its launch
+             command, so relaunch requires an explicit --harness for it.
+             A replacement Claude or Pi profile must also pass this home's
+             worker account pin (bin/fm-worker-account-lib.sh) here, so a pin
+             that no longer resolves or is signed out refuses before the old
+             agent stops.
+             A recorded Claude account (claude_account=) follows a relaunch
+             that keeps the same harness and model, under the same pre-stop
+             sign-in check; any other profile relaunches without it.
+             A replacement omp secondmate likewise passes its per-secondmate
+             omp profile pin (bin/fm-omp-profile-lib.sh) before the old agent
+             stops.
+             The same pre-stop refusal applies to this home's worker tool
+             exclusions (bin/fm-exclude-tools-lib.sh): a malformed list, or a
+             replacement runtime that cannot hide the listed tools.
+             Refused on t3code before anything is stopped: a T3 thread
+             keeps its conversation, so a new turn or a provider change on
+             it continues the same agent rather than a fresh one
+             (fm_control_backend_relaunch_supported).
+             --note is required for a ship or scout, whose replacement
+             inherits the local copy but none of the conversation; a
+             secondmate reconciles its own home's records at startup, so its
+             standing charter is never rewritten.
+             Records a durable checkpoint and that note, exits the old agent,
+             then delegates the launch to its single owner,
+             bin/fm-spawn.sh --relaunch. A failure before publication keeps
+             the prior durable record in place and reports the concrete
+             state; it never leaves a half-transitioned task claiming to be
+             running.
+
+Teardown and discard are NOT verbs here and never will be. `exit` stops an
+agent and preserves everything else; removing a worktree, killing an
+endpoint, or discarding work stays with bin/fm-teardown.sh, which owns the
+landed-work test.
+
+`resume` is not a verb: it is not deterministic across the verified adapters
+(docs/agent-control.md owns the per-adapter facts). `relaunch` covers the
+same need where the backend can host a replacement because the brief on disk,
+not a harness-private session, is the durable instruction.
+
+Targeting is EXACT: only a bare task id with a state/<id>.meta record in
+THIS home is accepted, and the record must pass the shared endpoint-identity
+validation (bin/fm-backend.sh's fm_backend_validate_task_endpoint). A legacy
+fm-<id> label, an explicit session:window endpoint, and a bare window name
+are all refused - a lifecycle command delivered to the wrong endpoint is far
+worse than a loud refusal.
+
+A remotely placed secondmate is refused by name: its agent runs on another
+host, so no postcondition this plane verifies could be read for it here.
+
+Fail-closed boundaries:
+  - An unverified harness, or a harness whose control mechanics are unknown,
+    is refused rather than guessed at.
+  - A backend that cannot deliver the harness's interrupt key is refused
+    (Orca's terminal API has no Escape).
+  - `exit` and `relaunch` require a backend with a recovery-grade agent-state
+    classifier (tmux, herdr, rex, or t3code), because without one the "the
+    agent stopped" postcondition cannot be proven. Relaunch also requires
+    replacement support, which t3code lacks. zellij, orca, cmux, paseo, and tern are
+    refused rather than reported as successful blind.
+  - An ambiguous or unreadable endpoint state refuses; only a positively
+    classified state acts (a Rex `unreadable` first goes through the absence
+    proof `exit` describes, and refuses unless that proof settles it).
+  - A composer that visibly holds pending text refuses before an exit command
+    is typed, so existing text is preserved instead of being concatenated.
+
+Environment knobs (all bounded waits, seconds):
+  FM_CONTROL_POLL              poll interval for postcondition waits (0.5)
+  FM_CONTROL_SETTLE_WAIT       adapter acknowledgement wait after interrupt (5)
+  FM_CONTROL_ARM_WAIT          wait for an armed interrupt's rendered proof
+                               after the press gap (1.5)
+  FM_CONTROL_EXIT_WAIT         alive->dead wait after the exit command (30)
+  FM_CONTROL_LAUNCH_WAIT       dead->alive wait after a relaunch (90)
+  FM_CONTROL_EXIT_RETRIES      Enter retries for the exit command (3)
+  FM_CONTROL_SECONDMATE_SETTLE_WAIT  wait for a secondmate's turn to end
+                               before stopping it (180)
+EOF
 }
 
 case "${1:-}" in

@@ -844,7 +844,7 @@ On macOS a Node harness such as Pi overwrites the argument block that holds its 
 An unreadable process view, a pane with no harness, and every other backend claim no verdict.
 Secondmates and primaries run outside any task worktree with no task marker, so they are never judged.
 
-The relaunch exits the resumed agent, moves the pane shell into the recorded worktree, and starts a Firstmate launch on the same Pi session reference.
+The relaunch exits the resumed agent, moves the pane shell into the recorded worktree, and starts a fresh Pi session there.
 The pane's top shell then sits in the worktree, so a later restart resumes into the right copy, still without the launch environment.
 `tests/fm-herdr-restore-isolation-live-e2e.test.sh` measures the resume against real Herdr and Pi, and [verification](verification/runtime-backends.md#agents-resumed-by-a-restart) records the result.
 
@@ -927,17 +927,22 @@ Idle secondmates remain exempt from stale-pane escalation.
 A pane has ONE status authority, and for Pi with the integration installed that authority is the lifecycle hooks - Herdr then skips screen detection for the pane, which is the `full_lifecycle_hook_authority` reason `herdr agent explain` prints for it.
 That authority is bound to a session identity, and in the crew shape the registration outliving its process ([above](#restart-and-liveness-behavior)) is that same binding: the record stays, the agent it named is gone.
 
-An agent started FRESH in such a pane reports a new session and Herdr ignores its reports, so the pane stays frozen at whatever the previous agent last reported - a crewmate running its pipeline reads `idle` until its task ends, and nothing from outside repairs it (measured 2026-09-21 on Herdr 0.9.1 against a real Pi; `pane report-agent-session` and `pane report-agent` for `herdr:pi` are accepted without being applied unless the reporter is the registered pane agent, and `pane release-agent` on the stale record changes nothing).
+An agent started FRESH in such a pane reports a new session and Herdr ignores its reports, so the pane stays frozen at whatever the previous agent last reported.
+A crewmate running its pipeline then reads `idle` until its task ends.
+`pane release-agent` on the stale record changes nothing, but on Herdr 0.9.5 a sessionless `pane report-agent` from the bound source drops the binding.
 A fresh spawn never meets this: it gets a new pane with nothing bound.
 
-So a **relaunch** preserves the binding instead of fighting it: before the Pi-family launch line is composed, `bin/fm-spawn.sh` reads the pane's recorded session reference through `fm_backend_herdr_pane_agent_session_ref` and passes it back as Pi's own `--session <path-or-id>` (`relaunch_resume_args`; `bin/fm-control-lib.sh`'s `fm_control_relaunch_resume_flag` owns which adapters and which registration labels qualify).
-The replacement therefore starts on the exact identity the authority is bound to, and its `working`/`idle`/`blocked` reports land again.
-The reference is the endpoint's own record, never a guess about which session is recent, and only a `pi` label may supply it: a registration belonging to another adapter is ignored, as is an unreadable, missing, or malformed one, in which case the relaunch is the ordinary fresh session it always was.
-A relaunch that changes harness AWAY from Pi is not repaired by this and keeps the pre-existing behavior; only the adapter the authority belongs to can resume its session.
-
-The session file may not exist any more: Pi creates it at exactly that path, so the identity survives either way.
-The read grants no send, close, or lifecycle authority of its own - it is a read of Herdr's record.
-The portable halves are pinned by `tests/fm-backend-herdr.test.sh` (the read, against a canned CLI) and `tests/fm-control.test.sh` (the per-adapter rule), and `tests/fm-control-herdr-smoke.test.sh` exercises the relaunch path against the real binary; the versioned live measurement, including the reproduction and the resume that lifts it, is [`verification/runtime-backends.md`](verification/runtime-backends.md) "Pane status authority across a relaunch".
+A **relaunch** never resumes that session, because resuming it would hand the replacement its predecessor's whole conversation.
+The replacement always starts a fresh Pi session.
+Before typing the launch into an adopted pane, `bin/fm-spawn.sh` clears the stale binding through `fm_backend_herdr_pane_session_binding_clear`.
+When the pane reads `stale-agent`, a registration over a shell-only pane, it sends one `pane report-agent` from the registration's own source and agent with `--state idle`, no session fields, and a microsecond `--seq` newer than the exited agent's reports and not newer than the replacement's.
+It then confirms the registration no longer names a session, and an `agent_not_found` answer counts as no binding.
+Herdr applies that sessionless report and drops the binding, so the fresh agent's own session report binds its new session file and its `working`, `idle`, and `blocked` reports land again.
+A live registration is never cleared, and the clear only runs for a Pi-family replacement.
+If the binding cannot be confirmed gone, the relaunch still starts fresh and prints a warning that the pane's status may not follow it.
+The clear grants no send, close, or lifecycle authority, because it is one status report to Herdr's own record.
+`tests/fm-backend-herdr.test.sh` pins the clear against a canned CLI, and `tests/fm-control-relaunch.test.sh` pins that a relaunch launches without `--session` and clears the binding before typing.
+The versioned live measurement is [`verification/runtime-backends.md`](verification/runtime-backends.md) "Pane status authority across a relaunch".
 
 ## Push events and polling fallback
 

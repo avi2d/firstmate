@@ -1,48 +1,5 @@
 #!/usr/bin/env bash
-# fm-control-lib.sh - the ONE executable owner of firstmate's agent lifecycle
-# CONTROL-PLANE mechanics.
-#
-# Data plane vs control plane (captain-approved root architecture, 2026-07-13).
-# bin/fm-send.sh is the DATA plane: conversational text for the agent to read,
-# always routing-marked for a kind=secondmate target so the reply comes back
-# through the status path. That marking is exactly right for a message and
-# exactly wrong for a lifecycle command: a marked "/quit" arrives as ordinary
-# chat ("[fm-from-firstmate] /quit") that the agent reasons ABOUT instead of
-# executing. bin/fm-control.sh is the CONTROL plane: allowlisted lifecycle
-# verbs addressed to an exact task id, with the per-harness mechanics owned
-# here rather than improvised per harness in agent prose.
-#
-# This file owns three capability tables plus their pure artifact-path tables,
-# and ONE named exception to that purity - fm_control_endpoint_absence_verdict,
-# the single owner of the per-backend endpoint-absence proof, which does run
-# backend reads. Everything else has no side effects, runs no backend command,
-# and reads no state, so sourcing this file is still free and the tables can be
-# read by a test as a pure contract:
-#
-#   1. Verb allowlist. There is no arbitrary-text and no generic raw-key entry
-#      point on the control plane; a caller either names an allowlisted verb or
-#      is refused.
-#   2. Per-harness control mechanics: which key interrupts a running turn, how
-#      many times it must be sent, whether the composer needs clearing after
-#      that key, which adapter-owned cancellation acknowledgement is observable,
-#      which command exits the agent, and which task kinds the adapter is
-#      verified to run. These are the empirically verified facts previously
-#      carried only in the harness-adapters skill's per-adapter tables; that
-#      skill now points here so one executable owner holds them, and
-#      bin/fm-send.sh's --key path reads the same table rather than a second
-#      copy of it.
-#   3. Per-backend capability: which named keys a runtime backend can deliver,
-#      and whether the backend has a recovery-grade agent-state classifier
-#      (bin/fm-backend.sh's fm_backend_agent_state) able to PROVE that an agent
-#      stopped. A verb whose postcondition cannot be proven on the recorded
-#      backend is refused rather than performed blind.
-#
-# `resume` is deliberately NOT a verb: it is not deterministic across the
-# verified adapters (docs/agent-control.md owns the per-adapter resume facts).
-# `relaunch` uses the brief on disk rather than a harness-private session as
-# its durable instruction. The relaunch-time exception is
-# fm_control_relaunch_resume_flag below: a reference the endpoint's runtime
-# bound as its status authority is returned to a replacement with that adapter.
+# Sourcing runs nothing; only fm_control_endpoint_absence_verdict reads a backend.
 
 # The complete control-plane verb allowlist, one per line.
 fm_control_verbs() {
@@ -292,43 +249,6 @@ fm_control_exit_command() {  # <harness> [opencode-major]
     codex|pi|pi-signed|omp|gemini|agy|devin|commandcode|polytoken|cortex|kiro) printf '/quit' ;;
     *) return 1 ;;
   esac
-}
-
-# The launch argument that makes a RELAUNCH of <harness> RESUME an exact agent
-# session instead of starting a fresh one, printed only when <registered-agent>
-# is the label that session reference belongs to; nothing otherwise.
-#
-# This exists for one runtime failure, not as a general resume feature. Herdr
-# gives a pane one status authority, and for Pi with its installed integration
-# that authority is the lifecycle hooks, which also suppress Herdr's screen
-# detection for the pane. That registration outlives its agent process in the
-# crew shape - a nested worktree shell under the pane's top shell - and Herdr
-# then applies only reports carrying the session identity it bound. A
-# replacement agent started fresh in that same pane reports a NEW session, so
-# its state reports are ignored and the pane stays frozen at whatever the
-# previous agent last reported: a working crewmate reads idle until its task
-# ends (reproduced and fixed live 2026-09-21, herdr 0.9.1; the read that
-# supplies the reference is
-# bin/backends/herdr.sh's fm_backend_herdr_pane_agent_session_ref).
-#
-# So the reference is not chosen from what looks recent - it is the exact
-# identity the endpoint's own runtime recorded, which is why a matched
-# registered-agent label is required: resuming a reference reported by a
-# DIFFERENT agent would inject another agent's conversation into this launch.
-# `pi` is the label Pi and pi-signed both report, so one entry covers both.
-# Every other harness returns nothing and keeps today's fresh-session
-# relaunch, which is what the adapter tables above (and the absence of a
-# verified resume form for those harnesses) require.
-#
-# Prints the flag name only; the caller quotes and appends the reference, since
-# shell quoting belongs to the owner of the launch line (bin/fm-spawn.sh).
-fm_control_relaunch_resume_flag() {  # <harness> <registered-agent>
-  case "${1-}" in
-    pi|pi-signed)
-      [ "${2-}" = pi ] && printf -- '--session'
-      ;;
-  esac
-  return 0
 }
 
 # Which named keys a backend adapter can deliver. Every session provider
