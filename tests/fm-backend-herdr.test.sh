@@ -857,10 +857,6 @@ test_task_isolation_reads_the_task_marker_where_the_kernel_exposes_it() {
   pass "herdr task isolation: a readable environment without the task marker reads unmarked"
 }
 
-# --- clearing a stale session binding before a fresh relaunch ---------------
-
-# session_binding_clear_case: prints the clear's exit status, then every
-# `pane report-agent` the fake CLI received, one per line.
 session_binding_clear_case() {  # <dir-suffix> <process-info-body> <agent-get-after-report>
   local dir="$TMP_ROOT/binding-clear-$1" resp log fb rc=0
   mkdir -p "$dir/responses"; resp="$dir/responses"; log="$dir/log"; : > "$log"
