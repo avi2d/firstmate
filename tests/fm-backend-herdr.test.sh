@@ -857,14 +857,15 @@ test_task_isolation_reads_the_task_marker_where_the_kernel_exposes_it() {
   pass "herdr task isolation: a readable environment without the task marker reads unmarked"
 }
 
-session_binding_clear_case() {  # <dir-suffix> <process-info-body> <agent-get-after-report>
-  local dir="$TMP_ROOT/binding-clear-$1" resp log fb rc=0
+session_binding_clear_case() {
+  local suffix=$1 info_body=$2 after_body=$3 initial_body=${4:-$BOUND_PI_REGISTRATION} dir resp log fb rc=0
+  dir="$TMP_ROOT/binding-clear-$suffix"
   mkdir -p "$dir/responses"; resp="$dir/responses"; log="$dir/log"; : > "$log"
-  printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' > "$resp/1.out"
-  printf '%s\n' "$BOUND_PI_REGISTRATION" > "$resp/2.out"
-  printf '%s\n' "$2" > "$resp/3.out"
-  printf '%s\n' "$BOUND_PI_REGISTRATION" > "$resp/4.out"
-  printf '%s\n' "$3" > "$resp/6.out"
+  printf '%s\n' "$initial_body" > "$resp/1.out"
+  printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' > "$resp/2.out"
+  printf '%s\n' "$initial_body" > "$resp/3.out"
+  printf '%s\n' "$info_body" > "$resp/4.out"
+  printf '%s\n' "$after_body" > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_session_binding_clear fmtest w1:p2' "$ROOT" || rc=$?
@@ -874,6 +875,7 @@ session_binding_clear_case() {  # <dir-suffix> <process-info-body> <agent-get-af
 
 BOUND_PI_REGISTRATION='{"result":{"agent":{"agent":"pi","agent_status":"idle","agent_session":{"agent":"pi","kind":"path","source":"herdr:pi","value":"/home/u/.pi/agent/sessions/--wt--/2026-11-02T07-14-40-136Z_01a0bdaa.jsonl"}}}}'
 UNBOUND_PI_REGISTRATION='{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}'
+PLACEHOLDER_PI_REGISTRATION='{"result":{"agent":{"agent":"pi","agent_status":"unknown"}}}'
 
 test_stale_session_binding_is_cleared_by_one_sessionless_report_from_its_own_source() {
   local sleep_bin shell_pid out
@@ -911,7 +913,19 @@ test_session_binding_clear_fails_when_herdr_keeps_the_binding() {
   pass "herdr session binding: a binding Herdr kept is reported as not cleared"
 }
 
-test_report_seq_is_newer_than_a_pi_report_from_the_same_instant() {
+test_session_binding_clear_leaves_an_unbound_placeholder_alone() {
+  local sleep_bin shell_pid out
+  sleep_bin=$(command -v sleep) || fail "sleep not found"
+  "$sleep_bin" 300 &
+  shell_pid=$!
+  out=$(session_binding_clear_case placeholder "$(shell_only_process_info "$shell_pid")" "$UNBOUND_PI_REGISTRATION" "$PLACEHOLDER_PI_REGISTRATION")
+  kill "$shell_pid" 2>/dev/null || true
+  [ "$out" = "rc=0" ] \
+    || fail "an unbound placeholder carries no binding to clear, got: $out"
+  pass "herdr session binding: an unbound placeholder is left alone"
+}
+
+test_report_seq_counts_epoch_microseconds_not_milliseconds() {
   local before seq after
   before=$(( $(date +%s) * 1000000 ))
   seq=$(bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_report_seq' "$ROOT")
@@ -6447,7 +6461,8 @@ test_stale_registration_ignores_status_and_reads_the_process
 test_stale_session_binding_is_cleared_by_one_sessionless_report_from_its_own_source
 test_session_binding_clear_never_reports_over_a_live_agent
 test_session_binding_clear_fails_when_herdr_keeps_the_binding
-test_report_seq_is_newer_than_a_pi_report_from_the_same_instant
+test_session_binding_clear_leaves_an_unbound_placeholder_alone
+test_report_seq_counts_epoch_microseconds_not_milliseconds
 test_registered_agent_with_a_live_foreground_process_stays_alive
 test_unregistered_sandboxed_agent_reads_alive
 test_placeholder_record_over_a_sandboxed_agent_reads_alive

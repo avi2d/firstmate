@@ -2451,7 +2451,7 @@ fm_backend_herdr_report_seq() {
     *[0-9][.,][0-9][0-9][0-9][0-9][0-9][0-9])
       printf '%s%s' "${now%%[.,]*}" "${now#*[.,]}"
       ;;
-    *) printf '%s000000' "$(date +%s)" ;;
+    *) printf '%s000000' "$(( $(date +%s) + 1 ))" ;;
   esac
 }
 
@@ -2461,13 +2461,12 @@ fm_backend_herdr_report_seq() {
 # shell-only pane may receive one. Returns 1 while a binding remains.
 fm_backend_herdr_pane_session_binding_clear() {  # <session> <pane_id>
   local session=$1 pane_id=$2 out agent reporter
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || return 1
+  [ -n "$(printf '%s' "$out" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)" ] || return 0
   case "$(fm_backend_herdr_pane_agent_state "$session" "$pane_id")" in
-    dead|no-agent) return 0 ;;
     stale-agent) ;;
     *) return 1 ;;
   esac
-  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || return 1
-  [ -n "$(printf '%s' "$out" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)" ] || return 0
   agent=$(printf '%s' "$out" | jq -r '.result.agent.agent // empty' 2>/dev/null)
   reporter=$(printf '%s' "$out" | jq -r '.result.agent.agent_session.source // empty' 2>/dev/null)
   [ -n "$agent" ] && [ -n "$reporter" ] || return 1
