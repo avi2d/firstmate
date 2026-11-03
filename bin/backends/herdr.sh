@@ -2442,54 +2442,39 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
   esac
 }
 
-# fm_backend_herdr_pane_agent_session_ref: the agent session reference the
-# named pane's Herdr registration currently holds, printed as
-# "<agent-label>\t<session-ref>", or nothing (nonzero) when the pane has no
-# readable registration or the reference is not one a harness can be resumed on.
-#
-# Why a caller wants this: Herdr gives a pane ONE status authority, and for Pi
-# with its integration installed that authority is the lifecycle hooks, so
-# Herdr also skips screen detection for the pane (docs/herdr-backend.md
-# "Agent status authority and relaunch"). The registration survives its agent
-# process in the crew shape (a nested worktree shell under the pane's top
-# shell), and Herdr then applies only reports carrying the session identity it
-# bound: an agent started fresh in that pane reports a new session and its
-# state reports are ignored, leaving the pane frozen at its pre-relaunch value
-# (measured 2026-09-21: herdr 0.9.1, `pane report-agent-session` and
-# `report-agent` accepted with rc=0 but never applied, and `pane release-agent`
-# ineffective from outside the agent process). Handing the bound reference back
-# to the replacement - Pi's own `--session <path-or-id>` - keeps that identity,
-# and the authority with it.
-#
-# The value is only reported when it has the shape the harness can consume: a
-# `path` reference must be absolute, and an `id` reference must be a bare token.
-# An unreadable, missing, or unrecognized reference prints nothing, so a caller
-# falls back to its ordinary behavior rather than launching on a guess.
-# A tab separates the two fields so a caller splits unambiguously.
-#
-# The registration is read whatever the agent label is - handing a FOREIGN
-# adapter's session reference to this harness would resume another agent's
-# conversation - so the label travels with the reference and the caller decides.
-# A pane whose registration is unreadable is not an error here: it is the
-# ordinary no-session case.
-#
-# Never reads as authority for anything else. This is a read of Herdr's own
-# record; it grants no send, close, or lifecycle authority, and a pane whose
-# registration is stale still has that staleness as its pane state.
-fm_backend_herdr_pane_agent_session_ref() {  # <session> <pane_id>
-  local session=$1 pane_id=$2 out agent kind value
-  [ -n "$session" ] && [ -n "$pane_id" ] || return 1
-  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1) || return 1
-  agent=$(printf '%s' "$out" | jq -r '.result.agent.agent // empty' 2>/dev/null)
-  kind=$(printf '%s' "$out" | jq -r '.result.agent.agent_session.kind // empty' 2>/dev/null)
-  value=$(printf '%s' "$out" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)
-  [ -n "$agent" ] || return 1
-  case "$kind" in
-    path) case "$value" in /*) ;; *) return 1 ;; esac ;;
-    id) case "$value" in '' | */* | *[[:space:]]*) return 1 ;; esac ;;
+# Herdr ignores a report whose seq is not newer than the last it applied, and
+# Pi's integration seeds its seq from Date.now() * 1000, so this counts
+# microseconds too.
+fm_backend_herdr_report_seq() {
+  local now=${EPOCHREALTIME:-}
+  case "$now" in
+    *[0-9][.,][0-9][0-9][0-9][0-9][0-9][0-9])
+      printf '%s%s' "${now%%[.,]*}" "${now#*[.,]}"
+      ;;
+    *) printf '%s000000' "$(date +%s)" ;;
+  esac
+}
+
+# Herdr drops every report carrying a session other than the one a stale
+# registration bound, so a fresh agent in that pane never moves its status.
+# A sessionless report clears the binding, and only a stale registration over a
+# shell-only pane may receive one. Returns 1 while a binding remains.
+fm_backend_herdr_pane_session_binding_clear() {  # <session> <pane_id>
+  local session=$1 pane_id=$2 out agent reporter
+  case "$(fm_backend_herdr_pane_agent_state "$session" "$pane_id")" in
+    dead|no-agent) return 0 ;;
+    stale-agent) ;;
     *) return 1 ;;
   esac
-  printf '%s\t%s' "$agent" "$value"
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || return 1
+  [ -n "$(printf '%s' "$out" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)" ] || return 0
+  agent=$(printf '%s' "$out" | jq -r '.result.agent.agent // empty' 2>/dev/null)
+  reporter=$(printf '%s' "$out" | jq -r '.result.agent.agent_session.source // empty' 2>/dev/null)
+  [ -n "$agent" ] && [ -n "$reporter" ] || return 1
+  fm_backend_herdr_cli "$session" pane report-agent "$pane_id" --source "$reporter" --agent "$agent" \
+    --state idle --seq "$(fm_backend_herdr_report_seq)" >/dev/null 2>&1 || return 1
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || return 1
+  [ -z "$(printf '%s' "$out" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)" ]
 }
 
 # fm_backend_herdr_tab_is_husk: true (0) only for the two conservative husk

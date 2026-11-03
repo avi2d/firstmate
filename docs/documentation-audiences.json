@@ -446,6 +446,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0016-agent-control-plane-and-fresh-relaunch.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

@@ -857,62 +857,73 @@ test_task_isolation_reads_the_task_marker_where_the_kernel_exposes_it() {
   pass "herdr task isolation: a readable environment without the task marker reads unmarked"
 }
 
-# --- the bound agent session reference (relaunch session continuity) --------
-#
-# Herdr applies only reports carrying the session identity it bound to a pane,
-# and that registration survives its agent process in the crew shape above. A
-# worker relaunched with a FRESH session therefore reports into a pane that
-# ignores it and reads idle while it works. bin/fm-spawn.sh hands the
-# replacement the reference this read returns: the exact identity the
-# endpoint's own runtime recorded, never a guess about which session looks
-# recent. It must return that record and nothing else - a reference handed to
-# `pi --session` is a launch input, so an unreadable, foreign-shaped, or
-# non-resumable value degrades to the ordinary fresh launch.
-pane_agent_session_ref_read() {  # <agent-get-body> [exit-status]
-  local dir resp log fb
-  dir=$(mktemp -d "$TMP_ROOT/session-ref.XXXXXX")
+# --- clearing a stale session binding before a fresh relaunch ---------------
+
+# session_binding_clear_case: prints the clear's exit status, then every
+# `pane report-agent` the fake CLI received, one per line.
+session_binding_clear_case() {  # <dir-suffix> <process-info-body> <agent-get-after-report>
+  local dir="$TMP_ROOT/binding-clear-$1" resp log fb rc=0
   mkdir -p "$dir/responses"; resp="$dir/responses"; log="$dir/log"; : > "$log"
-  printf '%s\n' "$1" > "$resp/1.out"
-  [ -z "${2:-}" ] || printf '%s\n' "$2" > "$resp/1.exit"
+  printf '{"result":{"pane":{"pane_id":"w1:p2"}}}\n' > "$resp/1.out"
+  printf '%s\n' "$BOUND_PI_REGISTRATION" > "$resp/2.out"
+  printf '%s\n' "$2" > "$resp/3.out"
+  printf '%s\n' "$BOUND_PI_REGISTRATION" > "$resp/4.out"
+  printf '%s\n' "$3" > "$resp/6.out"
   fb=$(make_herdr_fakebin "$dir")
-  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_agent_session_ref fmtest w1:p2' "$ROOT"
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_pane_session_binding_clear fmtest w1:p2' "$ROOT" || rc=$?
+  printf 'rc=%s\n' "$rc"
+  grep $'\x1fpane\x1freport-agent\x1f' "$log" | cut -d $'\x1f' -f 2- | tr '\037' ' ' || true
 }
 
-test_pane_agent_session_ref_reports_a_resumable_reference_with_its_agent() {
+BOUND_PI_REGISTRATION='{"result":{"agent":{"agent":"pi","agent_status":"idle","agent_session":{"agent":"pi","kind":"path","source":"herdr:pi","value":"/home/u/.pi/agent/sessions/--wt--/2026-11-02T07-14-40-136Z_01a0bdaa.jsonl"}}}}'
+UNBOUND_PI_REGISTRATION='{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}'
+
+test_stale_session_binding_is_cleared_by_one_sessionless_report_from_its_own_source() {
+  local sleep_bin shell_pid out
+  sleep_bin=$(command -v sleep) || fail "sleep not found"
+  "$sleep_bin" 300 &
+  shell_pid=$!
+  out=$(session_binding_clear_case stale "$(shell_only_process_info "$shell_pid")" "$UNBOUND_PI_REGISTRATION")
+  kill "$shell_pid" 2>/dev/null || true
+  printf '%s\n' "$out" | grep -qx 'rc=0' \
+    || fail "a stale binding the report cleared must return 0, got: $out"
+  printf '%s\n' "$out" | grep -Eqx 'pane report-agent w1:p2 --source herdr:pi --agent pi --state idle --seq [0-9]{16} --session fmtest' \
+    || fail "the clear must send one sessionless idle report from the registration's own source with a microsecond seq, got: $out"
+  pass "herdr session binding: a stale Pi binding is cleared by one sessionless report from herdr:pi"
+}
+
+test_session_binding_clear_never_reports_over_a_live_agent() {
   local out
-  out=$(pane_agent_session_ref_read \
-    '{"result":{"agent":{"agent":"pi","agent_status":"stale","agent_session":{"agent":"pi","kind":"path","source":"herdr:pi","value":"/home/u/.pi/agent/sessions/--wt--/2026-09-20T07-14-40-136Z_01a0bdaa.jsonl"}}}}')
-  [ "$out" = $'pi\t/home/u/.pi/agent/sessions/--wt--/2026-09-20T07-14-40-136Z_01a0bdaa.jsonl' ] \
-    || fail "an absolute path reference must be reported with its agent label, got '$out'"
-
-  out=$(pane_agent_session_ref_read \
-    '{"result":{"agent":{"agent":"pi","agent_session":{"agent":"pi","kind":"id","source":"herdr:pi","value":"01a0bdaa-c387-749d-966c-0dcd96a4b755"}}}}')
-  [ "$out" = $'pi\t01a0bdaa-c387-749d-966c-0dcd96a4b755' ] \
-    || fail "a bare session id must be reported as-is, got '$out'"
-  pass "herdr pane agent session: a resumable reference is reported with the agent label that reported it"
+  out=$(session_binding_clear_case live \
+    '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","shell_pid":4242,"foreground_process_group_id":4250,"foreground_processes":[{"pid":4250,"name":"pi","argv0":"pi","argv":["pi"],"cmdline":"pi"}]}}}' \
+    "$UNBOUND_PI_REGISTRATION")
+  [ "$out" = "rc=1" ] \
+    || fail "a live agent's binding must be left alone with nonzero status and no report, got: $out"
+  pass "herdr session binding: a live agent's binding is never cleared"
 }
 
-test_pane_agent_session_ref_degrades_to_nothing_when_not_resumable() {
-  local out body
-  for body in \
-    '{"error":{"code":"agent_not_found","message":"agent target w1:p2 not found"}}' \
-    '{"result":{"agent":{"agent":"pi","agent_status":"idle"}}}' \
-    '{"result":{"agent":{"agent":"pi","agent_session":{"agent":"pi","kind":"path","value":"relative/session.jsonl"}}}}' \
-    '{"result":{"agent":{"agent":"pi","agent_session":{"agent":"pi","kind":"id","value":"not a token"}}}}' \
-    '{"result":{"agent":{"agent":"pi","agent_session":{"agent":"pi","kind":"id","value":""}}}}' \
-    '{"result":{"agent":{"agent":"pi","agent_session":{"agent":"pi","kind":"opaque","value":"whatever"}}}}' \
-    'not json at all'; do
-    out=$(pane_agent_session_ref_read "$body") \
-      && fail "an unresumable registration must report nothing resumable, but the read succeeded for: $body"
-    [ -z "$out" ] \
-      || fail "an unresumable registration read must print nothing (got '$out') for: $body"
-  done
-  out=$(pane_agent_session_ref_read \
-    '{"result":{"agent":{"agent":"pi","agent_session":{"agent":"pi","kind":"path","value":"/abs/session.jsonl"}}}}' 1)
-  [ -z "$out" ] \
-    || fail "a failed agent read must print nothing, got '$out'"
-  pass "herdr pane agent session: anything unresumable degrades to a nonzero read with no output"
+test_session_binding_clear_fails_when_herdr_keeps_the_binding() {
+  local sleep_bin shell_pid out
+  sleep_bin=$(command -v sleep) || fail "sleep not found"
+  "$sleep_bin" 300 &
+  shell_pid=$!
+  out=$(session_binding_clear_case kept "$(shell_only_process_info "$shell_pid")" "$BOUND_PI_REGISTRATION")
+  kill "$shell_pid" 2>/dev/null || true
+  printf '%s\n' "$out" | grep -qx 'rc=1' \
+    || fail "a binding still present after the report must return nonzero, got: $out"
+  pass "herdr session binding: a binding Herdr kept is reported as not cleared"
+}
+
+test_report_seq_is_newer_than_a_pi_report_from_the_same_instant() {
+  local before seq after
+  before=$(( $(date +%s) * 1000000 ))
+  seq=$(bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_report_seq' "$ROOT")
+  after=$(( ($(date +%s) + 1) * 1000000 ))
+  case "$seq" in ''|*[!0-9]*) fail "report seq must be a bare integer, got '$seq'" ;; esac
+  [ "$seq" -ge "$before" ] && [ "$seq" -le "$after" ] \
+    || fail "report seq must count microseconds since the epoch like Pi's Date.now() * 1000, got '$seq' outside [$before, $after]"
+  pass "herdr report seq: counts epoch microseconds"
 }
 
 test_registered_agent_with_a_non_shell_foreground_process_stays_alive() {
@@ -6437,8 +6448,10 @@ test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one
 test_recovery_grade_read_widens_only_at_its_own_boundary
 test_stale_registration_over_a_shell_only_pane_is_agent_free
 test_stale_registration_ignores_status_and_reads_the_process
-test_pane_agent_session_ref_reports_a_resumable_reference_with_its_agent
-test_pane_agent_session_ref_degrades_to_nothing_when_not_resumable
+test_stale_session_binding_is_cleared_by_one_sessionless_report_from_its_own_source
+test_session_binding_clear_never_reports_over_a_live_agent
+test_session_binding_clear_fails_when_herdr_keeps_the_binding
+test_report_seq_is_newer_than_a_pi_report_from_the_same_instant
 test_registered_agent_with_a_live_foreground_process_stays_alive
 test_unregistered_sandboxed_agent_reads_alive
 test_placeholder_record_over_a_sandboxed_agent_reads_alive

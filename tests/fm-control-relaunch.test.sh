@@ -2899,6 +2899,17 @@ case "${1:-} ${2:-}" in
         "$(cat "$D/herdr-pane")"
     fi
     exit 0 ;;
+  'pane report-agent')
+    # Herdr drops a binding on a sessionless report from the source it bound.
+    reg=$D/herdr-agent-registration
+    if [ -f "$reg" ] && [ ! -f "$D/herdr-keeps-binding" ]; then
+      case " $* " in
+        *' --agent-session-'*) ;;
+        *" --source $(jq -r '.result.agent.agent_session.source // empty' "$reg") "*)
+          jq -c 'del(.result.agent.agent_session)' "$reg" > "$reg.tmp" && mv "$reg.tmp" "$reg" ;;
+      esac
+    fi
+    exit 0 ;;
   'pane send-text')
     # Mirrors the tmux fake's `becomes`: delivering the launch brief is what
     # makes an agent exist on this pane, so the control plane's alive-wait can
@@ -3014,35 +3025,45 @@ herdr_case_or_skip() {  # <name> <id> [session] [surviving-pane]
   return 0
 }
 
-test_herdr_relaunch_resumes_only_the_registered_pi_session() {
-  local dir out rc=0 command registered
-  for registered in pi claude; do
-    herdr_case_or_skip "resume-$registered" "resume-$registered" || {
+test_herdr_relaunch_must_not_resume_the_prior_pi_session() {
+  local dir out rc=0 command log keeps
+  for keeps in no yes; do
+    herdr_case_or_skip "fresh-$keeps" "fresh-$keeps" || {
       echo "skip - herdr relaunch needs jq (the herdr adapter parses JSON with it)"
       return 0
     }
     dir=$HERDR_CASE_DIR
     rm -f "$dir/fake/herdr-stopped"
-    sed 's/^harness=claude$/harness=pi/' "$dir/home/state/resume-$registered.meta" > "$dir/meta.tmp"
-    mv "$dir/meta.tmp" "$dir/home/state/resume-$registered.meta"
-    assert_grep "harness=pi" "$dir/home/state/resume-$registered.meta" "the fixture should record a Pi task"
-    # Keep the pane's status authority registered to an existing Pi session,
-    # while process-info proves that its previous agent has exited.
-    printf '{"result":{"agent":{"agent":"%s","agent_status":"idle","agent_session":{"kind":"path","value":"/tmp/pi-bound-session.jsonl"}}}}\n' \
-      "$registered" > "$dir/fake/herdr-agent-registration"
-    out=$(run_spawn "$dir" "resume-$registered" --relaunch --harness pi) || rc=$?
-    expect_code 0 "$rc" "Herdr Pi relaunch should complete ($registered registration)"$'\n'"$out"
+    sed 's/^harness=claude$/harness=pi/' "$dir/home/state/fresh-$keeps.meta" > "$dir/meta.tmp"
+    mv "$dir/meta.tmp" "$dir/home/state/fresh-$keeps.meta"
+    assert_grep "harness=pi" "$dir/home/state/fresh-$keeps.meta" "the fixture should record a Pi task"
+    # Herdr still binds the pane's status to the previous agent's session,
+    # while process-info proves that agent has exited.
+    printf '{"result":{"agent":{"agent":"pi","agent_status":"idle","agent_session":{"agent":"pi","kind":"path","source":"herdr:pi","value":"/tmp/pi-bound-session.jsonl"}}}}\n' \
+      > "$dir/fake/herdr-agent-registration"
+    [ "$keeps" = no ] || : > "$dir/fake/herdr-keeps-binding"
+    out=$(run_spawn "$dir" "fresh-$keeps" --relaunch --harness pi 2>&1) || rc=$?
+    expect_code 0 "$rc" "Herdr Pi relaunch should complete (binding kept: $keeps)"$'\n'"$out"
     command=$(cat "$dir/fake/launched-command")
-    if [ "$registered" = pi ]; then
-      assert_contains "$command" "--session '/tmp/pi-bound-session.jsonl'" \
-        "the replacement Pi must resume the session that owns Herdr status authority"
+    assert_not_contains "$command" "--session" \
+      "the replacement Pi must start a fresh session, never the one its predecessor left bound"
+    assert_not_contains "$command" "pi-bound-session" \
+      "the replacement Pi must not be handed its predecessor's conversation"
+    log=$(cat "$dir/fake/herdr-log")
+    printf '%s\n' "$log" | grep -n -m1 -- '^pane report-agent %7 --source herdr:pi --agent pi --state idle --seq [0-9]* --session fmlab$' > "$dir/report-line" \
+      || fail "the relaunch must clear the stale binding with a sessionless report from herdr:pi"$'\n'"$log"
+    [ "$(cut -d: -f1 "$dir/report-line")" -lt "$(printf '%s\n' "$log" | grep -n -m1 '^pane send-text %7 ' | cut -d: -f1)" ] \
+      || fail "the stale binding must be cleared before the fresh launch is typed"$'\n'"$log"
+    if [ "$keeps" = no ]; then
+      assert_not_contains "$out" "still binds its previous agent's session" \
+        "a cleared binding needs no warning"
     else
-      assert_not_contains "$command" "--session" \
-        "a Pi replacement must not resume a foreign adapter's conversation"
+      assert_contains "$out" "still binds its previous agent's session" \
+        "a binding Herdr kept must be reported while the relaunch still starts fresh"
     fi
     rc=0
   done
-  pass "fm-spawn --relaunch: resumes the bound Pi session only for a Pi registration"
+  pass "fm-spawn --relaunch: a Herdr Pi relaunch starts a fresh session and clears the stale status binding"
 }
 
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server() {
@@ -3454,7 +3475,7 @@ test_tmux_refuses_a_window_missing_from_its_session
 test_tmux_refuses_a_session_that_cannot_be_found
 test_tmux_refuses_when_the_server_is_gone
 test_reclaim_refuses_an_unreadable_endpoint
-test_herdr_relaunch_resumes_only_the_registered_pi_session
+test_herdr_relaunch_must_not_resume_the_prior_pi_session
 test_herdr_reclaim_adopts_a_pane_that_outlived_its_server
 test_herdr_exit_reports_already_stopped_when_the_pane_outlived_its_server
 test_herdr_rebind_stays_in_the_recorded_session

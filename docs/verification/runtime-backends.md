@@ -2244,7 +2244,10 @@ The stale and wedge hash is the one supervision read that needed a change, recor
 
 Measured 2026-09-21 on Linux x86_64 against Herdr 0.9.1 (client protocol 22) and Pi 0.86.1, in an isolated `fm-lab-` session (`bin/fm-herdr-lab.sh`), after the same freeze was observed live on a relaunched Pi crewmate whose pane read `idle` while its validation pipeline ran.
 
-The stale registration above is not only a recovery-classification problem: it is the pane's status AUTHORITY, and it is bound to one agent session identity. Herdr applies a lifecycle/session report only when it matches what it bound, so an agent started FRESH in that pane - the shape `bin/fm-control.sh <id> relaunch` produced before this fix - reports a new session into a pane that ignores it. The pane then stays at whatever the previous agent last reported: working reads idle, indefinitely, because the registration outlives its process and nothing from outside repairs it.
+The stale registration above is not only a recovery-classification problem, because it is the pane's status AUTHORITY and it is bound to one agent session identity.
+Herdr applies a lifecycle or session report only when it matches what it bound, so an agent started FRESH in that pane reports a new session into a pane that ignores it.
+That is the shape `bin/fm-control.sh <id> relaunch` produced before #5161.
+The pane then stays at whatever the previous agent last reported, so working reads idle indefinitely because the registration outlives its process.
 
 Reproduced with a real Pi under a nested shell, `/quit`, and a second fresh Pi in the same pane:
 
@@ -2266,19 +2269,42 @@ herdr pane send-text w1:p1 '/quit' --session "$LAB"; herdr pane send-keys w1:p1 
 {"agent_status":"idle","session":"/home/u/.pi/agent/sessions/--wt--/2026-09-21T14-10-08-776Z_01a0c44d.jsonl"}
 ```
 
-Two repair paths were measured and do not work, so the reference is preserved rather than cleared:
+On Herdr 0.9.1 two repair paths were measured and did not work, so #5161 resumed the bound session instead:
 
-- `herdr pane report-agent-session` / `report-agent` from another process are accepted (rc=0) and never applied, for `--source herdr:pi`; the same source's reports are accepted when the reporting process is the registered pane agent (Pi's own extension) and when a custom source is used, which is how the smoke fixtures register one.
-- `herdr pane release-agent --source herdr:pi --agent pi` on that stale registration is accepted (rc=0) and changes nothing, matching its documented guard that it only ends authority when the agent process exits.
+- `herdr pane report-agent-session` and `report-agent` from another process were accepted with rc=0 and never applied for `--source herdr:pi`.
+- `herdr pane release-agent --source herdr:pi --agent pi` on that stale registration was accepted with rc=0 and changed nothing, matching its documented guard that it only ends authority when the agent process exits.
 
-Resuming the bound session instead makes the replacement's reports land, which is what `bin/fm-spawn.sh` now does for a relaunch:
+Resuming handed the replacement its predecessor's whole conversation, so a relaunch no longer does it.
+
+Measured 2026-11-03 on Linux x86_64 against Herdr 0.9.5 and Pi 1.4.0 with Herdr's Pi integration version 9, in an isolated `fm-lab-` session, with the crew shape above.
+A sessionless `pane report-agent --source herdr:pi --agent pi --state idle --seq <microseconds>` sent after the quit does clear the binding.
+The fresh Pi then binds its own new session file and its reports apply:
 
 ```text
-# C: quit the fresh second pi, then pi --session <the bound path> with a slow turn
-poll 8: {"agent_status":"working","session":".../2026-09-21T14-10-08-776Z_01a0c44d.jsonl"}
+# no clearing report: the fresh pi runs `sleep 15` but the pane reads idle on the old session for all 30 polls
+     30 C: {"agent":"pi","agent_status":"idle","s":"1-9ec208f811d6.jsonl","src":"herdr:pi"}
+# one sessionless report first: the binding clears, then the fresh session binds and reads working
+B2 after idle: {"agent":"pi","agent_status":"idle","s":"","src":""}
+      1 C 3: {"agent":"pi","agent_status":"idle","s":"e-db3a5b04655c.jsonl","src":"herdr:pi"}
+     19 C 4-22: {"agent":"pi","agent_status":"working","s":"e-db3a5b04655c.jsonl","src":"herdr:pi"}
 ```
 
-The read that supplies the reference is `bin/backends/herdr.sh`'s `fm_backend_herdr_pane_agent_session_ref`, the per-harness rule is `bin/fm-control-lib.sh`'s `fm_control_relaunch_resume_flag`, and the launch argument is composed by `relaunch_resume_args` in `bin/fm-spawn.sh`; `docs/herdr-backend.md` "Agent status authority and relaunch" owns the contract. Nothing here changes `resume` as a control verb, and only a relaunch asks for it.
+The same lab ran the real entry point end to end.
+A Pi worker took one turn, then `bin/fm-control.sh <id> relaunch --note ...` replaced it in the same pane, and each turn was counted as user messages in the session file:
+
+```text
+# before this fix: the replacement resumed the first session file
+A session: ...13-06-08-619Z_01a1a184-...4ac4.jsonl turns=1
+B session: ...13-06-08-619Z_01a1a184-...4ac4.jsonl turns=2
+# after this fix: a new session file, its turn count restarted, and status followed it
+A session: ...13-03-46-280Z_01a1a182-...7b.jsonl turns=1
+      5 B idle -
+     21 B working ...13-04-53-454Z_01a1a183-...121a.jsonl
+B session: ...13-04-53-454Z_01a1a183-...121a.jsonl turns=1
+A session after relaunch: turns=1
+```
+
+`bin/backends/herdr.sh`'s `fm_backend_herdr_pane_session_binding_clear` sends the clearing report, and `docs/herdr-backend.md` "Agent status authority and relaunch" owns the contract.
 
 ### Away-mode transport
 

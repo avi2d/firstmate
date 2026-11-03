@@ -101,9 +101,10 @@ A relaunch does take one session reference when the endpoint's own runtime recor
 5. **Launch the replacement** through its single owner, `bin/fm-spawn.sh --relaunch`, which reuses the recorded worktree instead of creating one, adopts the recorded endpoint when it still exists, clears the previous harness's per-task wiring, and arms a fresh busy generation.
    When the recorded endpoint is proven gone rather than merely idle or unreachable, which only Herdr and Rex can establish, the launch owner creates one fresh endpoint in that same worktree and the republished record rebinds the task to it.
    See [Reclaiming a task whose endpoint is gone](#reclaiming-a-task-whose-endpoint-is-gone).
-6. **Preserve runtime-bound status authority where supported.**
-   The endpoint's runtime may bind pane status to one session identity; the launch owner preserves it only when that runtime records a reference the replacement adapter can consume, and otherwise launches the ordinary fresh session.
-   This reference is a launch input, never authority to send, close, or act on the pane.
+6. **Start a fresh session and release a stale status binding.**
+   The replacement never resumes its predecessor's session, so it carries none of the prior conversation.
+   The endpoint's runtime may still bind pane status to the previous session, and the launch owner clears that binding before typing the launch so the fresh session's reports apply.
+   Clearing it grants no authority to send, close, or act on the pane.
    [`docs/herdr-backend.md`](herdr-backend.md#agent-status-authority-and-relaunch) owns the mechanism and measured behavior.
 
 Switching harness is therefore one ordinary relaunch rather than a separate mechanism.
