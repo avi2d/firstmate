@@ -36,7 +36,7 @@ Usage:
   fm-flake-watch.sh --help    print this help
 
 Watched repositories are avi2d/skills, avi2d/checks, avi2d/dotfiles,
-avi2d/career, avi2d/learning, avi2d/smithers, and avi2d/website.
+avi2d/career, avi2d/learning, and avi2d/website.
 Each filed task names the repository, the failing test with its line,
 the seed, and the run URL. A run whose flake job never started files
 nothing. A run already recorded in
@@ -59,7 +59,7 @@ die_usage() {
 }
 
 OWNER=avi2d
-REPOS=${FM_FLAKE_WATCH_REPOS:-"skills checks dotfiles career learning smithers website"}
+REPOS=${FM_FLAKE_WATCH_REPOS:-"skills checks dotfiles career learning website"}
 WORKFLOW=flake.yml
 PER_PAGE=10
 
