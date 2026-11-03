@@ -31,7 +31,7 @@ A verb whose postcondition cannot be proven on the recorded backend is refused r
 The replacement inherits only the task's local copy and the relaunch note.
 
 Before typing the launch into an adopted Herdr pane, bin/fm-spawn.sh clears a stale session binding through bin/backends/herdr.sh's fm_backend_herdr_pane_session_binding_clear.
-The clear acts only on a stale registration over a shell-only pane, sends one sessionless idle report from the registration's own source with a microsecond sequence newer than any Pi report, and then confirms the binding is gone.
+The clear acts only on a stale registration over a shell-only pane, sends one sessionless idle report from the registration's own source with a microsecond sequence newer than the exited agent's reports and not newer than the replacement's, and then confirms the binding is gone.
 
 ## Consequences
 

@@ -935,8 +935,8 @@ A fresh spawn never meets this: it gets a new pane with nothing bound.
 A **relaunch** never resumes that session, because resuming it would hand the replacement its predecessor's whole conversation.
 The replacement always starts a fresh Pi session.
 Before typing the launch into an adopted pane, `bin/fm-spawn.sh` clears the stale binding through `fm_backend_herdr_pane_session_binding_clear`.
-When the pane reads `stale-agent`, a registration over a shell-only pane, it sends one `pane report-agent` from the registration's own source and agent with `--state idle`, no session fields, and a microsecond `--seq` newer than any Pi report.
-It then confirms the registration no longer names a session.
+When the pane reads `stale-agent`, a registration over a shell-only pane, it sends one `pane report-agent` from the registration's own source and agent with `--state idle`, no session fields, and a microsecond `--seq` newer than the exited agent's reports and not newer than the replacement's.
+It then confirms the registration no longer names a session, and an `agent_not_found` answer counts as no binding.
 Herdr applies that sessionless report and drops the binding, so the fresh agent's own session report binds its new session file and its `working`, `idle`, and `blocked` reports land again.
 A live registration is never cleared, and the clear only runs for a Pi-family replacement.
 If the binding cannot be confirmed gone, the relaunch still starts fresh and prints a warning that the pane's status may not follow it.

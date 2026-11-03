@@ -2444,24 +2444,33 @@ fm_backend_herdr_pane_agent_state() {  # <session> <pane_id>
 
 # Herdr ignores a report whose seq is not newer than the last it applied, and
 # Pi's integration seeds its seq from Date.now() * 1000, so this counts
-# microseconds too.
+# microseconds too. The whole-second fallback rounds down because a replacement
+# Pi loading within the same second must still report above it.
 fm_backend_herdr_report_seq() {
   local now=${EPOCHREALTIME:-}
   case "$now" in
     *[0-9][.,][0-9][0-9][0-9][0-9][0-9][0-9])
       printf '%s%s' "${now%%[.,]*}" "${now#*[.,]}"
       ;;
-    *) printf '%s000000' "$(( $(date +%s) + 1 ))" ;;
+    *) printf '%s000000' "$(date +%s)" ;;
   esac
+}
+
+# Prints the pane's agent registration, or nothing when Herdr answers
+# agent_not_found; returns 1 when the registration cannot be read.
+fm_backend_herdr_pane_registration() {
+  local session=$1 pane_id=$2 out
+  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>&1) && { printf '%s' "$out"; return 0; }
+  [ "$(printf '%s' "$out" | jq -r '.error.code // empty' 2>/dev/null)" = agent_not_found ]
 }
 
 # Herdr drops every report carrying a session other than the one a stale
 # registration bound, so a fresh agent in that pane never moves its status.
 # A sessionless report clears the binding, and only a stale registration over a
 # shell-only pane may receive one. Returns 1 while a binding remains.
-fm_backend_herdr_pane_session_binding_clear() {  # <session> <pane_id>
+fm_backend_herdr_pane_session_binding_clear() {
   local session=$1 pane_id=$2 out agent reporter
-  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_pane_registration "$session" "$pane_id") || return 1
   [ -n "$(printf '%s' "$out" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)" ] || return 0
   case "$(fm_backend_herdr_pane_agent_state "$session" "$pane_id")" in
     stale-agent) ;;
@@ -2472,7 +2481,7 @@ fm_backend_herdr_pane_session_binding_clear() {  # <session> <pane_id>
   [ -n "$agent" ] && [ -n "$reporter" ] || return 1
   fm_backend_herdr_cli "$session" pane report-agent "$pane_id" --source "$reporter" --agent "$agent" \
     --state idle --seq "$(fm_backend_herdr_report_seq)" >/dev/null 2>&1 || return 1
-  out=$(fm_backend_herdr_cli "$session" agent get "$pane_id" 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_pane_registration "$session" "$pane_id") || return 1
   [ -z "$(printf '%s' "$out" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)" ]
 }
 
