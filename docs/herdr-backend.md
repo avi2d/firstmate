@@ -844,7 +844,7 @@ On macOS a Node harness such as Pi overwrites the argument block that holds its 
 An unreadable process view, a pane with no harness, and every other backend claim no verdict.
 Secondmates and primaries run outside any task worktree with no task marker, so they are never judged.
 
-The relaunch exits the resumed agent, moves the pane shell into the recorded worktree, and starts a Firstmate launch on the same Pi session reference.
+The relaunch exits the resumed agent, moves the pane shell into the recorded worktree, and starts a fresh Pi session there.
 The pane's top shell then sits in the worktree, so a later restart resumes into the right copy, still without the launch environment.
 `tests/fm-herdr-restore-isolation-live-e2e.test.sh` measures the resume against real Herdr and Pi, and [verification](verification/runtime-backends.md#agents-resumed-by-a-restart) records the result.
 
