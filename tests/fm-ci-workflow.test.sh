@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Contract tests for .github/workflows/ci.yml: the PR gate is static and capped,
-# the full suite runs daily, and every job carries a finite timeout.
+# the full suite runs on manual dispatch, and every job carries a finite timeout.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -184,7 +184,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
 PR_TIER_JOBS='lint invariants secrets'
-FAST_TIER_JOBS='test-coverage tests-timing-aggregate daily-test-issue'
+FAST_TIER_JOBS='test-coverage tests-timing-aggregate'
 NORMAL_TIER_JOBS='tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr'
 
@@ -330,16 +330,16 @@ puts steps[index].fetch("timeout-minutes", "none")
 }
 
 # The fork opt-out is opt-in: with neither variable set, pull request and push
-# runs carry only the static gate and the daily run carries every other job.
+# runs carry only the static gate and the dispatch run carries every other job.
 # FM_CI_SKIP_PUSH=1 empties only the push run, and FM_CI_SKIP_MACOS=1 removes
-# only the macOS job from the daily run. A "-" in the table means unset.
+# only the macOS job from the dispatch run. A "-" in the table means unset.
 test_fork_skip_variables_are_opt_in() {
-  local all pr push_gate daily event skip_push skip_macos expected want actual
+  local all pr push_gate dispatch event skip_push skip_macos expected want actual
   all=$(workflow_jobs | LC_ALL=C sort) || fail "could not list ci.yml jobs"
   pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
   # Push runs the PR gate without the pull-request-only secrets scan.
   push_gate=$(printf '%s\n' "$pr" | grep -vx secrets)
-  daily=$(comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$pr"))
+  dispatch=$(comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$pr"))
   printf '%s\n' "$all" | grep -qx macos-stock-bash \
     || fail "the macOS job is missing from ci.yml, so the table below would prove nothing"
   while read -r event skip_push skip_macos expected; do
@@ -348,8 +348,8 @@ test_fork_skip_variables_are_opt_in() {
     case $expected in
       pr) want=$pr ;;
       pushgate) want=$push_gate ;;
-      daily) want=$daily ;;
-      daily-but-macos) want=$(printf '%s\n' "$daily" | grep -vx macos-stock-bash) ;;
+      dispatch) want=$dispatch ;;
+      dispatch-but-macos) want=$(printf '%s\n' "$dispatch" | grep -vx macos-stock-bash) ;;
       none) want= ;;
       *) fail "unknown expectation $expected" ;;
     esac
@@ -364,10 +364,8 @@ push                1 - none
 pull_request        1 - pr
 pull_request        - 1 pr
 push                - 1 pushgate
-schedule            - - daily
-workflow_dispatch   - - daily
-schedule            - 1 daily-but-macos
-workflow_dispatch   - 1 daily-but-macos
+workflow_dispatch   - - dispatch
+workflow_dispatch   - 1 dispatch-but-macos
 TABLE
   pass "the fork skip variables change nothing unless set, and each skips only its own run or job"
 }
@@ -391,32 +389,14 @@ test_pull_request_and_push_runs_carry_only_their_capped_gates() {
   pass "pull request and push runs carry only their capped gates"
 }
 
-# Only the failure issue job may write issues, and it must need every other daily
-# job so its outcome reflects the whole daily run.
-test_daily_run_reports_failures_through_one_issue_job() {
-  local needs daily event result expected actual
+# No CI job may write issues: the scheduled failure reporter is gone, so a red
+# manual dispatch run is triaged by hand from its run page.
+test_no_ci_job_writes_issues() {
   ruby -ryaml -e '
 writers = YAML.load_file(ARGV[0]).fetch("jobs").select { |_, job| (job["permissions"] || {})["issues"] == "write" }.keys
-raise "only daily-test-issue may write issues, got #{writers.inspect}" unless writers == ["daily-test-issue"]
-' "$CI_WORKFLOW" || fail "ci.yml grants issue write outside the daily failure job"
-  needs=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0]).fetch("jobs").fetch("daily-test-issue").fetch("needs").sort' "$CI_WORKFLOW") \
-    || fail "could not read the daily-test-issue needs"
-  daily=$(jobs_running_under schedule '' '' | grep -vx daily-test-issue | LC_ALL=C sort)
-  [ "$needs" = "$daily" ] \
-    || fail "daily-test-issue must need every other daily job"$'\n'"needs: $(printf '%s' "$needs" | tr '\n' ' ')"$'\n'"daily: $(printf '%s' "$daily" | tr '\n' ' ')"
-  while read -r event result expected; do
-    actual=$(job_runs_under daily-test-issue "$event" '' '' "$result") \
-      || fail "could not resolve the daily-test-issue condition for $event"
-    [ "$actual" = "$expected" ] \
-      || fail "daily-test-issue on $event after a $result must resolve $expected, got $actual"
-  done <<'TABLE'
-schedule           failure true
-schedule           success true
-workflow_dispatch  failure true
-pull_request       failure false
-push               failure false
-TABLE
-  pass "the daily failure issue runs after the daily run only and is the sole job granted issue writes"
+raise "no CI job may write issues, got #{writers.inspect}" unless writers.empty?
+' "$CI_WORKFLOW" || fail "ci.yml grants issue write to a CI job"
+  pass "no CI job writes issues"
 }
 
 # Print true or false: whether one job's job-level `if` resolves true under
@@ -433,7 +413,7 @@ puts Expression.condition(YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1])["
 ' "$CI_WORKFLOW" "$@"
 }
 
-# The aggregate summarizes the daily lanes and must still run after a failed lane
+# The aggregate summarizes the dispatch lanes and must still run after a failed lane
 # so its summary lands; pull request and push runs never carry it.
 test_timing_aggregate_still_runs_after_a_failed_lane() {
   local event expected actual
@@ -443,12 +423,11 @@ test_timing_aggregate_still_runs_after_a_failed_lane() {
     [ "$actual" = "$expected" ] \
       || fail "after a failed lane, the aggregate on $event must resolve $expected, got $actual"
   done <<'TABLE'
-schedule           true
 workflow_dispatch  true
 pull_request       false
 push               false
 TABLE
-  pass "the timing aggregate runs after a failed daily lane and never on pull request or push runs"
+  pass "the timing aggregate runs after a failed dispatch lane and never on pull request or push runs"
 }
 
 test_ci_matrices_match_executable_partitions() {
@@ -487,7 +466,7 @@ test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
 test_fork_skip_variables_are_opt_in
 test_pull_request_and_push_runs_carry_only_their_capped_gates
-test_daily_run_reports_failures_through_one_issue_job
+test_no_ci_job_writes_issues
 test_timing_aggregate_still_runs_after_a_failed_lane
 test_every_job_has_a_finite_timeout
 test_every_job_belongs_to_exactly_one_timeout_tier
