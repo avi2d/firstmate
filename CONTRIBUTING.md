@@ -39,8 +39,8 @@ Bind the checks to the GitHub Actions app already producing them, rather than ac
 No new app installation or manual runner setup is needed for that setting.
 
 Require the pull-request job contexts: `Lint 1` through `Lint 12`, `Secrets`, and `Repo invariants`.
-The daily jobs run on a schedule and never on pull requests, so they are not required checks.
-A failing daily run opens or updates the issue titled `Daily test suite failing`, labelled `daily-tests`, and a green daily run closes it.
+The full matrix jobs run only on manual dispatch and never on pull requests, so they are not required checks.
+There is no scheduled run and no failure issue job, so a red dispatch run is triaged by hand from its run page.
 
 Apply the approved rule change only after the corresponding workflow is green and landed, confirming exact names and the Actions integration id from real checks first.
 Snapshot the current ruleset, amend that same rule with the authenticated GitHub API or settings UI, and read back both the ruleset and effective branch rules.
