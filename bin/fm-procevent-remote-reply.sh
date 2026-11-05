@@ -306,7 +306,7 @@ cmd_arm() {
 # correlated report is judged only against a channel known to have caught up.
 WINDOW_CLOSED_EMPTY=75
 # The remote job worker's exit when it preempted this long-poll to run another
-# job for the same home (bin/fm-remote-job-lib.sh header), such as the watcher's
+# job for the same home, such as the watcher's
 # per-cycle liveness probe. The read is cursor-anchored and non-destructive, so a
 # preempted window loses nothing: it is a window that closed early, and the
 # runner relistens exactly as after WINDOW_CLOSED_EMPTY instead of reading it as

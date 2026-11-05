@@ -229,4 +229,44 @@ run_reader 0 "$EMPTY_SHA" 1 'state/link.status' > /dev/null 2>&1 && \
   fail 'a symlinked log was accepted' || true
 pass 'the reader refuses traversal, symlinks, and oversized tail lines'
 
+HELP_EXPECTED='Blocking, non-destructive delta read for a remote secondmate append-only log.
+
+Usage:
+  fm-remote-delta-read.sh <relative-log> <offset> <prefix-sha256> [wait-seconds]
+
+The reader validates continuity by hashing the exact prefix represented by the
+caller'"'"'s cursor. It then blocks until at least one complete appended line is
+available, returns at most 65536 payload bytes, and never truncates or consumes
+the source. A shortened or changed prefix returns a structured continuity-break
+result instead of silently rebasing the cursor.'
+RC=0
+HELP_OUT=$(FM_HOME="$DELTA_HOME" "$READER" 2>&1) || RC=$?
+[ "$RC" -eq 2 ] || fail "usage exited $RC instead of 2"
+[ "$HELP_OUT" = "$HELP_EXPECTED" ] || fail "usage text drifted: $HELP_OUT"
+pass 'usage prints the published help text unchanged rather than a truncated or reworded copy'
+
+CADENCE_BIN="$TMP_ROOT/cadence-bin"
+CADENCE_LOG="$TMP_ROOT/cadence-sleeps"
+mkdir -p "$CADENCE_BIN"
+cat > "$CADENCE_BIN/sleep" <<'SH'
+#!/bin/bash
+printf '%s\n' "$1" >> "$FM_DELTA_SLEEP_LOG"
+exec /bin/sleep "$@"
+SH
+chmod +x "$CADENCE_BIN/sleep"
+: > "$DELTA_HOME/state/cadence.status"
+: > "$CADENCE_LOG"
+RC=0
+FM_HOME="$DELTA_HOME" PATH="$CADENCE_BIN:$PATH" FM_DELTA_SLEEP_LOG="$CADENCE_LOG" \
+  "$READER" state/cadence.status 0 "$EMPTY_SHA" 5 > /dev/null || RC=$?
+[ "$RC" -eq 75 ] || fail "the cadence window exited $RC instead of 75"
+grep -Eqx '0\.5' "$CADENCE_LOG" || fail "the wait had no fast half-second samples: $(tr '\n' ' ' < "$CADENCE_LOG")"
+grep -Eqx '1' "$CADENCE_LOG" || fail "the wait never settled to one-second samples: $(tr '\n' ' ' < "$CADENCE_LOG")"
+! grep -Eqvx '0\.5|1' "$CADENCE_LOG" || fail "the wait slept an unexpected interval: $(tr '\n' ' ' < "$CADENCE_LOG")"
+[ "$(awk '$0 == "1" { settled = 1 } settled && $0 == "0.5" { print }' "$CADENCE_LOG")" = '' ] \
+  || fail "the wait returned to half-second samples after settling: $(tr '\n' ' ' < "$CADENCE_LOG")"
+[ "$(grep -cx '0\.5' "$CADENCE_LOG")" -le 6 ] \
+  || fail "the fast phase outlasted its two-second window: $(tr '\n' ' ' < "$CADENCE_LOG")"
+pass 'an idle wait settles to one-second samples after two seconds instead of half-second samples for the whole window'
+
 printf 'delta-read contract tests complete\n'

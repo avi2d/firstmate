@@ -1,38 +1,28 @@
 #!/usr/bin/env bash
-# Blocking, non-destructive delta read for a remote secondmate append-only log.
-#
-# Usage:
-#   fm-remote-delta-read.sh <relative-log> <offset> <prefix-sha256> [wait-seconds]
-#
-# The reader validates continuity by hashing the exact prefix represented by the
-# caller's cursor. It then blocks until at least one complete appended line is
-# available, returns at most 65536 payload bytes, and never truncates or consumes
-# the source. A shortened or changed prefix returns a structured continuity-break
-# result instead of silently rebasing the cursor.
-#
-# The log is sampled every FM_REMOTE_DELTA_POLL_SECONDS (default 0.5 seconds).
-# A complete line is visible on the next sample, and the window deadline can
-# overshoot by that interval plus snapshot and scheduling work.
-# Each sample of an existing log stats it once. The first sample always runs
-# the bounded capture and hashing; later samples skip that work only when the
-# size, subsecond mtime and ctime, inode, and device key is unchanged. If either
-# timestamp lacks a nonzero subsecond fraction, every sample captures the log
-# rather than trusting a coarse key that could hide a same-second rewrite.
-# The wait remains an ordinary child sleep; signal handling is unchanged.
-#
-# Exit 75 means the wait window closed with no complete line. SIGTERM exits the
-# same way after cleanup. The remote job worker preempts this read-only poll to
-# unblock any queued command other than another reply long-poll, then publishes
-# that preemption as distinct exit 76. The bin/fm-remote-job-lib.sh header owns
-# that contract.
 set -eu
 
 FM_HOME=${FM_HOME:?FM_HOME is required}
 MAX_BYTES=${FM_REMOTE_DELTA_MAX_BYTES:-65536}
 POLL_SECONDS=${FM_REMOTE_DELTA_POLL_SECONDS:-0.5}
+SETTLED_POLL_SECONDS=${FM_REMOTE_DELTA_SETTLED_POLL_SECONDS:-1}
+FAST_WINDOW_SECONDS=2
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() {
+  cat <<'EOF'
+Blocking, non-destructive delta read for a remote secondmate append-only log.
+
+Usage:
+  fm-remote-delta-read.sh <relative-log> <offset> <prefix-sha256> [wait-seconds]
+
+The reader validates continuity by hashing the exact prefix represented by the
+caller's cursor. It then blocks until at least one complete appended line is
+available, returns at most 65536 payload bytes, and never truncates or consumes
+the source. A shortened or changed prefix returns a structured continuity-break
+result instead of silently rebasing the cursor.
+EOF
+  exit 2
+}
 
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then
@@ -227,5 +217,9 @@ while :; do
     exit 0
   fi
   [ $((SECONDS - START)) -lt "$WAIT" ] || exit 75
-  sleep "$POLL_SECONDS"
+  if [ $((SECONDS - START)) -le "$FAST_WINDOW_SECONDS" ]; then
+    sleep "$POLL_SECONDS"
+  else
+    sleep "$SETTLED_POLL_SECONDS"
+  fi
 done
