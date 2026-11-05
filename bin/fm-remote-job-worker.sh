@@ -719,7 +719,7 @@ worker_publish_result() { # <job-dir> <exit>
 
 worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
   local job=$1 timeout=$2 group_file group_start_file armed_file group_pid group_start
-  local group_tmp group_start_tmp rc tmp deadline next_check attempt timed_out=0 cancelled=0
+  local group_tmp group_start_tmp rc tmp deadline next_check fast_until attempt timed_out=0 cancelled=0
   WORKER_PREEMPTED=0
   shift 2
   group_file="$job/.claim/group"
@@ -776,6 +776,7 @@ worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
   fi
   deadline=$((SECONDS + timeout))
   next_check=$((SECONDS + 1))
+  fast_until=$((SECONDS + FM_REMOTE_JOB_FAST_WINDOW_SECONDS))
   while worker_process_or_group_alive group "$group_pid"; do
     if [ "$SECONDS" -ge "$deadline" ]; then
       worker_signal_process_or_group group TERM "$group_pid"
@@ -808,7 +809,7 @@ worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
       fi
       next_check=$((SECONDS + 1))
     fi
-    sleep "$FM_REMOTE_JOB_ACTIVE_POLL_SECONDS"
+    fm_remote_job_sample_wait "$fast_until"
   done
   wait "$group_pid" 2>/dev/null
   rc=$?

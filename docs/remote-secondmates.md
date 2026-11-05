@@ -86,7 +86,7 @@ Linux ownership records use the clock-stable `/proc` starttime when it is availa
 A pre-update worker whose lock still records bare `ps` lstart still verifies against that legacy rendering, so ensure does not treat the live owner as dead and pile another supervisor beside it; when the configured code root's identity is stale, the ordinary code-identity path stops that one worker and replaces it once.
 [`bin/fm-remote-job-lib.sh`](../bin/fm-remote-job-lib.sh) owns the start identity format and the legacy comparison.
 The [`fm-remote-job-worker.sh` header](../bin/fm-remote-job-worker.sh) owns dispatch cadence and the quiet-scan latency for work arriving after its post-activity burst.
-Active-command and result waits use a separate sampling interval; the [`fm-remote-job-lib.sh` header](../bin/fm-remote-job-lib.sh) owns its defaults, overrides, and completion, cancellation, and timeout latency contract.
+Active-command and result waits use a separate sampling interval, described with its defaults, overrides, and latency contract in the job record protocol below.
 
 On macOS, worker repair serializes the replacement decision and LaunchAgent reload with other callers, including its bounded startup wait.
 A live process tracked by launchd gets time to publish readiness even if the caller that started it disconnected before publication.
@@ -96,6 +96,76 @@ If readiness remains stale while a verified current, launchd-tracked lock owner 
 The repair invariant is implemented in [`fm_remote_job_repair_launchagent`](../bin/fm-remote-job-lib.sh); heartbeat ownership and cadence are documented in the worker header above.
 
 The independent heartbeat and live-owner check build on [Diabl0570's contribution](https://github.com/kunchenguid/firstmate/pull/6217), alongside [gearhead924's supervisor-multiplication work](https://github.com/kunchenguid/firstmate/pull/5851), addressing [remote reply reliability](https://github.com/kunchenguid/firstmate/issues/2921).
+
+### Job record protocol
+
+`bin/fm-remote-job-lib.sh` is the shared remote `fm-on` job-worker protocol.
+The fixed SSH entrypoint, the long-lived worker, and the remote doctor source it.
+It owns the per-account queue at `~/.firstmate/remote-job`, the bounded job record, worker installation, and the remote runtime PATH.
+Only isolated tests override that queue root, with `FM_REMOTE_JOB_STATE_ROOT`.
+
+A published job directory is mode 0700.
+It contains root, home, argv as NUL-delimited fields, stdin, seq, stdout, stderr, queue_deadline, timeout, and state.
+Deadline and exit are added as execution advances, and cancel is an optional caller-cancellation marker.
+While work executes, `.claim` may hold owner, owner_start, supervisor, supervisor_start, group, group_start, and armed records.
+Staging writes `state=queued` last.
+
+seq is a queue-wide monotonic staging sequence, reserved atomically by its persistent `.seq-claims` directory.
+The counter is only a forward-moving allocation hint.
+If the bounded hint walk is exhausted, allocation rescans the claims for the maximum and continues above it.
+An independently hourly-rate-limited sweep reaps expired claims.
+That sweep stays inline in the worker loop but uses one directory walk with batched rmdir rather than per-claim uname and stat subprocesses.
+seq is the worker's FIFO ordering key within a home, with the job id as the deterministic tiebreak.
+FIFO is defined over completed stagings.
+A stage that returns before another begins executes first, and concurrently overlapping stagings have no relative ordering contract.
+
+The worker atomically claims a job with `.claim`, establishes its execution deadline, and changes state to running.
+It then writes bounded stdout, stderr, and exit, and publishes `state=done` last.
+Callers wait for done, relay stdout and stderr separately, then reap only their completed record.
+Input, argv, stdout, and stderr are each capped at 1048576 bytes.
+
+The worker serves one lane per staged home.
+Jobs for the same home run strictly FIFO in seq order, while lanes for different homes run concurrently, so one home's long job never delays another home's commands.
+Within a lane, a deliberately long-blocking poll would still serialize that home's short interactive commands behind its wait window.
+`fm_remote_job_command_preemptible` names the read-only long-poll class, which is `fm-remote-delta-read.sh`, the reply-log delta read.
+The worker preempts a running preemptible job on its next queue pass after a non-preemptible job is queued for the same home.
+It publishes exit 76 with emptied stdout and stderr, distinct from the poll's exit 75 elapsed-window-with-no-data result.
+The delta read is non-destructive and cursor-anchored, so the caller's normal re-arm re-reads the same data and a preempted poll loses nothing.
+
+A caller that disconnects before its job completes cancels it instead of abandoning it.
+`fm_remote_job_cancel` writes a cancel marker into the record.
+The worker skips a cancelled queued job and terminates a running cancelled job's process group.
+Whichever side observes terminal publication reaps the finalized record, because no result consumer remains.
+`fm_remote_job_wait` honors an optional `FM_REMOTE_JOB_DISCONNECT_PROBE` function name.
+When it is set, the probe runs about once per second, and a failure cancels the job and fails the wait.
+The staging entrypoint arms it with a parent-liveness probe, so an ssh channel that dies without delivering a signal still cancels the abandoned job.
+The worker's stale sweep reaps abandoned `.stage.*` staging litter older than `FM_REMOTE_JOB_STAGE_REAP_SECONDS`.
+
+Result consumers and active-command monitors sample every 0.25 seconds for the first two seconds of a wait.
+After that they sample every `FM_REMOTE_JOB_SETTLED_POLL_SECONDS`, 1 second by default, so a long-poll job costs one sample a second instead of four.
+The dispatcher's post-activity burst still samples every 0.05 seconds.
+`FM_REMOTE_JOB_ACTIVE_POLL_SECONDS` overrides the fast active and result interval.
+An explicitly supplied `FM_REMOTE_JOB_POLL_SECONDS` remains the legacy fallback for both the fast interval and the dispatcher interval.
+The active default resolves before the dispatcher default fills in, and survives the library being sourced again.
+Once-per-second cancellation, preemption, and disconnect checks can overshoot their due time by one sampling interval plus work and scheduling time, as can the active command's timeout check.
+Completion and result collection can each add one interval.
+Sleeps stay ordinary child processes, so existing signal handlers and the separate cancellation and preemption TERM-to-KILL grace are unchanged.
+
+The worker accepts only a tracked, non-symlink executable named `fm-*.sh` below its configured `FM_ROOT/bin`.
+Every child receives `env -i` with the composed PATH, HOME, FM_HOME, FM_ROOT_OVERRIDE, and `FM_REMOTE_JOB_ACTIVE=1`.
+The PATH is intentionally filesystem-discovered rather than login-shell-derived.
+It covers `~/.local/bin`, nvm, asdf, and mise shims and install bins, Nix, Homebrew, and the system tail.
+No shell startup files are evaluated.
+Each discovered set is appended in the shell's own sorted pathname-expansion order.
+That composition, not the order the filesystem happens to return, fixes which install of a multi-version tool wins.
+
+The macOS launch-agent renderer and repair helpers in the library are shared by the entrypoint and remote doctor, so their ownership cannot drift.
+The Linux start path puts the worker tree in its own process group.
+Stopping a worker then signals its restart supervisor, its serving child, and any job descendant together, instead of leaving a supervisor to restart what was just killed.
+`fm_remote_job_stop_worker_tree` owns that stop and refuses to signal a group whose leader is not itself a worker.
+A worker inherited from an older build or from launchd's own session is therefore still stopped safely as a single process.
+`fm_remote_job_root_is_live` is the shared predicate for whether a worker's code root still exists.
+`bin/fm-remote-job-worker.sh` uses it to stop itself once its root is pruned, and `bin/fm-remote-job-reap-orphans.sh` uses it to reap workers that were already orphaned that way.
 
 ### Job lanes and preemption
 
