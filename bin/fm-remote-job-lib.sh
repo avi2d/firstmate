@@ -982,7 +982,7 @@ fm_remote_job_process_start() {
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
   if [ -r "$proc_root/$pid/stat" ]; then
-    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    IFS= read -r stat_line < "$proc_root/$pid/stat" 2>/dev/null || return 1
     # After the final comm delimiter, array index 19 is proc stat field 22.
     read -r -a stat_fields <<< "${stat_line##*)}"
     [ "${#stat_fields[@]}" -ge 20 ] || return 1
@@ -1103,14 +1103,17 @@ fm_remote_job_stop_worker_tree() { # <pid>
   fi
 }
 
+# A regular non-symlink file of at most <max> bytes whose nonempty first line
+# is newline-terminated and is followed by at most an unterminated tail. The
+# bounded read is the fm_remote_job_read_line technique, so no size or tail
+# child runs; unlike that reader it accepts a carriage return.
 fm_remote_job_read_single_line() {
-  local file=$1 max=$2 value extra
-  fm_remote_job_regular_bounded "$file" "$max" || return 1
-  IFS= read -r value < "$file" || return 1
-  if IFS= read -r extra < <(tail -n +2 "$file"); then
-    : "$extra"
-    return 1
-  fi
+  local file=$1 max=$2 content value
+  local LC_ALL=C
+  [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  ! IFS= read -r -d '' -n "$((max + 1))" content < "$file" 2>/dev/null || return 1
+  case "$content" in *$'\n'*$'\n'*) return 1 ;; *$'\n'*) ;; *) return 1 ;; esac
+  value=${content%%$'\n'*}
   [ -n "$value" ] || return 1
   printf '%s\n' "$value"
 }

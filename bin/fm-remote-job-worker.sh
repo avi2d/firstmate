@@ -121,15 +121,19 @@ worker_write_host_heartbeat() {
   mv -f -- "$tmp" "$heartbeat"
 }
 
-worker_heartbeat_loop() { # <account-home> <owner-pid>
-  local account_home=$1 owner=$2 ready owner_state
+# The serving process prepared the state before starting this loop and its
+# stale sweep re-applies the directory modes, so each beat checks only the
+# recorded lock owner instead of re-preparing the whole state tree.
+worker_heartbeat_loop() { # <owner-pid>
+  local owner=$1 ready lock owner_state
   ready=$(fm_remote_job_worker_ready_path)
+  lock=$(fm_remote_job_worker_lock_path)
   trap 'exit 0' HUP INT TERM
   while kill -0 "$owner" 2>/dev/null &&
     owner_state=$(/bin/ps -p "$owner" -o state= 2>/dev/null) &&
     [ -n "$owner_state" ] && [[ "$owner_state" != *Z* ]] &&
-    fm_remote_job_lock_owner_matches_process "$account_home" &&
-    [ "$FM_REMOTE_JOB_OWNER_PID" = "$owner" ]; do
+    fm_remote_job_recorded_owner_alive "$lock" &&
+    [ "$FM_REMOTE_JOB_RECORDED_PID" = "$owner" ]; do
     if [ ! -e "$ready" ] && [ ! -L "$ready" ]; then
       worker_write_heartbeat "$owner" || exit 1
     else
@@ -139,9 +143,9 @@ worker_heartbeat_loop() { # <account-home> <owner-pid>
   done
 }
 
-worker_start_heartbeat() { # <account-home>
-  local account_home=$1 owner=${BASHPID:-$$}
-  worker_heartbeat_loop "$account_home" "$owner" &
+worker_start_heartbeat() {
+  local owner=${BASHPID:-$$}
+  worker_heartbeat_loop "$owner" &
   WORKER_HEARTBEAT_PID=$!
 }
 
@@ -1148,9 +1152,13 @@ worker_process_once() { # <account-home>
     # A live lane owns this record whatever its state, and every state below
     # skips a lane-owned job, so do not re-read it on every pass.
     worker_lane_owns_job "$FM_REMOTE_JOB_JOBS/$id" && continue
+    # Every state but queued and running is skipped below, so a finished or
+    # unreadable record is dropped before the canonical-path subshells.
+    fm_remote_job_read_state "$FM_REMOTE_JOB_JOBS/$id" state 2>/dev/null || continue
+    [ "$state" != 'done' ] || continue
     job=$(fm_remote_job_job_dir "$id" 2>/dev/null || true)
     [ -n "$job" ] || continue
-    state=$(fm_remote_job_read_state "$job" 2>/dev/null || true)
+    fm_remote_job_read_state "$job" state 2>/dev/null || state=
     case "$state" in
       queued)
         worker_lane_owns_job "$job" && continue
@@ -1245,7 +1253,7 @@ main() {
   trap worker_shutdown HUP INT TERM
   worker_publish_pid || { worker_error "cannot publish worker pid"; exit 1; }
   worker_write_heartbeat "${BASHPID:-$$}" || { worker_error "cannot update worker heartbeat"; exit 1; }
-  worker_start_heartbeat "$account_home"
+  worker_start_heartbeat
   sweep_interval=$WORKER_SWEEP_SECONDS
   [ "$FM_REMOTE_JOB_STAGE_REAP_SECONDS" -ge "$sweep_interval" ] || sweep_interval=$FM_REMOTE_JOB_STAGE_REAP_SECONDS
   [ "$FM_REMOTE_JOB_REAP_SECONDS" -ge "$sweep_interval" ] || sweep_interval=$FM_REMOTE_JOB_REAP_SECONDS
