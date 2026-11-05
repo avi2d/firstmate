@@ -57,9 +57,14 @@ set -e
   || fail "arm reported a board ready that Lavish has not opened"
 assert_not_contains "$(cat "$TMP_ROOT/unopened-arm.out")" "armed: $UNOPENED_ID" \
   "arm printed a ready board for an unopened session"
+assert_not_contains "$(cat "$TMP_ROOT/unopened-arm.out")" "registered:" \
+  "arm registered a board Lavish has not opened"
+assert_contains "$(cat "$TMP_ROOT/unopened-arm.err")" "lavish-axi $UNOPENED_ART" \
+  "arm did not name the missing lavish-axi open step for an unopened board"
 [ -s "$TMP_ROOT/unopened-arm.err" ] \
   || fail "arm refused an unopened board without a reason"
 pass "arm refuses an unopened board with a reason instead of reporting it armed"
+pass "arm refuses before registering and names the lavish-axi open step instead of failing on listener is not running"
 
 UNOPENED_SRC_HOME="$TMP_ROOT/unopened-src-home"
 new_home "$UNOPENED_SRC_HOME"

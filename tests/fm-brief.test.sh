@@ -1209,6 +1209,54 @@ ROWS
   pass "fm-brief.sh: scout Lavish hosting follows the bootstrap lavish-axi floor"
 }
 
+test_scout_board_address_rejects_the_remote_forward_for_local_boards() {
+  local base fakebin home brief
+  base=$(fm_test_base_path_sans "${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" lavish-axi)
+  home="$TMP_ROOT/board-address-local/home"
+  mkdir -p "$home/data"
+  fakebin=$(fm_fakebin "$TMP_ROOT/board-address-local")
+  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.81
+  PATH="$fakebin:$base" FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" board-address-local alpha --scout >/dev/null \
+    || fail "local scout scaffold failed"
+  brief="$home/data/board-address-local/brief.md"
+  assert_grep 'Mac-reachable board address 127.0.0.1:4387' "$brief" \
+    "local scout brief did not name the local Lavish board address"
+  assert_no_grep '127.0.0.1:14387' "$brief" \
+    "local scout brief kept the remote forward as the board address"
+  PATH="$fakebin:$base" LAVISH_AXI_PORT=4999 FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" board-address-port alpha --scout >/dev/null \
+    || fail "port-override scout scaffold failed"
+  assert_grep 'Mac-reachable board address 127.0.0.1:4999' \
+    "$home/data/board-address-port/brief.md" \
+    "local scout brief ignored the ambient Lavish port"
+  mkdir -p "$home/config"
+  printf 'lavish.example\n' > "$home/config/lavish-axi-host"
+  PATH="$fakebin:$base" FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" board-address-host alpha --scout >/dev/null \
+    || fail "configured-host scout scaffold failed"
+  assert_grep 'Mac-reachable board address lavish.example:4387' \
+    "$home/data/board-address-host/brief.md" \
+    "local scout brief ignored the configured Lavish server address"
+  rm "$home/config/lavish-axi-host"
+  home="$TMP_ROOT/board-address-remote/home"
+  mkdir -p "$home/data"
+  printf 'schema=fm-secondmate-parent.v1\nroute=remote\nparent_host=winbox\n' \
+    > "$home/.fm-secondmate-parent"
+  PATH="$fakebin:$base" FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" board-address-remote alpha --scout >/dev/null \
+    || fail "remote-route scout scaffold failed"
+  assert_grep 'Mac-reachable board address 127.0.0.1:14387' \
+    "$home/data/board-address-remote/brief.md" \
+    "remote-route scout brief did not keep the forward as the board address"
+  home="$TMP_ROOT/board-address-local/home"
+  if PATH="$fakebin:$base" LAVISH_AXI_PORT=bogus FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" board-address-bad-port alpha --scout >/dev/null 2>&1; then
+    fail "scout scaffold accepted a non-numeric Lavish port"
+  fi
+  pass "fm-brief.sh: scout board address reaches the serving machine instead of the remote forward"
+}
+
 # Scout and secondmate paths still scaffold well-formed briefs.
 test_scout_and_secondmate_scaffold() {
   local brief
@@ -1808,6 +1856,7 @@ test_scout_completion_write_exception_is_task_scoped
 test_scout_and_secondmate_scaffold
 test_scout_brief_requires_references_section
 test_scout_lavish_line_follows_presentation_floor
+test_scout_board_address_rejects_the_remote_forward_for_local_boards
 test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief

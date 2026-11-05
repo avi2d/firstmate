@@ -163,9 +163,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,/^set -u$/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 2; }
 
-apply_session_host() {  # <artifact>
-  local endpoint
-  endpoint=$(perl -MJSON::PP -MCwd=realpath -MEncode=decode,FB_CROAK -e '
+lavish_session_endpoint() {  # <state-json> <artifact>
+  perl -MJSON::PP -MCwd=realpath -MEncode=decode,FB_CROAK -e '
     use strict;
     use warnings;
     my ($path, $artifact) = @ARGV;
@@ -190,7 +189,12 @@ apply_session_host() {  # <artifact>
     $host ne "0.0.0.0" && $host ne "::" && $port >= 1 && $port <= 65535
       or die "invalid saved Lavish server address\n";
     print "$host\n$port\n";
-  ' "${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json" "$1") \
+  ' "$1" "$2"
+}
+
+apply_session_host() {  # <artifact>
+  local endpoint
+  endpoint=$(lavish_session_endpoint "${LAVISH_AXI_STATE_DIR:-$HOME/.lavish-axi}/state.json" "$1") \
     || die "cannot resolve the board server from its Lavish session: $1"
   LAVISH_AXI_HOST=${endpoint%$'\n'*}
   LAVISH_AXI_PORT=${endpoint##*$'\n'}
@@ -311,6 +315,8 @@ cmd_arm() {
   real=$(perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$artifact" 2>/dev/null) \
     || die "cannot resolve the artifact path: $artifact"
   state_dir=$(board_state_dir "$id") || exit 1
+  lavish_session_endpoint "$state_dir/state.json" "$real" >/dev/null 2>&1 \
+    || die "no open Lavish session for $real; open the board with \`lavish-axi $real\` before arming"
   listener=("$SCRIPT_DIR/fm-procevent-lavish.sh" poll "$real" --state-dir "$state_dir")
   [ -z "$reply_file" ] || listener+=(--agent-reply-file "$reply_file")
   if [ -n "$task" ]; then

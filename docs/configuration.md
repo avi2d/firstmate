@@ -1714,6 +1714,8 @@ The optional local, gitignored `config/lavish-axi-host` contains one non-empty a
 
 Once a board exists, the process-event adapter derives the polling address from that board's own saved Lavish session instead; its header owns the lookup contract.
 When the file is absent, worker launches do not add a board address and retain the existing ambient-environment behavior.
+Scout briefs carry the board address that reaches a board served on the worker's own machine: the configured server address, or loopback when no address is configured, on the ambient `LAVISH_AXI_PORT` or the server's own `4387` default.
+A remote-route secondmate home keeps the `127.0.0.1:14387` forward instead, which is what reaches its Windows-side boards.
 
 Malformed or unreadable values refuse the launch before the worker starts.
 The address selects the existing shared server; it does not authorize starting or stopping the server, and the Lavish startup crash remains a vendor-tool concern.
@@ -3195,6 +3197,7 @@ A long-polling external process is registered as a *source* through its adapter,
 **Open the Lavish artifact first**
 
 Before arming any Lavish source, open its artifact with `lavish-axi` so the saved session identifies the board's server; reply and poll attempts derive their host and port from that session and refuse missing or invalid session evidence before posting or consuming a staged worker reply.
+`arm` looks for that open session before registering and refuses with the missing `lavish-axi <artifact>` step, so a board that was never opened never prints `registered`.
 `arm` records the board's Lavish state directory in the registration, so a listener restart or a later re-arm reaches the board's own server whatever the restarting environment sets.
 The recorded directory is `LAVISH_AXI_STATE_DIR` when set, otherwise the directory the board's existing registration recorded, otherwise `~/.lavish-axi`.
 A registration with no recorded directory keeps using `LAVISH_AXI_STATE_DIR` or `~/.lavish-axi`, so its owner arms a board served from another state directory once with `LAVISH_AXI_STATE_DIR` set to record it.
