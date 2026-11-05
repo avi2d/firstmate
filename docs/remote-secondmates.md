@@ -541,7 +541,17 @@ A process-event source takes these steps:
 
 A failed remote delta read or non-schema remote output is discarded before capture, so it emits no result, leaves the cursor unchanged, and keeps the source registered for retry and liveness recovery.
 The listener holds its claim across an empty wait and across a delta it re-arms, so a line appended during either is collected without waiting for the next supervision cycle.
-The [`fm-remote-delta-read.sh` header](../bin/fm-remote-delta-read.sh) owns snapshot sampling and its line-visibility and wait-window latency contract.
+For the first two seconds of its wait window the delta reader samples the log every `FM_REMOTE_DELTA_POLL_SECONDS`, 0.5 seconds by default.
+After that it samples every `FM_REMOTE_DELTA_SETTLED_POLL_SECONDS`, 1 second by default.
+A complete line is visible on the next sample, and the window deadline can overshoot by that interval plus snapshot and scheduling work.
+Each sample of an existing log stats it once.
+The first sample always runs the bounded capture and hashing.
+Later samples skip that work only when the size, subsecond mtime and ctime, inode, and device key is unchanged.
+If either timestamp lacks a nonzero subsecond fraction, every sample captures the log rather than trusting a coarse key that could hide a same-second rewrite.
+The wait remains an ordinary child sleep, and signal handling is unchanged.
+Exit 75 means the wait window closed with no complete line, and SIGTERM exits the same way after cleanup.
+The remote job worker preempts this read-only poll to unblock any queued command other than another reply long-poll, then publishes that preemption as distinct exit 76.
+`bin/fm-remote-job-lib.sh` owns that preemption contract.
 It stops when that registration is retired, the registered command changes, or the home's owner lease lapses.
 `bin/fm-procevent.sh` owns the generic relisten rule, and `bin/fm-procevent-remote-reply.sh` owns this adapter's answer.
 
