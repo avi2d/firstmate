@@ -1,0 +1,25 @@
+name: PR title
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: PR title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check PR title
+        env:
+          # The title travels in the environment so quotes in it cannot break the run line.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bin/fm-pr-title-check.sh "$PR_TITLE"

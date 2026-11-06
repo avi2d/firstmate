@@ -172,13 +172,21 @@ FM_AFK_CONTRACT_CMD="$FM_AFK_LAUNCH_DIR/fm-afk-contract.sh"
 
 fm_afk_launch_log() { printf 'fm-afk-launch: %s\n' "$*" >&2; }
 
-fm_afk_launch_lock_owned() {
-  local pid expected actual
+# A torn read mixes a dead pid with a live successor's identity, so the pid must read identical around the liveness check and both files must still match at removal.
+fm_afk_launch_lock_stale() {
+  local pid expected again actual reread reexpected
   [ -d "$FM_AFK_LAUNCH_LOCK" ] || return 1
   pid=$(cat "$FM_AFK_LAUNCH_LOCK/pid" 2>/dev/null) || return 1
   expected=$(cat "$FM_AFK_LAUNCH_LOCK/pid-identity" 2>/dev/null) || return 1
-  actual=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
-  [ -n "$expected" ] && [ "$actual" = "$expected" ]
+  [ -n "$pid" ] && [ -n "$expected" ] || return 1
+  again=$(cat "$FM_AFK_LAUNCH_LOCK/pid" 2>/dev/null) || return 1
+  [ "$again" = "$pid" ] || return 1
+  if actual=$(fm_pid_identity "$pid" 2>/dev/null); then
+    [ "$actual" = "$expected" ] && return 1
+  fi
+  reread=$(cat "$FM_AFK_LAUNCH_LOCK/pid" 2>/dev/null) || return 1
+  reexpected=$(cat "$FM_AFK_LAUNCH_LOCK/pid-identity" 2>/dev/null) || return 1
+  [ "$reread" = "$pid" ] && [ "$reexpected" = "$expected" ]
 }
 
 fm_afk_launch_lock_acquire() {
@@ -210,7 +218,12 @@ fm_afk_launch_lock_acquire() {
     else
       incomplete=0
     fi
-    if ! fm_afk_launch_lock_owned; then
+    if fm_afk_launch_lock_stale; then
+      rm -rf "$FM_AFK_LAUNCH_LOCK" 2>/dev/null || return 1
+      incomplete=0
+      continue
+    fi
+    if [ "$incomplete" -ge 20 ] && { [ ! -s "$FM_AFK_LAUNCH_LOCK/pid" ] || [ ! -s "$FM_AFK_LAUNCH_LOCK/pid-identity" ]; }; then
       rm -rf "$FM_AFK_LAUNCH_LOCK" 2>/dev/null || return 1
       incomplete=0
       continue
