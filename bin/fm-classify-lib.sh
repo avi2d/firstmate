@@ -2093,6 +2093,8 @@ status_retire_presentation_task() {  # <state> <task-id> [<archive-file>]
   daemon_marker=$(status_daemon_seen_marker_path "$state" "$task")
   home_appends="$state/.$task.home-appends"
   home_appends_lock="$home_appends.lock"
+  local -a task_records=("$state/.$task.open-decisions-cursor" "$state/.$task.open-decisions-cursor.timed"
+    "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker")
 
   # A remote-home teardown can legitimately retire an endpoint ID that has no
   # status log in that home. Do not contend with that home's unrelated status
@@ -2201,15 +2203,12 @@ EOF
       find "$archive" -type f -name '*.status' -mtime +14 -exec rm -f -- {} + || rc=1
     fi
     if [ "$rc" -eq 0 ]; then
-      rm -f -- "$state/.$task.open-decisions-cursor" \
-        "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
+      rm -f -- "${task_records[@]}" || rc=1
       fm_lock_remove_path "$home_appends_lock" 2>/dev/null || true
     fi
   fi
   if [ "$archive_published" -eq 1 ] && [ "$rc" -eq 0 ]; then
-    rm -f -- "$state/$task.status" "$state/.$task.open-decisions-cursor" \
-      "$state/.$task.open-decisions-cursor.timed" \
-      "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker" || rc=1
+    rm -f -- "$state/$task.status" "${task_records[@]}" || rc=1
     fm_lock_remove_path "$home_appends_lock" 2>/dev/null || true
   fi
   if [ "$archive_published" -eq 1 ] && [ "$rc" -ne 0 ] \

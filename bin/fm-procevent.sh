@@ -1969,7 +1969,7 @@ launch_entry_listed() {  # <entry> <newline-separated entries>
 # Every launch shares ONE window rather than taking a window each, so a whole
 # fleet of failing sources costs a watcher cycle the same bounded wait as one.
 confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><launch-stamp-before>...
-  local deadline window entry id rest identity before state stamp mark expired
+  local deadline window entry id rest identity before state stamp mark
   local -a pending=("$@") remaining=()
   window=$(fm_procevent_launch_confirm_seconds) || return 1
   # A zero-padded window is a valid value to its validator, which reads base 10;
@@ -1982,18 +1982,12 @@ confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><lau
   # [window, window + 1] instead: never less than configured.
   deadline=$((SECONDS + 10#$window + 1))
   while :; do
-    expired=0
-    [ "$SECONDS" -lt "$deadline" ] || expired=1
     remaining=()
     for entry in "${pending[@]+"${pending[@]}"}"; do
       id=${entry%%$'\t'*}
       rest=${entry#*$'\t'}
       identity=${rest%%$'\t'*}
       before=${rest#*$'\t'}
-      if [ "$expired" -eq 0 ]; then
-        remaining+=("$entry")
-        continue
-      fi
       state=1
       if fm_procevent_source_lock_try_acquire "$id"; then
         fm_procevent_claim_state_locked "$id"
@@ -2008,14 +2002,14 @@ confirm_launched_runners() {  # <source-id><TAB><registration-identity><TAB><lau
         && stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$identity"); then
         mark=$(cat -- "$stamp" 2>/dev/null || true)
       fi
-      if launch_attached "$id" "$identity" "$before" "$mark"; then
+      if [ -n "$mark" ] && [ "$mark" != "$before" ]; then
         continue
       fi
       remaining+=("$entry")
     done
     pending=("${remaining[@]+"${remaining[@]}"}")
     [ "${#pending[@]}" -gt 0 ] || break
-    [ "$expired" -eq 0 ] || break
+    [ "$SECONDS" -lt "$deadline" ] || break
     sleep 0.05
   done
   [ "${#pending[@]}" -eq 0 ] || printf '%s\n' "${pending[@]}"
@@ -2069,13 +2063,15 @@ cmd_ensure_listening() {
   while :; do
     expired=0
     [ "$SECONDS" -lt "$deadline" ] || expired=1
-    listening=0
-    generation_is_listening "$id" "$identity" || listening=$?
-    mark=
-    if stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$identity"); then
-      mark=$(cat -- "$stamp" 2>/dev/null || true)
-    fi
+    # Only at close: taking the source lock sooner makes a runner that exits
+    # inside the window fail its release try-lock and strand its claim.
     if [ "$expired" -eq 1 ]; then
+      listening=0
+      generation_is_listening "$id" "$identity" || listening=$?
+      mark=
+      if stamp=$(fm_procevent_launch_floor_stamp_path "$STATE" "$id" "$identity"); then
+        mark=$(cat -- "$stamp" 2>/dev/null || true)
+      fi
       if [ "$listening" -eq 0 ] || launch_attached "$id" "$identity" "$before" "$mark"; then
         return 0
       fi

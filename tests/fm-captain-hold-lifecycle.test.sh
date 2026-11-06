@@ -36,15 +36,36 @@ EOF
 }
 
 # The Lavish review adapter, run against this suite's isolated home. The
-# machine-wide process-event claim root is redirected into the fixture so arming
-# a review here can never contend with a real one on this machine.
+# machine-wide process-event claim root and Lavish state dir are redirected into
+# the fixture so arming a review here can never contend with a real one on this
+# machine.
 run_lavish() {  # <home> <command args...>
   local home=$1
   shift
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    LAVISH_AXI_STATE_DIR="$home/lavish-state" \
     "$ROOT/bin/fm-procevent-lavish.sh" "$@"
+}
+
+# Arm refuses a board Lavish has not opened, so record the open session the
+# real `lavish-axi <artifact>` would leave in run_lavish's state dir.
+open_lavish_board() {  # <home> <artifact>
+  mkdir -p "$1/lavish-state"
+  perl -MJSON::PP -MCwd=realpath -MDigest::SHA=sha256_hex -MEncode=decode -e '
+    my ($path, $artifact) = @ARGV;
+    my $real = realpath($artifact) // die "missing fixture artifact";
+    my $key = substr(sha256_hex($real), 0, 16);
+    my $state = { sessions => {} };
+    if (-f $path) { open my $in, "<", $path or die $!; local $/; $state = decode_json(<$in>); }
+    $state->{sessions}{$key} = {
+      key => $key, file => decode("UTF-8", $real), status => "open",
+      url => "http://127.0.0.1:14387/session/$key",
+    };
+    open my $out, ">", $path or die $!;
+    print $out encode_json($state);
+  ' "$1/lavish-state/state.json" "$2"
 }
 
 # The generic process-event runner, run against this suite's isolated home and
@@ -128,6 +149,12 @@ case "${1:-} ${2:-}" in
   "api --paginate")
     case " $* " in
       *merge_queue*) ;;
+      *) printf '%s\n' '[]' ;;
+    esac
+    ;;
+  "api repos/"*/pulls/*/files*)
+    case "$*" in
+      *"&page=1") printf '%s\n' '[{"filename":"README.md"}]' ;;
       *) printf '%s\n' '[]' ;;
     esac
     ;;
@@ -1672,6 +1699,7 @@ test_bound_channel_answers_close_at_answer_time() {
     || fail "could not bind the review source to the keyed-answer intake"
   [ "$(run_captain "$home" binding "$sid")" = "(any)" ] \
     || fail "the recorded binding did not resolve to the collapsed marker"
+  open_lavish_board "$home" "$artifact"
   run_lavish "$home" arm "$artifact" >/dev/null || fail "could not arm the review deck"
 
   result="$home/state/procevent-inbox/$sid.1.result"
@@ -2166,6 +2194,7 @@ test_unbound_source_closes_no_hold() {
   printf '<h1>Unbound</h1>\n' > "$artifact"
   fm_fake_exit0 "$home/fakebin" lavish-axi
   sid=$(run_lavish "$home" source-id "$artifact") || fail "could not derive the unbound source id"
+  open_lavish_board "$home" "$artifact"
   run_lavish "$home" arm "$artifact" >/dev/null || fail "could not arm the unbound review"
 
   result="$home/state/procevent-inbox/$sid.1.result"

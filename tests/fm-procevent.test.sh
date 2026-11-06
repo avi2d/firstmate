@@ -2259,10 +2259,8 @@ assert_contains "$sr4_again" "uncertain=1" \
 # must have said so rather than promising a reclaim.
 assert_contains "$sr4_wake" "cannot claim source" \
   "the stranded wake promises an unconditional reclaim: $sr4_wake"
-set +e
-sr4_start=$(pe "$HSR4" start reused-group-src 2>&1)
-sr4_start_rc=$?
-set -e
+sr4_start_rc=0
+sr4_start=$(pe "$HSR4" start reused-group-src 2>&1) || sr4_start_rc=$?
 [ "$sr4_start_rc" -ne 0 ] \
   || fail "start reported success against a claim it could not tidy: $sr4_start"
 assert_contains "$sr4_start" "cannot claim source" \
@@ -2272,10 +2270,8 @@ assert_contains "$sr4_start" "cannot claim source" \
 sleep 0.3
 [ "$(wc -l < "$SR4_LOG" | tr -d ' ')" = 1 ] \
   || fail "a refused start ran a second source beside a reused pid's live group: $(cat "$SR4_LOG")"
-set +e
-sr4_retire=$(pe "$HSR4" retire reused-group-src 2>&1)
-sr4_rc=$?
-set -e
+sr4_rc=0
+sr4_retire=$(pe "$HSR4" retire reused-group-src 2>&1) || sr4_rc=$?
 [ "$sr4_rc" -ne 0 ] || fail "retire released a claim whose process group survives: $sr4_retire"
 [ -e "$sr4_claim" ] || fail "retire removed the reused-pid generation's claim"
 [ -e "$HSR4/state/procevent/reused-group-src.source" ] \
@@ -4930,11 +4926,9 @@ PATH="$LIVE/bin:$PATH" FM_HOME="$LIVE/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" arm "$live_art" > "$LIVE/arm1.out"
 assert_contains "$(cat "$LIVE/arm1.out")" "armed: $live_id" "the first arm was not reported ready"
 wait_for_lines "$READY_MARK" 1 || fail "the first generation's listener never ran"
-set +e
+live_rc=0
 PATH="$LIVE/bin:$PATH" FM_HOME="$LIVE/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
-  "$ROOT/bin/fm-procevent-lavish.sh" arm "$live_art" > "$LIVE/arm2.out" 2> "$LIVE/arm2.err"
-live_rc=$?
-set -e
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$live_art" > "$LIVE/arm2.out" 2> "$LIVE/arm2.err" || live_rc=$?
 [ "$live_rc" -eq 0 ] \
   || fail "re-arm over a live earlier listener failed ($live_rc): $(cat "$LIVE/arm2.err")"
 assert_contains "$(cat "$LIVE/arm2.out")" "still-listening: $live_id" \
@@ -5282,11 +5276,9 @@ awk 'NR == 4 { print "different-live-process-identity"; next } { print }' \
 chmod 0600 "$undisp_claim"
 [ "$(pe "$UNDISP/home" list | awk -v id="$undisp_id" '$1 == id { print $3 }')" = orphaned ] \
   || fail "fixture invalid: the reused-pid claim is not reported orphaned"
-set +e
+undisp_rc=0
 PATH="$UNDISP/bin:$PATH" FM_HOME="$UNDISP/home" FM_PROCEVENT_LAUNCH_CONFIRM_SECONDS=1 \
-  "$ROOT/bin/fm-procevent-lavish.sh" arm "$undisp_art" > "$UNDISP/arm2.out" 2>/dev/null
-undisp_rc=$?
-set -e
+  "$ROOT/bin/fm-procevent-lavish.sh" arm "$undisp_art" > "$UNDISP/arm2.out" 2>/dev/null || undisp_rc=$?
 sleep 0.5
 [ "$(wc -l < "$READY_MARK" | tr -d ' ')" = 1 ] \
   || fail "arm started a second listener beside a stale claim's live process group"
