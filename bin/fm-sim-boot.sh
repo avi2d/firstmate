@@ -6,6 +6,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-mac-load-lib.sh
 . "$SCRIPT_DIR/fm-mac-load-lib.sh"
+# shellcheck source=bin/fm-mkdir-lib.sh
+. "$SCRIPT_DIR/fm-mkdir-lib.sh"
 if ! fm_mac_load_config "${FM_MAC_LOAD_CONFIG_DIR:-}"; then
   echo "error: simctl boot refused: the machine load declaration is unreadable ($FM_MAC_LOAD_ERROR)" >&2
   exit 1
@@ -112,11 +114,11 @@ cmd_boot() {
   case "$wait_secs" in ''|*[!0-9]*) fail "--wait takes seconds" ;; esac
   deadline=$((SECONDS + wait_secs))
   while :; do
-    if mkdir "$BOOT_DIR/booting.lock.d" 2>/dev/null; then break; fi
+    if fm_mkdir_exclusive "$BOOT_DIR/booting.lock.d" 2>/dev/null; then break; fi
     [ "$SECONDS" -lt "$deadline" ] || gate_closed "another boot is already starting; wait for it"
     sleep 5
   done
-  trap 'rmdir "$BOOT_DIR/booting.lock.d" 2>/dev/null || true' EXIT
+  trap 'fm_mkdir_exclusive_release "$BOOT_DIR/booting.lock.d" 2>/dev/null || true' EXIT
   while :; do
     avg=$(load_now)
     if fm_mac_load_high "$avg"; then

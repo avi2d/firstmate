@@ -865,6 +865,7 @@ tests/fm-mail-check.test.sh 7524
 tests/fm-mail.test.sh 9684
 tests/fm-merge-hold.test.sh 1889
 tests/fm-merge-on-green.test.sh 70538
+tests/fm-mkdir-exclusive.test.sh 6000
 tests/fm-muse-harness.test.sh 46548
 tests/fm-muse-signals-live-e2e.test.sh 52
 tests/fm-nm-parked-worker-wake.test.sh 4749

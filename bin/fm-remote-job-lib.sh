@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+_FM_REMOTE_JOB_LIB_DIR=${BASH_SOURCE[0]%/*}
+[ "$_FM_REMOTE_JOB_LIB_DIR" != "${BASH_SOURCE[0]}" ] || _FM_REMOTE_JOB_LIB_DIR=.
+# shellcheck source=bin/fm-mkdir-lib.sh
+. "$_FM_REMOTE_JOB_LIB_DIR/fm-mkdir-lib.sh"
+unset _FM_REMOTE_JOB_LIB_DIR
 FM_REMOTE_JOB_LABEL=dev.firstmate.remote-job
 FM_REMOTE_JOB_MAX_BYTES=${FM_REMOTE_JOB_MAX_BYTES:-1048576}
 FM_REMOTE_JOB_QUEUE_TIMEOUT=${FM_REMOTE_JOB_QUEUE_TIMEOUT:-360}
@@ -519,7 +524,7 @@ fm_remote_job_next_seq() { # [stage-dir destination]
     attempt=$((attempt + 1))
     value=$((value + 1))
     claim="$FM_REMOTE_JOB_SEQ_CLAIMS/$value"
-    if (umask 077; mkdir "$claim") 2>/dev/null; then
+    if (umask 077; fm_mkdir_exclusive "$claim") 2>/dev/null; then
       chmod 700 "$claim" || return 1
       fm_remote_job_advance_seq_hint "$value" || true
       if [ -n "$stage" ]; then
@@ -709,7 +714,7 @@ fm_remote_job_reap() { # <account-home> <id>; only removes an exact completed re
   if [ -e "$job/.claim" ] || [ -L "$job/.claim" ]; then
     [ -d "$job/.claim" ] && [ ! -L "$job/.claim" ] || return 1
     fm_remote_job_remove_claim_records "$job/.claim" || return 1
-    rmdir "$job/.claim" || return 1
+    fm_mkdir_exclusive_release "$job/.claim" || return 1
   fi
   rmdir "$job"
 }
@@ -730,7 +735,7 @@ fm_remote_job_stage_owner_alive() { # <stage-dir>
 }
 
 fm_remote_job_reap_stale() { # <account-home>
-  local account_home=$1 job id state mtime now stage marker tmp reap_claims=0
+  local account_home=$1 job id state mtime now stage marker tmp reap_claims=0 claim expired
   local cutoff stamp ref
   fm_remote_job_prepare_state "$account_home" || return 1
   now=$(date +%s)
@@ -775,12 +780,14 @@ fm_remote_job_reap_stale() { # <account-home>
       tmp=$(umask 077; mktemp "$FM_REMOTE_JOB_STATE/.seqreap.XXXXXX") || tmp=
       if [ -n "$tmp" ] && printf '%s\n' "$now" > "$tmp" && chmod 600 "$tmp" \
         && mv -f -- "$tmp" "$marker"; then
-        # One directory walk: ! -newer matches whole-second mtime <= cutoff
-        # (the former >= age check). Batched rmdir tolerates concurrent mkdir/rmdir races
-        # and non-empty dirs the same way the old per-claim rmdir || true did.
-        find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type d \
-          -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 \
-          ! -newer "$ref" -exec rmdir {} + 2>/dev/null || true
+        # ! -newer matches whole-second mtime <= cutoff. The batched release
+        # skips a claim another process emptied, removed, or refilled meanwhile.
+        expired=()
+        while IFS= read -r claim; do expired+=("$claim"); done < <(
+          find "$FM_REMOTE_JOB_SEQ_CLAIMS" -mindepth 1 -maxdepth 1 -type d \
+            -name '[0-9]*' ! -name '*[!0-9]*' ! -name 0 ! -newer "$ref" 2>/dev/null
+        )
+        fm_mkdir_exclusive_release ${expired[@]+"${expired[@]}"} 2>/dev/null || true
       else
         [ -z "$tmp" ] || rm -f -- "$tmp"
       fi
