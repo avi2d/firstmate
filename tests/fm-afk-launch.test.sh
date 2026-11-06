@@ -674,6 +674,38 @@ unit_lock_initialization_grace() {
   rm -rf "$st"
 }
 
+unit_launcher_lock_never_breaks_a_live_lock() {
+  local st logdir racers=20 iters=8 hold=0.02 r pids="" p rc=0 overlap
+  st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-lock-race.XXXXXX")
+  logdir="$st/logs"
+  mkdir -p "$logdir" "$st/state"
+  for ((r = 0; r < racers; r++)); do
+    FM_HOME="$st" FM_STATE_OVERRIDE="$st/state" \
+      LAUNCH_LIB="$LAUNCH" TIMING_LIB="$ROOT/bin/fm-timing-lib.sh" \
+      RACER_ID="$r" RACER_ITERS="$iters" RACER_HOLD="$hold" RACER_LOGDIR="$logdir" bash -c '
+      . "$LAUNCH_LIB"
+      . "$TIMING_LIB"
+      for ((i = 0; i < RACER_ITERS; i++)); do
+        fm_afk_launch_lock_acquire || { printf "ACQUIRE-FAIL %s %s\n" "$RACER_ID" "$i" >> "$RACER_LOGDIR/failures"; exit 1; }
+        enter=$(fm_timing_now_ms)
+        sleep "$RACER_HOLD"
+        leave=$(fm_timing_now_ms)
+        printf "%s %s %s\n" "$RACER_ID" "$enter" "$leave" >> "$RACER_LOGDIR/hold-$RACER_ID.log"
+        fm_afk_launch_lock_release || { printf "RELEASE-FAIL %s %s\n" "$RACER_ID" "$i" >> "$RACER_LOGDIR/failures"; exit 1; }
+      done
+    ' &
+    # shellcheck disable=SC2031 # The background PID is captured immediately in this shell.
+    pids="$pids $!"
+  done
+  for p in $pids; do wait "$p" || rc=1; done
+  overlap=$(awk '{ print $2 " 1"; print $3 " 0"; }' "$logdir"/hold-*.log 2>/dev/null | sort -k1,1n -k2,2n | awk '$2 == 0 { cur--; next } { cur++; if (cur > max) max = cur } END { print max + 0 }')
+  if [ "$rc" -eq 0 ] && [ ! -e "$logdir/failures" ] && [ "$overlap" = 1 ]; then
+    pass "launcher lock: 20 racing holders never overlap"
+  else
+    fail "launcher lock: racing holders overlapped (rc $rc, max overlap $overlap)"
+  fi
+  rm -rf "$st"
+}
 unit_signal_exits_with_lock_cleanup() {
   local st marker child
   st=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-signal.XXXXXX")
@@ -1807,6 +1839,7 @@ unit_stop_rejects_reused_pid
 unit_failed_start_rolls_back_state
 unit_concurrent_start_serialized
 unit_lock_initialization_grace
+unit_launcher_lock_never_breaks_a_live_lock
 unit_signal_exits_with_lock_cleanup
 unit_herdr_partial_create_recovery
 unit_herdr_error_with_exact_ids_closes_exact
