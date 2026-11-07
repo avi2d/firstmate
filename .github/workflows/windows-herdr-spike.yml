@@ -436,3 +436,4 @@ jobs:
             ${{ runner.temp }}/herdr-fm-windows-spike-*.log
             ${{ runner.temp }}/herdr-windows-install.log
           if-no-files-found: warn
+          retention-days: 7
