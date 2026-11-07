@@ -32,6 +32,7 @@ The 2026-10-27 read-repetition suites carry provisional Linux x86_64 local runne
 The live samples exercised installed Pi 1.4.0 RPC without capability skips; they are not CI timing evidence or timings for unavailable harnesses.
 Both suites retain serial placement and full coverage; replace these provisional hints with Ubuntu timing-artifact maxima at the next CI refresh.
 The 2026-11-06 `tests/fm-mkdir-exclusive.test.sh` serial hint is a provisional 6000 ms, the 2457 ms Linux x86_64 local maximum of three samples scaled by ~2.3, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+The 2026-11-07 `tests/fm-practice-drift-check.test.sh` serial hint is a provisional 30200 ms, the 13100 ms Linux x86_64 local maximum of three samples scaled by ~2.3, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
 The 2026-10-28 Antigravity primary tests carry provisional serial hints - 45000 ms for `tests/fm-agy-primary.test.sh` and the 75 ms live-guard skip for `tests/fm-agy-primary-live-e2e.test.sh` - until the next CI refresh replaces them with Ubuntu timing-artifact maxima.
 The wedge-cap suite carries the Ubuntu measurements from CI run [39597689178](https://github.com/kunchenguid/firstmate/actions/runs/39597689178) - 374225 ms for `tests/fm-watch-wedge-cap.test.sh` and the 74 ms live-guard skip for `tests/fm-watch-wedge-cap-live.test.sh` - in place of the provisional local measurements the suite first carried (1003000 ms and the 155 ms skip), which overstated the CI cost of both.
 They are not a formality: without a hint the suite is packed on the 45000 ms default, which puts it beside a shard already holding about 17 minutes of measured work, so that shard would really have run for about 23 minutes - past the 20-minute target the guard reserves - while the coverage guard still passed.
@@ -132,7 +133,7 @@ No fast mode, path skips, or paid runner provisioning is part of this layout.
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the three watch-triage members still sum to about 26 minutes of CI test time.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
 Pull requests and pushes run the twelve lint partitions and the repo invariants, each capped at 10 minutes.
-A manual dispatch run adds the coverage guard, ten portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
+A manual dispatch run adds the coverage guard, eleven portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
 Insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.

@@ -478,6 +478,10 @@
       "audience": "operator-example"
     },
     {
+      "path": "docs/examples/practice-drift.json",
+      "audience": "operator-example"
+    },
+    {
       "path": "docs/examples/usage-warner",
       "audience": "operator-example"
     },
