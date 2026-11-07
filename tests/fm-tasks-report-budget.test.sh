@@ -9,7 +9,7 @@ TASKS_AXI="$ROOT/bin/fm-tasks-axi.sh"
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
 
-# tui-dash abandons this report after 15s, and a loaded host runs it at several
+# orc-dash abandons this report after 15s, and a loaded host runs it at several
 # times the fixture's cost.
 BUDGET_SECS=${FM_TASKS_REPORT_BUDGET_SECS:-6}
 
@@ -27,7 +27,8 @@ SH
 chmod +x "$FAKEBIN/no-mistakes"
 export PATH="$FAKEBIN:$PATH"
 
-TODAY=$(date -u +%F)
+# tasks-axi stamps a row's creation with the local date, not the UTC one.
+QUEUED_ON=$(date +%F)
 SPAWN_E=$(( $(date -u +%s) - 3600 ))
 SPAWN_T=$(jq -n --argjson e "$SPAWN_E" -r '$e | strftime("%Y-%m-%dT%H:%M:%SZ")')
 
@@ -49,23 +50,23 @@ make_home() {  # <name> <ready> <held> <blocked> <live>
     kind=${held_kinds[$(( (i - 1) % 3 ))]}
     FM_HOME="$home" "$TASKS_AXI" hold "$id" --reason "reason $i" --kind "$kind" >/dev/null || fail "fixture hold $id"
     case "$kind" in captain|external) ;; *) kind=unstated ;; esac
-    jq -nc --arg id "$id" --arg i "$i" --arg home "$name" --arg today "$TODAY" --arg kind "$kind" \
+    jq -nc --arg id "$id" --arg i "$i" --arg home "$name" --arg queued_on "$QUEUED_ON" --arg kind "$kind" \
       '{group: 2, row: {id: $id, title: "Held \($i), waiting", project: "?", kind: "scout", home: $home,
-        queuedOn: $today, hold: {kind: $kind, reason: "reason \($i)"}, after: []}}' >>"$EXPECTED_PLANNED"
+        queuedOn: $queued_on, hold: {kind: $kind, reason: "reason \($i)"}, after: []}}' >>"$EXPECTED_PLANNED"
     if [ "$i" -le "$ready" ]; then
       id="$name-ready-$i"
       FM_HOME="$home" "$TASKS_AXI" add "$id" "Ready $i" --kind ship --repo "org/repo-$i" >/dev/null || fail "fixture add $id"
-      jq -nc --arg id "$id" --arg i "$i" --arg home "$name" --arg today "$TODAY" \
+      jq -nc --arg id "$id" --arg i "$i" --arg home "$name" --arg queued_on "$QUEUED_ON" \
         '{group: 1, row: {id: $id, title: "Ready \($i)", project: "repo-\($i)", kind: "ship", home: $home,
-          queuedOn: $today, hold: null, after: []}}' >>"$EXPECTED_PLANNED"
+          queuedOn: $queued_on, hold: null, after: []}}' >>"$EXPECTED_PLANNED"
     fi
   done
   for i in $(seq 1 "$blocked"); do
     id="$name-blocked-$i"
     FM_HOME="$home" "$TASKS_AXI" add "$id" "Blocked $i" --kind ship --blocked-by "$name-ready-1" >/dev/null || fail "fixture add $id"
-    jq -nc --arg id "$id" --arg i "$i" --arg home "$name" --arg today "$TODAY" --arg a "$name-ready-1" \
+    jq -nc --arg id "$id" --arg i "$i" --arg home "$name" --arg queued_on "$QUEUED_ON" --arg a "$name-ready-1" \
       '{group: 3, row: {id: $id, title: "Blocked \($i)", project: "?", kind: "ship", home: $home,
-        queuedOn: $today, hold: null, after: [$a]}}' >>"$EXPECTED_PLANNED"
+        queuedOn: $queued_on, hold: null, after: [$a]}}' >>"$EXPECTED_PLANNED"
   done
   for i in $(seq 1 "$live"); do
     id="$name-live-$i"

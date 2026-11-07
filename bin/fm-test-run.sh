@@ -901,8 +901,8 @@ tests/fm-pr-state.test.sh 525
 tests/fm-practice-drift-check.test.sh 30200
 tests/fm-procevent-board-resolve.test.sh 9434
 tests/fm-procevent-lavish.test.sh 2500
+tests/fm-procevent-orc-dash.test.sh 141339
 tests/fm-procevent-quota.test.sh 2459
-tests/fm-procevent-tui-dash.test.sh 141339
 tests/fm-procevent-when.test.sh 25674
 tests/fm-procevent.test.sh 292297
 tests/fm-project-capacity.test.sh 66338
@@ -1795,7 +1795,7 @@ families_for_changed_path() {
       printf '%s\n' __script__:fm-procevent.test.sh
       printf '%s\n' __script__:fm-procevent-lavish.test.sh
       printf '%s\n' __script__:fm-procevent-when.test.sh
-      printf '%s\n' __script__:fm-procevent-tui-dash.test.sh
+      printf '%s\n' __script__:fm-procevent-orc-dash.test.sh
       printf '%s\n' __script__:fm-remote-reply.test.sh
       ;;
     bin/fm-timeout-lib.sh)

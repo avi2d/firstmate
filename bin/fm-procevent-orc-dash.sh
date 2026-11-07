@@ -17,9 +17,9 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 
-SOURCE_ID=tui-dash-alerts
-ADAPTER=tui-dash
-TAP_DIR="$STATE/tui-dash-alerts"
+SOURCE_ID=orc-dash-alerts
+ADAPTER=orc-dash
+TAP_DIR="$STATE/orc-dash-alerts"
 SPOOL="$TAP_DIR/spool.jsonl"
 CURSOR="$TAP_DIR/cursor"
 HEARTBEAT="$TAP_DIR/heartbeat"
@@ -31,49 +31,49 @@ STDERR_TAIL_BYTES=2048
 
 usage() {
   cat <<'USAGE'
-tui-dash alert-stream process-event adapter.
+orc-dash alert-stream process-event adapter.
 
 Usage:
-  fm-procevent-tui-dash.sh arm [-- <tui-dash command>...]
-  fm-procevent-tui-dash.sh poll -- <tui-dash command>...
-  fm-procevent-tui-dash.sh tap -- <tui-dash command>...
-  fm-procevent-tui-dash.sh classify <result-file>
-  fm-procevent-tui-dash.sh terminal <result-file>
-  fm-procevent-tui-dash.sh relisten
-  fm-procevent-tui-dash.sh verdict <sequence> <verdict>
-  fm-procevent-tui-dash.sh silent <result-file>
-  fm-procevent-tui-dash.sh source-id
-  fm-procevent-tui-dash.sh retire
+  fm-procevent-orc-dash.sh arm [-- <orc-dash command>...]
+  fm-procevent-orc-dash.sh poll -- <orc-dash command>...
+  fm-procevent-orc-dash.sh tap -- <orc-dash command>...
+  fm-procevent-orc-dash.sh classify <result-file>
+  fm-procevent-orc-dash.sh terminal <result-file>
+  fm-procevent-orc-dash.sh relisten
+  fm-procevent-orc-dash.sh verdict <sequence> <verdict>
+  fm-procevent-orc-dash.sh silent <result-file>
+  fm-procevent-orc-dash.sh source-id
+  fm-procevent-orc-dash.sh retire
 
-arm        Register source tui-dash-alerts so every alert event that
-           "<tui-dash command> alerts --json" prints becomes its own durable
-           "check: procevent tui-dash tui-dash-alerts <sequence>" wake whose
+arm        Register source orc-dash-alerts so every alert event that
+           "<orc-dash command> alerts --json" prints becomes its own durable
+           "check: procevent orc-dash orc-dash-alerts <sequence>" wake whose
            captured result is that one JSON line, byte for byte.
-           The command defaults to tui-dash; any argv after -- replaces it,
+           The command defaults to orc-dash; any argv after -- replaces it,
            for example a wrapper that runs a checkout through bun.
            The command is stored in the registration, and its first element
            must resolve when arming.
 poll       The blocking child the generic runner executes; never run it in a
            conversational turn. It keeps one detached tap of the alert stream
            alive, prints the next complete line the tap spooled past its
-           cursor, and exits. When FM_TUI_DASH_POLL_WINDOW_SECONDS (default
+           cursor, and exits. When FM_ORC_DASH_POLL_WINDOW_SECONDS (default
            300) pass with no line, it exits 75 with no output so the runner
            polls again under the same claim. When the stream command ended by
            itself and every spooled line was delivered, it prints one stopped
            document instead.
 tap        The detached stream holder poll starts; never run it directly.
-           It runs "<tui-dash command> alerts --json" in a session of its own,
+           It runs "<orc-dash command> alerts --json" in a session of its own,
            appends its stdout to the spool, and stops the stream when no poll
-           has touched the heartbeat for FM_TUI_DASH_TAP_IDLE_SECONDS (default
+           has touched the heartbeat for FM_ORC_DASH_TAP_IDLE_SECONDS (default
            1800) or the registration is gone. The stream outlives each runner,
-           so tui-dash keeps its episodes and quiet clocks between alerts.
+           so orc-dash keeps its episodes and quiet clocks between alerts.
 classify   Print quota-pace, heavy-load or long-task for an alert event,
            stopped for a stopped document, and unknown otherwise.
 terminal   Exit 0 only for a stopped document, so the generic runner retires
            the source instead of restarting a stream that keeps failing.
 relisten   Exit 0: an empty window keeps the runner polling.
 verdict    Record firstmate's one-line judgment of the captured alert event at
-           <sequence> in the tui-dash verdict record, then acknowledge the
+           <sequence> in the orc-dash verdict record, then acknowledge the
            result through "fm-procevent.sh handled". A repeat call for an
            acknowledged sequence records nothing and prints already-handled.
            A stopped or unknown result takes the generic handled instead.
@@ -86,8 +86,8 @@ silent     Judge a captured alert deterministically routine and record that
 source-id  Print the canonical source id.
 retire     Retire the registration, stop the tap, and discard its spool.
 
-Verdict record, owned by tui-dash: append-only JSON lines at
-TUI_DASH_ALERTS_VERDICTS, else ~/.local/state/tui-dash/alerts-verdicts.jsonl.
+Verdict record, owned by orc-dash: append-only JSON lines at
+ORC_DASH_ALERTS_VERDICTS, else ~/.local/state/orc-dash/alerts-verdicts.jsonl.
 Each line is {"schemaVersion":1,"event":<alert event>,"verdict":null|"<text>",
 "recordedAt":"<ISO time>"}. poll appends verdict null as each alert event
 reaches the runner, and verdict appends the judged line.
@@ -98,7 +98,7 @@ Stopped document, the captured result when the stream command ended itself:
 Durability boundary: the cursor moves once a line is written to the runner,
 so a runner killed between that write and its durable capture loses that one
 event. A stream restarted after its tap stopped, for idle or a crash, starts
-every tui-dash rule fresh.
+every orc-dash rule fresh.
 USAGE
   exit 2
 }
@@ -111,7 +111,7 @@ whole_seconds() {  # <variable-name> <value> <default>
 }
 
 verdict_file() {
-  printf '%s\n' "${TUI_DASH_ALERTS_VERDICTS:-$HOME/.local/state/tui-dash/alerts-verdicts.jsonl}"
+  printf '%s\n' "${ORC_DASH_ALERTS_VERDICTS:-$HOME/.local/state/orc-dash/alerts-verdicts.jsonl}"
 }
 
 registration_present() {
@@ -223,7 +223,7 @@ start_tap() {  # <command>...
     setsid() >= 0 or exit 1;
     POSIX::close($_) for 3 .. 1023;
     exec @ARGV or exit 127;
-  ' "$SCRIPT_DIR/fm-procevent-tui-dash.sh" tap -- "$@" </dev/null >/dev/null 2>&1 || {
+  ' "$SCRIPT_DIR/fm-procevent-orc-dash.sh" tap -- "$@" </dev/null >/dev/null 2>&1 || {
     fm_lock_release "$START_LOCK"
     return 1
   }
@@ -258,19 +258,19 @@ record_arrival() {  # <line>
 
 require_command_tail() {  # -- <command>...
   [ "${1-}" = -- ] || usage
-  [ "$#" -ge 2 ] || die "the tui-dash command needs at least one element"
+  [ "$#" -ge 2 ] || die "the orc-dash command needs at least one element"
 }
 
 cmd_arm() {
-  local -a command=(tui-dash)
+  local -a command=(orc-dash)
   if [ "$#" -gt 0 ]; then
     require_command_tail "$@"
     shift
     command=("$@")
   fi
-  command -v "${command[0]}" >/dev/null 2>&1 || die "the tui-dash command does not resolve: ${command[0]}"
+  command -v "${command[0]}" >/dev/null 2>&1 || die "the orc-dash command does not resolve: ${command[0]}"
   "$SCRIPT_DIR/fm-procevent.sh" register "$ADAPTER" "$SOURCE_ID" \
-    -- "$SCRIPT_DIR/fm-procevent-tui-dash.sh" poll -- "${command[@]}" || exit 1
+    -- "$SCRIPT_DIR/fm-procevent-orc-dash.sh" poll -- "${command[@]}" || exit 1
   printf 'armed: %s\n' "$SOURCE_ID"
   printf 'command: %s\n' "${command[*]}"
 }
@@ -279,7 +279,7 @@ cmd_poll() {
   local window deadline offset found line next reason
   require_command_tail "$@"
   shift
-  window=$(whole_seconds FM_TUI_DASH_POLL_WINDOW_SECONDS "${FM_TUI_DASH_POLL_WINDOW_SECONDS-}" 300) || exit 1
+  window=$(whole_seconds FM_ORC_DASH_POLL_WINDOW_SECONDS "${FM_ORC_DASH_POLL_WINDOW_SECONDS-}" 300) || exit 1
   prepare_tap_dir
   deadline=$((SECONDS + window))
   while :; do
@@ -305,7 +305,7 @@ cmd_poll() {
         rm -f -- "$TAP_EXIT"
         exit 0
       fi
-      start_tap "$@" || die "cannot start the tui-dash alert stream"
+      start_tap "$@" || die "cannot start the orc-dash alert stream"
       continue
     fi
     [ "$SECONDS" -lt "$deadline" ] || exit 75
@@ -317,7 +317,7 @@ cmd_tap() {
   local idle child rc=0 reason age
   require_command_tail "$@"
   shift
-  idle=$(whole_seconds FM_TUI_DASH_TAP_IDLE_SECONDS "${FM_TUI_DASH_TAP_IDLE_SECONDS-}" 1800) || exit 1
+  idle=$(whole_seconds FM_ORC_DASH_TAP_IDLE_SECONDS "${FM_ORC_DASH_TAP_IDLE_SECONDS-}" 1800) || exit 1
   prepare_tap_dir
   : > "$TAP_STDERR"
   "$@" alerts --json </dev/null >> "$SPOOL" 2>> "$TAP_STDERR" &
@@ -377,7 +377,7 @@ heavy_load_routine_text() {
   printf 'routine: heavy load on load alone, new starts already held\n'
 }
 
-# The event's own reason is not enough, because tui-dash cannot see whether
+# The event's own reason is not enough, because orc-dash cannot see whether
 # the crew is still moving: a quiet long task under the two-hour mark reads
 # as routine only when the live crew agrees.
 long_task_routine_text() {
@@ -484,7 +484,7 @@ cmd_retire() {
   [ "$#" -eq 0 ] || usage
   "$SCRIPT_DIR/fm-procevent.sh" retire "$SOURCE_ID" || exit 1
   [ -d "$TAP_DIR" ] || return 0
-  stop_tap || die "the tui-dash alert stream did not stop; its pid is in $TAP_PID"
+  stop_tap || die "the orc-dash alert stream did not stop; its pid is in $TAP_PID"
   rm -f -- "$SPOOL" "$CURSOR" "$HEARTBEAT" "$TAP_PID" "$TAP_EXIT" "$TAP_STDERR"
   printf 'stream stopped: %s\n' "$SOURCE_ID"
 }

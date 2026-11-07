@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   cat <<'EOF'
 Usage: fm-tasks-report.sh [--help]
-Print the tasks report v1 for tui-dash, one JSON object on one line.
+Print the tasks report v1 for orc-dash, one JSON object on one line.
 FM_TASKS_HOMES overrides machine discovery with a colon-separated home list.
 Each home's queued work also appears as a top-level planned array of
 (id, title, project, kind, home, queuedOn, hold, after) rows in tasks-axi

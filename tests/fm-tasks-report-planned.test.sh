@@ -17,7 +17,8 @@ unset FM_HOME
 unset FM_TASKS_HOMES
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
-TODAY=$(date -u +%F)
+# tasks-axi stamps a row's creation with the local date, not the UTC one.
+QUEUED_ON=$(date +%F)
 
 make_queue_home() {
   mkdir -p "$1/data" "$1/state"
@@ -45,13 +46,13 @@ jq -e '(. | keys | sort) == ["generatedAt","orchestrator","overhead","planned","
 jq -e '(.planned | map(keys | sort) | unique) == [["after","hold","home","id","kind","project","queuedOn","title"]]' "$OUT" >/dev/null || fail "planned row field set"
 jq -e '[.planned[].id] == ["plan-ready-1","plan-held-1","plan-load-1","plan-blocked-1"]' "$OUT" >/dev/null || fail "planned rows read ready, held, then blocked"
 
-jq -e --arg today "$TODAY" '.planned[0] == {id: "plan-ready-1", title: "Ready one", project: "checks", kind: "ship", home: "fm-home-a", queuedOn: $today, hold: null, after: []}' "$OUT" >/dev/null || fail "ready row carries queue fields with no hold and no blockers"
+jq -e --arg queued_on "$QUEUED_ON" '.planned[0] == {id: "plan-ready-1", title: "Ready one", project: "checks", kind: "ship", home: "fm-home-a", queuedOn: $queued_on, hold: null, after: []}' "$OUT" >/dev/null || fail "ready row carries queue fields with no hold and no blockers"
 
-jq -e --arg today "$TODAY" '.planned[1] == {id: "plan-held-1", title: "Held one", project: "?", kind: "scout", home: "fm-home-a", queuedOn: $today, hold: {kind: "captain", reason: "captain pick pending"}, after: []}' "$OUT" >/dev/null || fail "captain-held row carries its hold kind and reason"
+jq -e --arg queued_on "$QUEUED_ON" '.planned[1] == {id: "plan-held-1", title: "Held one", project: "?", kind: "scout", home: "fm-home-a", queuedOn: $queued_on, hold: {kind: "captain", reason: "captain pick pending"}, after: []}' "$OUT" >/dev/null || fail "captain-held row carries its hold kind and reason"
 
 jq -e '.planned[2].hold == {kind: "unstated", reason: "runner is full"}' "$OUT" >/dev/null || fail "a non-dashboard hold kind reads as unstated"
 
-jq -e --arg today "$TODAY" '.planned[3] == {id: "plan-blocked-1", title: "Blocked one", project: "?", kind: "ship", home: "fm-home-a", queuedOn: $today, hold: null, after: ["plan-ready-1"]}' "$OUT" >/dev/null || fail "blocked row carries its blocker ids with no hold"
+jq -e --arg queued_on "$QUEUED_ON" '.planned[3] == {id: "plan-blocked-1", title: "Blocked one", project: "?", kind: "ship", home: "fm-home-a", queuedOn: $queued_on, hold: null, after: ["plan-ready-1"]}' "$OUT" >/dev/null || fail "blocked row carries its blocker ids with no hold"
 
 EMPTY_OUT="$TMP_ROOT/empty.json"
 FM_TASKS_HOMES="$HOME_B" bash "$REPORT" >"$EMPTY_OUT" 2>"$TMP_ROOT/empty-stderr.log" || { cat "$TMP_ROOT/empty-stderr.log"; fail "empty report exits non-zero"; }
