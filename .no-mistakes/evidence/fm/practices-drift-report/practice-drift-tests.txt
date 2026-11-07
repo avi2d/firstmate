@@ -1,0 +1,18 @@
+1..16
+ok - a repository current on every practice is silent
+ok - the first sweep names every drifted practice on one line per repository
+ok - unchanged findings stay silent, a fix is reported as cleared
+ok - one sweep a day, at the first check after 15:00 UTC
+ok - an unreadable read prints every sweep and keeps the recorded findings
+ok - an unread kit release leaves the pin and ci-wiring unreadable, not clean
+ok - an issue prints when seen and once more after 7 days with no backlog row
+ok - a young release pull request stays silent until a week old
+ok - a bot issue with another label stays silent
+ok - an unreadable backlog is printed as unreadable, not as an untracked issue
+ok - a kit clone whose origin is not on GitHub is unreadable
+ok - the kit repository is held to its own night step
+ok - many findings stay one capped line
+ok - a missing configuration is reported on one line
+ok - help names every action and an unknown action is a usage error
+ok - arm writes and binds the shim, disarm removes it
+FM_TEST_COMPLETE

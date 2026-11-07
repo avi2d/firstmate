@@ -1,0 +1,6 @@
+Live fix probes against bin/fm-practice-drift-check.sh with disposable FM_HOME worlds and fake gh-axi/git/bun (synthetic fixtures):
+A prefix-overmatch: sweep1 recorded issue-1+issue-15 open 12 days with no backlog row; sweep2 with backlog unreadable and issue-15 closed printed exactly: practice drift: tool: issue-15 closed (issue-1 kept silently, not overmatched). PASS
+B merge-null: repos JSON with allow_merge_commit/rebase null printed: practice drift: app: merge-methods unreadable: the GitHub read omitted merge settings. PASS
+C bad-manifest: recorded ci-wiring finding then broke tree package.json to '{broken json'; next sweep printed only: practice drift: web: package.json unreadable at main (no 'ci-wiring cleared', kept silently). PASS
+D last-comment: issue comments=150 with fixture only at comments?per_page=1&page=150 (newest 2026-10-31 run 9999); gh.log showed request issues/9/comments?per_page=1&page=150 and line printed 'last comment 2026-10-31 by run 9999'. PASS
+E org-variable: repo CI_RUNS_ON 404 + org-vars [CI_RUNS_ON] -> silent (no runs-on); org-vars [] -> 'runs-on: private and sets no CI_RUNS_ON variable'; org-vars read fail -> 'runs-on unreadable: the GitHub read failed'. PASS
