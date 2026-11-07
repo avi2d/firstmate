@@ -77,7 +77,7 @@ Output (stdout, TOON-style block):
     fallback: <runner-up rule taken when the picked rule missed its own floor>
     reason: <why the status is not clear>
     preferred_provider: <family and preference or fallback decision, when applied>
-    candidate: <harness>:<model> [account=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. -> eligible | eligible, unranked|uncertain: <reason> | not eligible: <reason>
+    candidate: <harness>:<model> [account=..] provider=.. scope=.. remaining=..% spendPriority=.. runway=.. [floor=skipped (..resets at <time>)] -> eligible | eligible, unranked|uncertain: <reason> | not eligible: <reason>
     profile: --harness <h> [--model <m>] [--effort <e>] [--claude-account <a>]     (status clear only)
   clear     -> pass the profile line to fm-spawn.sh unless you state a reason to override
   ambiguous -> confidence below the floor; decide as today from the probabilities
@@ -497,8 +497,8 @@ fi
   # kept only when both token counts are numeric.
   if [ "$DISPATCH_PROVIDER" = openai ]; then
     jq -e '
+      ([.answers[]? | select(type == "object" and .name == "rule")]) as $rule |
       (.answers | type) == "array" and
-      ([.answers[] | select(type == "object" and .name == "rule")]) as $rule |
       ($rule | length) == 1 and $rule[0].type == "choice" and
       ($rule[0].probabilities | type) == "array" and
       all($rule[0].probabilities[]; type == "object" and (.value | type) == "string") and
@@ -598,8 +598,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
     else
       (quota_applicable_rows($row; ($c.model // ""))) as $rows |
       (evidence($rows)) as $bounds |
-      (quota_floor_state($c.floor; $row)) as $profile_floor_state |
-      if (quota_runway_exhausted_rows($rows) | length) > 0 then
+      (quota_profile_floor_state($c.floor; $row)) as $profile_floor_state |
+      (if (quota_runway_exhausted_rows($rows) | length) > 0 then
         (quota_runway_exhausted_rows($rows) | first) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: ($bad.effectivePercentRemaining // null), runway: $bad.runway.status, eligible: false, reason: "runway exhausted_now at \($bad.scope)"}
       elif any($rows[]; .status == "known" and (.effectivePercentRemaining | type) == "number" and .effectivePercentRemaining <= 0) then
@@ -634,7 +634,11 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         ($rows | min_by(.selection.spendPriority)) as $limiting |
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining,
          spendPriority: $limiting.selection.spendPriority, runway: $limiting.runway.status, eligible: true, reason: "ok"}
-      end
+      end)
+      | if $profile_floor_state == "skipped" and .eligible then
+          (quota_floor_reset($c.floor; $row)) as $reset |
+          . + {floor_skipped: "profile floor \($c.floor.scope) below \($c.floor.min_percent)% skipped: window \($reset.windows | join(",")) resets at \($reset.resetsAt)"}
+        else . end
     end;
   # No schema field carries the Haiku promotion, and a second Haiku entry is
   # refused as a duplicate profile, so the resolver reorders in code.
@@ -784,6 +788,7 @@ TEXT=$(jq -r '
       + (if .profile.claude_account then "  account=\(.profile.claude_account | flat)" else "" end)
       + (if .provider then "  provider=\(.provider | flat)" else "" end)
       + (if .scope then "  scope=\(.scope | flat)  remaining=\(show(.pct))%  spendPriority=\(show(.spendPriority))  runway=\(show(.runway))" else "" end)
+      + (if .floor_skipped then "  floor=skipped (\(.floor_skipped | flat))" else "" end)
       + (if (.bounds // [] | length) > 1 then "  bounds=" + ([.bounds[] | "\(.scope | flat):\(show(.pct))%/\((.runway // .status) | flat)"] | join(",")) else "" end)
       + "  -> " + (if .unranked then "eligible, \(if $ordered then "uncertain" else "unranked" end): \(.reason | flat): disclosed uncertainty" elif .sq then "eligible (quota ranking off: home declares a single shared quota)" elif .eligible then "eligible" else "not eligible: \(.reason | flat)" end)),
   (if .chosen then "  profile: --harness \(.chosen.profile.harness | shell_arg)"

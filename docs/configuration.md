@@ -1686,6 +1686,7 @@ A Claude worker on a mapped directory reads that directory's settings, memory, a
 
 - `all_models` remaining is 100 minus the larger of the 5-hour and 7-day utilization, and a per-model weekly window such as `7d fable` adds `model:fable`.
 - A profile `floor`, such as `{ "scope": "all_models", "min_percent": 30 }`, makes the account ineligible below 30% remaining, and 0% remaining is exhausted.
+  clauth reports no reset time, so an account floor never skips near a reset.
 - An account is ineligible, with the reason on its candidate line, when clauth is missing or fails, has no such profile, reports its sign-in or usage reading as failed, or reports the reading stale; when `config/claude-accounts` does not map it; or when an `ordinary` account is not the active profile.
   An unverifiable account is never treated as available.
 - clauth projects no `spendPriority`, so under `spendPriority` ranking an account candidate stays eligible but unranked; order accounts with `"array_order": "preference"`.
@@ -1938,6 +1939,7 @@ Firstmate resolves the rule's profile object or array under `AGENTS.md` section 
 - An explicit per-task captain override stays possible with the stated reason recorded on an `override` line in that same selection record.
 - A stated override keeps the full candidate accounting and waives only the requirement that the chosen profile is one of those candidates.
 - The same spawn, and any relaunch, checks quota against every profile whose harness, model, and effort match the launch, and refuses one exhausted now or below a profile `floor` unless `--quota-override-reason` states why.
+  A floor skipped near its window's reset under "Profile quota floors" below needs no override, prints the skip, and records it as `quota_gate=checked:<skip>`.
 - A profile without `claude_account` also matches a launch that passes `--claude-account`, and is checked against that account's clauth reading.
 - A launch that matches no profile prints a warning naming the launch and records `quota_gate=skipped:no matching dispatch profile` instead of refusing, because a stated captain override may choose a profile outside the rules.
   Firstmate reports that warning to the captain.
@@ -2048,6 +2050,11 @@ This single-provider table is separate from the frozen legacy mapping used by `f
 
 - A profile `floor` contains only `scope` and `min_percent`, always uses that profile's provider and matched account, and makes that one candidate ineligible below `min_percent` on the named scope.
 - An absent or unknown named row also makes the candidate unrankable and is reported as an unverifiable floor, not as a known shortfall.
+- A known shortfall skips the floor instead when every window holding the scope below `min_percent` reports a reset time within the next 24 hours.
+  A reserve kept for later work in a window that refills before the task ends serves no one.
+  The candidate line then shows `floor=skipped` with the window and its reset time.
+- A floor never skips itself for a window at 0% remaining, a window reporting `exhausted_now`, a reset time that is absent, unparseable, or already past, or a reset more than 24 hours away.
+- Rule floors do not skip, so a rule floor below `min_percent` still falls through to `default`.
 
 **Model, effort, and fallback behavior**
 
@@ -2194,7 +2201,7 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 
 **Candidate eligibility and evidence**
 
-- Any applicable `exhausted_now` row or known zero bound makes that candidate ineligible, and a known profile-floor shortfall does the same before unrelated quota uncertainty is considered.
+- Any applicable `exhausted_now` row or known zero bound makes that candidate ineligible, and a known profile-floor shortfall not skipped near its reset does the same before unrelated quota uncertainty is considered.
 - Missing or nonnumeric `spendPriority` evidence is never ranked, and every candidate is printed beside its evidence or the reason it was not rankable, including on ambiguous and approval-gated outcomes that emit no profile.
 - Under preference order, the first eligible candidate is chosen even when its quota is unknown, with that uncertainty printed as a note.
   An unverifiable profile floor on it escalates instead, because the floor can be proven neither met nor missed.
