@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Strict no-emit production-consumer checks against public Pi 1.1.0 and 1.2.0,
-# plus the read guard's real SDK event/abort regression on Linux.
-# Owns temporary npm dependencies and TypeScript 5.9.3; never uses global tsc
-# or FM_PI_PACKAGE_DIR. Compiler-owning lint/CI phases run this check.
-# FM_PI_TYPES_ARTIFACT_DIR optionally retains the verified temporary lockfiles.
+# Typechecks the tracked Pi extensions against public Pi 1.1.0, 1.2.0 and 1.5.0.
+# FM_PI_TYPES_ARTIFACT_DIR, when set, receives each version's verified lockfile.
 set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,7 +17,7 @@ trap 'rm -rf "$DEPENDENCY_ROOT"' EXIT
 
 printf 'Pi production-consumer typechecks: npm %s\n' "$(npm --version)"
 result=0
-for version in 1.1.0 1.2.0; do
+for version in 1.1.0 1.2.0 1.5.0; do
 TMP_ROOT="$DEPENDENCY_ROOT/sdk-$version"
 mkdir -p "$TMP_ROOT/lib"
 cp "$ROOT/.pi/extensions/fm-branch-supervision.ts" "$TMP_ROOT/fm-branch-supervision.ts"

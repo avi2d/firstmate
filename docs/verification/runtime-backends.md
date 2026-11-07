@@ -3569,10 +3569,10 @@ On 2.0.22 the brief is submitted on its own, yet the composer still reads pendin
 
 ## Pi repeated-read containment
 
-Verified on 2026-10-27 UTC on Linux x86_64 with Node 24.22.1 and npm 11.19.1.
+Verified on 2026-11-08 UTC on Linux x86_64 with Node 24.22.1 and npm 11.19.1.
 The operator contract, opt-in default and migration procedure are owned by [configuration](../configuration.md#pi-repeated-read-containment).
-The supported SDK matrix is Pi 1.1.0 and 1.2.0, with each release's sibling packages pinned to the same version rather than resolving newer 1.x packages through public dependency ranges.
-TypeScript 5.9.3 checked all tracked Pi consumers with strict no-emit settings for both versions.
+The supported SDK matrix is Pi 1.1.0, 1.2.0 and 1.5.0, with each release's sibling packages pinned to the same version rather than resolving newer 1.x packages through public dependency ranges.
+TypeScript 5.9.3 checked all tracked Pi consumers with strict no-emit settings for every version.
 The real SDK fixture uses synthetic provider responses, intercepted fetches and fake Bash operations; it never sends a request to an inference endpoint.
 
 ```sh
@@ -3581,6 +3581,8 @@ ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.1.0
 ok - read guard real SDK events/abort against Pi 1.1.0
 ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.2.0
 ok - read guard real SDK events/abort against Pi 1.2.0
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.5.0
+ok - read guard real SDK events/abort against Pi 1.5.0
 ```
 
 Each SDK passed alternating synthetic 85/65-pair histories, SSH-shaped reads, `cut`, outer groups, multiline `nl`/`wc`/`head`/`tail`/`od` pipelines, escaped-newline continuations, duplicate batches and truncated results with compaction.
