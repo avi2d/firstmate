@@ -359,9 +359,14 @@ read_org_pages() {
       rm -f -- "$out/org-vars.json" "$out"/org-vars-p*.json "$out"/org-vars-p*.err
       return 0
     fi
-    jq -s '{total: (map(.total) | max), names: (map(.names) | add)}' "$out/org-vars.json" "$out/org-vars-p$page.json" > "$out/org-vars.merged" \
-      && mv "$out/org-vars.merged" "$out/org-vars.json" \
-      || { printf 'failed\n' > "$out/org-vars.err"; rm -f -- "$out/org-vars.json"; return 0; }
+    if jq -s '{total: (map(.total) | max), names: (map(.names) | add)}' "$out/org-vars.json" "$out/org-vars-p$page.json" > "$out/org-vars.merged" \
+      && mv "$out/org-vars.merged" "$out/org-vars.json"; then
+      :
+    else
+      printf 'failed\n' > "$out/org-vars.err"
+      rm -f -- "$out/org-vars.json"
+      return 0
+    fi
     rm -f -- "$out/org-vars-p$page.json" "$out/org-vars-p$page.err"
     page=$((page + 1))
   done
