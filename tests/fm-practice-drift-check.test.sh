@@ -13,7 +13,6 @@ KIT='@example/checks'
 
 fm_git_identity fmtest fmtest@example.invalid
 
-# Fakes answer from fixtures under the world.
 make_world() {
   local world="$TMP_ROOT/$1" fakebin
   mkdir -p "$world/home/state" "$world/home/config" "$world/home/projects" "$world/home/data" \
@@ -437,6 +436,10 @@ test_org_repo_with_unread_org_vars_is_unreadable_not_missing() {
   gh_fixture "$world" "repos/example/app/actions/organization-variables?per_page=30" '{"total_count":1,"variables":[{"name":"CI_RUNS_ON"}]}'
   out=$(run_check "$world" "$((NOV_1_2026_1600 + DAY))")
   assert_not_contains "$out" "runs-on" "an org variable present past the default page was reported as missing"
+  gh_fixture "$world" "repos/example/app/actions/organization-variables?per_page=30" '{"total_count":31,"variables":[{"name":"OTHER"}]}'
+  gh_fixture "$world" "repos/example/app/actions/organization-variables?per_page=30&page=2" '{"total_count":31,"variables":[{"name":"CI_RUNS_ON"}]}'
+  out=$(run_check "$world" "$((NOV_1_2026_1600 + 2 * DAY))")
+  assert_not_contains "$out" "runs-on" "an org variable on the second page was reported as missing"
   pass "an org repository with unread org variables stays unreadable, not missing"
 }
 

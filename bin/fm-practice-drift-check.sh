@@ -329,7 +329,7 @@ read_repo() {
   read_issues "$out" "$slug" &
   if [ "$kit" -eq 1 ]; then
     gh_read "$out/repo" "repos/$slug" \
-      '{private, owner: (.owner.type // empty), merge: .allow_merge_commit, rebase: .allow_rebase_merge}' &
+      '{private, owner: .owner.type, merge: .allow_merge_commit, rebase: .allow_rebase_merge}' &
     gh_read "$out/runs-on" "repos/$slug/actions/variables/CI_RUNS_ON" '.value' &
     gh_read "$out/org-vars" "repos/$slug/actions/organization-variables?per_page=30" '{total: .total_count, names: [.variables[]?.name]}' &
     gh_read "$out/pulls" "repos/$slug/pulls?state=open&per_page=100" \
@@ -339,6 +339,31 @@ read_repo() {
     fi
   fi
   wait
+  read_org_pages "$out" "$slug"
+}
+
+read_org_pages() {
+  local out=$1 slug=$2 total pages page
+  [ -f "$out/org-vars.json" ] || return 0
+  [ "$(jq -r '.owner // empty' "$out/repo.json" 2>/dev/null)" = "Organization" ] || return 0
+  total=$(jq -r '.total' "$out/org-vars.json")
+  case "$total" in ''|*[!0-9]*) return 0 ;; esac
+  pages=$(( (total + 29) / 30 ))
+  page=2
+  while [ "$page" -le "$pages" ]; do
+    gh_read "$out/org-vars-p$page" "repos/$slug/actions/organization-variables?per_page=30&page=$page" '{total: .total_count, names: [.variables[]?.name]}'
+    if [ -n "$(read_error "$out/org-vars-p$page")" ]; then
+      printf 'failed\n' > "$out/org-vars.err"
+      rm -f -- "$out/org-vars.json" "$out"/org-vars-p*.json "$out"/org-vars-p*.err
+      return 0
+    fi
+    jq -s '{total: (map(.total) | max), names: (map(.names) | add)}' "$out/org-vars.json" "$out/org-vars-p$page.json" > "$out/org-vars.merged" \
+      && mv "$out/org-vars.merged" "$out/org-vars.json" \
+      || { printf 'failed\n' > "$out/org-vars.err"; rm -f -- "$out/org-vars.json"; return 0; }
+    rm -f -- "$out/org-vars-p$page.json" "$out/org-vars-p$page.err"
+    page=$((page + 1))
+  done
+  rm -f -- "$out"/org-vars-p*.json "$out"/org-vars-p*.err
 }
 
 read_kit() {
@@ -494,9 +519,7 @@ judge_settings() {
       org_err=$(read_error "$out/org-vars")
       case "$org_err" in
         '')
-          if jq -e 'select(type == "object" and (.total | type) == "number") | select(.total > ((.names // []) | length))' "$out/org-vars.json" >/dev/null 2>&1; then
-            unread "$label" runs-on "runs-on unreadable: the GitHub read failed"
-          elif jq -e '(.names // .) | any(. == "CI_RUNS_ON")' "$out/org-vars.json" >/dev/null 2>&1; then
+          if jq -e '.names | any(. == "CI_RUNS_ON")' "$out/org-vars.json" >/dev/null 2>&1; then
             :
           else
             finding "$label" runs-on missing "runs-on: private and sets no CI_RUNS_ON variable"
