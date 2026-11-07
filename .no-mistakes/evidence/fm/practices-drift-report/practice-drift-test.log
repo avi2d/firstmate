@@ -1,0 +1,25 @@
+FM_TEST_BEGIN 2026-11-07T10:11:01Z tests/fm-practice-drift-check.test.sh family=unclassified expected_gate_skip=none
+1..18
+ok - a repository current on every practice is silent
+ok - the first sweep names every drifted practice on one line per repository
+ok - unchanged findings stay silent, a fix is reported as cleared
+ok - one sweep a day, at the first check after 15:00 UTC
+ok - an unreadable read prints every sweep and keeps the recorded findings
+ok - an unread kit release leaves the pin and ci-wiring unreadable, not clean
+ok - an issue prints when seen and once more after 7 days with no backlog row
+ok - a young release pull request stays silent until a week old
+ok - a bot issue with another label stays silent
+ok - a user-owned private repository without a variable reports missing
+ok - an org repository with unread org variables stays unreadable, not missing
+ok - an unreadable backlog is printed as unreadable, not as an untracked issue
+ok - a kit clone whose origin is not on GitHub is unreadable
+ok - a retired gate is reported by what it runs and cleared when removed
+ok - many findings stay one capped line
+ok - a missing configuration is reported on one line
+ok - help names every action and an unknown action is a usage error
+ok - arm writes and binds the shim, disarm removes it
+FM_TEST_COMPLETE
+FM_TEST_END 2026-11-07T10:11:20Z tests/fm-practice-drift-check.test.sh exit=0 duration_ms=19945 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=20027
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=19945 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-practice-drift-check.test.sh duration_ms=19945
