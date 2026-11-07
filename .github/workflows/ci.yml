@@ -29,7 +29,7 @@ concurrency:
 # with no restore-keys fallback, so a bump installs fresh instead of reusing a stale tree.
 env:
   FM_CI_TASKS_AXI_VERSION: '0.2.6'
-  FM_CI_PI_VERSION: '1.3.0'
+  FM_CI_PI_VERSION: '1.5.0'
   # checks-secrets pins: the @avi2dg/checks package and the Bun version its
   # .bun-version pins. CONTRIBUTING.md's local secrets scan names these too.
   FM_CI_CHECKS_VERSION: '0.57.0'
@@ -282,7 +282,7 @@ jobs:
             npm install -g "tasks-axi@${FM_CI_TASKS_AXI_VERSION}"
           fi
           tasks-axi --version
-# Runtime-facing Pi extension probes need the installed public package
+      # Runtime-facing Pi extension probes need the installed public package
       # to avoid capability skips. It is a public npm package and needs no
       # credential, so CI can hold the real thing. tests/fm-pi-primary-types.test.sh
       # owns its separate compiler dependencies.
