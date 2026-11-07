@@ -343,7 +343,7 @@ read_repo() {
 }
 
 read_org_pages() {
-  local out=$1 slug=$2 total pages page
+  local out=$1 slug=$2 total pages page err
   [ -f "$out/org-vars.json" ] || return 0
   [ "$(jq -r '.owner // empty' "$out/repo.json" 2>/dev/null)" = "Organization" ] || return 0
   total=$(jq -r '.total' "$out/org-vars.json")
@@ -352,8 +352,10 @@ read_org_pages() {
   page=2
   while [ "$page" -le "$pages" ]; do
     gh_read "$out/org-vars-p$page" "repos/$slug/actions/organization-variables?per_page=30&page=$page" '{total: .total_count, names: [.variables[]?.name]}'
-    if [ -n "$(read_error "$out/org-vars-p$page")" ]; then
-      printf 'failed\n' > "$out/org-vars.err"
+    err=$(read_error "$out/org-vars-p$page")
+    if [ -n "$err" ]; then
+      [ "$err" = timeout ] || err=failed
+      printf '%s\n' "$err" > "$out/org-vars.err"
       rm -f -- "$out/org-vars.json" "$out"/org-vars-p*.json "$out"/org-vars-p*.err
       return 0
     fi

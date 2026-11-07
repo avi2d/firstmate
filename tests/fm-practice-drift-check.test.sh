@@ -124,7 +124,6 @@ kit_release() {
   gh_fixture "$world" "repos/example/checks/releases/latest" "{\"tag_name\":\"$tag\"}"
 }
 
-# A kit user that is current on every practice.
 add_tidy_project() {
   local world=$1 name=$2
   add_project "$world" "$name" "{\"name\":\"$name\",\"author\":\"Example Maintainer <maintainer@example.com>\",\"devDependencies\":{\"$KIT\":\"^0.69.0\"}}"
