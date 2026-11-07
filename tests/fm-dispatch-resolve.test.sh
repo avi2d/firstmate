@@ -416,6 +416,56 @@ done
 cp "$BASE_RULES" "$RULES"
 reset_log
 
+# --- profile floor near its window's reset ------------------------------------
+test_floor_near_reset() (
+  local scenario=$1 pct=31 reset_json reset_iso offset
+  case "$scenario" in
+    skips-not-refuses-reset-in-2h|refuses-not-skips-exhausted-reset-in-2h) offset=7200 ;;
+    refuses-not-skips-reset-in-3d) offset=259200 ;;
+    refuses-not-skips-unknown-reset) offset='' ;;
+  esac
+  [ "$scenario" != refuses-not-skips-exhausted-reset-in-2h ] || pct=0
+  if [ -n "$offset" ]; then
+    reset_iso=$(jq -nr --argjson offset "$offset" 'now + $offset | floor | todateiso8601')
+    reset_json="\"$reset_iso\""
+  else
+    reset_json=null
+  fi
+  write_response "$RESPONSE" rule_4 0.9
+  jq '.rules[3].use = [
+    {harness:"codex",model:"gpt-5.6-sol",floor:{scope:"all_models",min_percent:50}},
+    {harness:"claude",model:"sonnet"}]' "$BASE_RULES" > "$RULES"
+  jq --argjson pct "$pct" --argjson reset "$reset_json" '(.providers[] | select(.provider == "codex")) |=
+    (.windows = [{id:"weekly",percentRemaining:$pct,resetsAt:$reset},{id:"five_hour",percentRemaining:100,resetsAt:$reset}] |
+     .quotaSemantics.effectiveAvailability[0] |= (.effectivePercentRemaining = $pct | .boundedBy = ["five_hour","weekly"] |
+       .limitingWindowIds = ["weekly"] | .selection.spendPriority = 0.9))' "$QUOTA" > "$TMP_ROOT/near-reset-quota.json"
+  reset_log
+  QUOTA_AXI_FIXTURE="$TMP_ROOT/near-reset-quota.json" run code out err "$BRIEF"
+  expect_code 0 "$code" "$scenario resolves"
+  assert_contains "$out" '  status: clear' "$scenario is clear"
+  case "$scenario" in
+    skips-not-refuses-reset-in-2h)
+      assert_contains "$out" "  profile: --harness 'codex' --model 'gpt-5.6-sol'" "a floor whose window resets within a day stops refusing the candidate"
+      assert_contains "$out" "floor=skipped (profile floor all_models below 50% skipped: window weekly resets at $reset_iso)" "the candidate line names the skipped floor and the reset" ;;
+    refuses-not-skips-reset-in-3d|refuses-not-skips-unknown-reset)
+      assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "$scenario keeps the floor refusing the candidate"
+      assert_contains "$out" 'not eligible: profile floor all_models below 50%' "$scenario names the floor shortfall"
+      assert_not_contains "$out" 'floor=skipped' "$scenario never skips the floor" ;;
+    refuses-not-skips-exhausted-reset-in-2h)
+      assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet'" "an exhausted window stays refused even when it resets soon"
+      assert_contains "$out" 'not eligible: 0% remaining at all_models' "the exhausted candidate names its zero bound"
+      assert_not_contains "$out" 'floor=skipped' "an exhausted window never skips its floor" ;;
+  esac
+  pass "profile floor near reset: $scenario"
+)
+near_reset_failures=0
+for scenario in skips-not-refuses-reset-in-2h refuses-not-skips-reset-in-3d refuses-not-skips-exhausted-reset-in-2h refuses-not-skips-unknown-reset; do
+  test_floor_near_reset "$scenario" || near_reset_failures=$((near_reset_failures + 1))
+done
+[ "$near_reset_failures" -eq 0 ] || fail "$near_reset_failures near-reset floor cases failed"
+cp "$BASE_RULES" "$RULES"
+reset_log
+
 # --- absent key: off, silent on stdout, no network, no quota read -----------
 reset_log
 write_response "$RESPONSE" rule_4 0.9
