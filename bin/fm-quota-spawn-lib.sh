@@ -18,7 +18,7 @@ fm_quota_spawn_assess() {
     . as $row |
     (quota_applicable_rows($row; $model)) as $rows |
     (quota_runway_exhausted_rows($rows)) as $exhausted |
-    (quota_floor_state($floor; $row)) as $floor_state |
+    (quota_profile_floor_state($floor; $row)) as $floor_state |
     ([quota_rows($row)[] | select(.scope == $floor.scope)] | first) as $floor_row |
     (if ($exhausted | length) > 0 then
        {blocked: true, reason: "quota exhausted now at \($exhausted[0].scope)", scope: $exhausted[0].scope}
@@ -27,6 +27,9 @@ fm_quota_spawn_assess() {
        {blocked: true, reason: "quota exhausted now at \($bad.scope)", scope: $bad.scope}
      elif $floor_state == "below" then
        {blocked: true, reason: "quota at \($floor.scope) below \($floor.min_percent)%", scope: $floor.scope, remaining: $floor_row.effectivePercentRemaining}
+     elif $floor_state == "skipped" then
+       (quota_floor_reset($floor; $row)) as $reset |
+       {blocked: false, floor_state: $floor_state, floor_skipped: "profile floor \($floor.scope) below \($floor.min_percent)% skipped: window \($reset.windows | join(",")) resets at \($reset.resetsAt)"}
      else {blocked: false, floor_state: $floor_state} end) as $decision |
     ([quota_rows($row)[] | select(.scope == $decision.scope)] | first) as $blocking |
     (if ($blocking.runway.limitingWindowId // null) != null then [$blocking.runway.limitingWindowId] else ($blocking.limitingWindowIds // []) end) as $window_ids |
@@ -41,7 +44,7 @@ fm_quota_spawn_gate_note() {
 }
 fm_quota_spawn_gate() {
   local config=$1 harness=$2 model=$3 effort=$4 account=$5 override=$6
-  local profiles count snapshot='' profile provider lane floor row assessment blocked=0 unmeasured=0 result reason reset clauth_snapshot=''
+  local profiles count snapshot='' profile provider lane floor row assessment blocked=0 unmeasured=0 result reason reset clauth_snapshot='' floor_note='' skipped=''
   FM_QUOTA_GATE_NOTE=
   if [ ! -e "$config" ] && [ ! -L "$config" ]; then
     FM_QUOTA_GATE_NOTE='skipped:no dispatch profile file'
@@ -126,6 +129,11 @@ fm_quota_spawn_gate() {
       return 2
     }
     [ "$(jq -r '.unmeasured' <<< "$assessment")" != true ] || unmeasured=1
+    floor_note=$(jq -r '.floor_skipped // empty' <<< "$assessment")
+    if [ -n "$floor_note" ] && [ "$floor_note" != "$skipped" ]; then
+      skipped=$floor_note
+      printf 'quota gate: %s\n' "$floor_note" >&2
+    fi
     if [ "$(jq -r '.blocked' <<< "$assessment")" = true ]; then
       blocked=1
       reason=$(jq -r '.reason' <<< "$assessment")
@@ -146,6 +154,8 @@ fm_quota_spawn_gate() {
   fi
   if [ "$unmeasured" = 1 ]; then
     FM_QUOTA_GATE_NOTE='checked:unmeasured'
+  elif [ -n "$skipped" ]; then
+    FM_QUOTA_GATE_NOTE="checked:$skipped"
   else
     FM_QUOTA_GATE_NOTE='checked:available'
   fi

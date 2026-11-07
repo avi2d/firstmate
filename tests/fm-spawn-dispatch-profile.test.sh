@@ -310,6 +310,48 @@ test_quota_gate_refuses_profile_below_floor_with_reset() {
   pass "quota gate refuses a matched profile below its floor and names the reset"
 }
 
+spawn_floor_reset_case() {
+  local name=$1 remaining=$2 offset=$3 reset_json
+  if [ -n "$offset" ]; then
+    FLOOR_RESET_ISO=$(jq -nr --argjson offset "$offset" 'now + $offset | floor | todateiso8601')
+    reset_json="\"$FLOOR_RESET_ISO\""
+  else
+    FLOOR_RESET_ISO=''
+    reset_json=null
+  fi
+  FLOOR_RESET_ID="quota-$name-z11"
+  read_case_record "$(make_spawn_case "quota-$name" codex "$FLOOR_RESET_ID")"
+  printf '%s\n' '{"default":{"harness":"codex","model":"gpt-5","floor":{"scope":"all_models","min_percent":20}}}' > "$HOME_DIR/config/crew-dispatch.json"
+  make_quota_axi_fixture
+  FLOOR_RESET_OUT=$(FM_FAKE_QUOTA_REMAINING=$remaining FM_FAKE_QUOTA_WEEKLY_RESET_JSON=$reset_json run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$FLOOR_RESET_ID" "$PROJ_DIR" --harness codex --model gpt-5)
+  FLOOR_RESET_STATUS=$?
+}
+
+test_quota_gate_skips_floor_instead_of_refusing_when_window_resets_within_a_day() {
+  spawn_floor_reset_case floor-near-reset 10 7200
+  expect_code 0 "$FLOOR_RESET_STATUS" "a floor whose window resets within a day should not refuse without an override: $FLOOR_RESET_OUT"
+  assert_contains "$FLOOR_RESET_OUT" "profile floor all_models below 20% skipped: window weekly resets at $FLOOR_RESET_ISO" "the skipped floor names its window and reset"
+  assert_grep "quota_gate=checked:profile floor all_models below 20% skipped: window weekly resets at $FLOOR_RESET_ISO" "$HOME_DIR/state/$FLOOR_RESET_ID.meta" "the skip is recorded on the task"
+  pass "quota gate skips a profile floor whose window resets within a day"
+}
+
+test_quota_gate_keeps_refusing_instead_of_skipping_far_exhausted_or_unknown_resets() {
+  spawn_floor_reset_case floor-far-reset 10 259200
+  [ "$FLOOR_RESET_STATUS" -ne 0 ] || fail "a floor whose window resets in three days should still refuse: $FLOOR_RESET_OUT"
+  assert_contains "$FLOOR_RESET_OUT" 'below 20%' "the far reset refusal names the floor"
+  assert_not_contains "$FLOOR_RESET_OUT" 'skipped' "a far reset never skips the floor"
+
+  spawn_floor_reset_case floor-exhausted-near-reset 0 7200
+  [ "$FLOOR_RESET_STATUS" -ne 0 ] || fail "a window at 0% should refuse even when it resets soon: $FLOOR_RESET_OUT"
+  assert_contains "$FLOOR_RESET_OUT" 'quota exhausted now' "the 0% refusal names exhaustion"
+
+  spawn_floor_reset_case floor-unknown-reset 10 ''
+  [ "$FLOOR_RESET_STATUS" -ne 0 ] || fail "a floor whose reset is unknown should still refuse: $FLOOR_RESET_OUT"
+  assert_contains "$FLOOR_RESET_OUT" 'below 20%' "the unknown reset refusal names the floor"
+  assert_not_contains "$FLOOR_RESET_OUT" 'skipped' "an unknown reset never skips the floor"
+  pass "quota gate keeps refusing a floor whose reset is far, exhausted, or unknown"
+}
+
 test_quota_gate_uses_strictest_matching_floor() {
   local rec id out status
   id=quota-strict-floor-z2
@@ -3038,6 +3080,8 @@ test_worker_launch_delivers_role_scope
 test_no_profile_keeps_claude_profile_defaults
 test_quota_gate_refuses_profile_below_floor_with_reset
 test_quota_gate_uses_strictest_matching_floor
+test_quota_gate_skips_floor_instead_of_refusing_when_window_resets_within_a_day
+test_quota_gate_keeps_refusing_instead_of_skipping_far_exhausted_or_unknown_resets
 test_quota_gate_refuses_exhausted_now
 test_quota_gate_uses_the_named_clauth_account
 test_quota_gate_does_not_skip_an_accountless_profile_launched_on_an_account
