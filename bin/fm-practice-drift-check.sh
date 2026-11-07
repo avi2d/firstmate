@@ -19,7 +19,6 @@ RECORD_SCHEMA=fm-practice-drift-v1
 MAX_LINE=1000
 DAY_SECS=86400
 ISSUE_OVERDUE_SECS=$((7 * DAY_SECS))
-NIGHT_STEP_KIT=0.57.0
 RUN_HISTORY=10
 JUDGE_RESERVE_SECS=3
 BOT_LOGIN='github-actions[bot]'
@@ -48,7 +47,7 @@ cloned at its default branch into a temporary directory and read for the rest.
 
 Practice keys, recorded as <repository>:<key>:
   kit-pin          the kit pin is older than the kit's newest GitHub release
-  night-gates      the kit is 0.57.0 or newer, or is the kit itself, and no workflow runs checks-lint --night
+  retired-workflow a workflow under .github/workflows is the retired night-run workflow or runs checks-lint --night
   author           package.json names no author and no contributors
   ci-wiring        checks-ci-wiring from the newest kit release fails, with its summary
   merge-methods    the repository allows merge commits or rebase merges
@@ -553,7 +552,7 @@ judge_tree() {
   if [ -n "$err" ]; then
     if [ "$err" = timeout ]; then err='time ran out'; else err='cloning main failed'; fi
     unread "$label" kit-pin "main unreadable: $err"
-    unread "$label" night-gates ''
+    unread "$label" retired-workflow ''
     unread "$label" author ''
     unread "$label" ci-wiring ''
     unread "$label" schedule- ''
@@ -561,7 +560,7 @@ judge_tree() {
   fi
   if ! jq -e 'type == "object"' "$tree/package.json" >/dev/null 2>&1; then
     unread "$label" kit-pin "package.json unreadable at main"
-    unread "$label" night-gates ''
+    judge_retired_workflows "$label" "$tree"
     unread "$label" author ''
     judge_ci_wiring "$label" "$out"
     judge_schedules "$label" "$out"
@@ -581,15 +580,7 @@ judge_tree() {
       finding "$label" kit-pin "$pin" "kit-pin: pins $pin, newest release $newest"
     fi
   fi
-  if [ "$is_self" -eq 1 ] || { [ -n "$version" ] && ! version_lt "$version" "$NIGHT_STEP_KIT"; }; then
-    if ! grep -rqE 'checks-lint.*--night|lint\.ts.*--night' "$tree/.github" 2>/dev/null; then
-      if [ "$is_self" -eq 1 ]; then
-        finding "$label" night-gates missing "night-gates: the kit runs no checks-lint --night step"
-      else
-        finding "$label" night-gates missing "night-gates: kit $pin and no workflow runs checks-lint --night"
-      fi
-    fi
-  fi
+  judge_retired_workflows "$label" "$tree"
   jq -e '
     ((.author | type) == "string" and (.author | length) > 0)
     or ((.author | type) == "object" and ((.author.name // "") | length) > 0)
@@ -598,6 +589,19 @@ judge_tree() {
     || finding "$label" author missing "author: package.json names no author and no contributors"
   judge_ci_wiring "$label" "$out"
   judge_schedules "$label" "$out"
+}
+
+judge_retired_workflows() {
+  local label=$1 tree=$2 file files=
+  for file in "$tree"/.github/workflows/*.yml "$tree"/.github/workflows/*.yaml; do
+    [ -f "$file" ] || continue
+    case "${file##*/}" in
+      night-run.yml|night-run.yaml) ;;
+      *) grep -qE '(checks-lint|lint\.ts).*--night' "$file" 2>/dev/null || continue ;;
+    esac
+    files="$files${files:+, }${file##*/}"
+  done
+  [ -z "$files" ] || finding "$label" retired-workflow "$files" "retired-workflow: $files"
 }
 
 judge_ci_wiring() {

@@ -131,7 +131,7 @@ kit_release() {
 add_tidy_project() {
   local world=$1 name=$2
   add_project "$world" "$name" "{\"name\":\"$name\",\"author\":\"Example Maintainer <maintainer@example.com>\",\"devDependencies\":{\"$KIT\":\"^0.69.0\"}}"
-  printf 'jobs:\n  night:\n    steps:\n      - run: bunx checks-lint --night\n' > "$world/trees/example_$name/.github/workflows/night-run.yml"
+  printf 'jobs:\n  lint:\n    steps:\n      - run: bunx checks-lint\n' > "$world/trees/example_$name/.github/workflows/ci.yml"
 }
 
 run_check() {
@@ -166,6 +166,7 @@ test_first_sweep_names_each_drifted_practice_on_one_line() {
   kit_release "$world" v0.69.0
   add_project "$world" web "{\"name\":\"web\",\"dependencies\":{\"$KIT\":\"0.61.1\"}}"
   printf 'on:\n  schedule:\n    - cron: "0 3 * * *"\n' > "$world/trees/example_web/.github/workflows/daily-release.yml"
+  printf 'jobs:\n  gate:\n    steps:\n      - run: bunx checks-lint --night\n' > "$world/trees/example_web/.github/workflows/night-run.yml"
   printf 'ci-wiring: 1 job(s) can run for hours:\n  release.yml job github-release\nci-wiring: 6 gate(s) run on pull requests to main\n' \
     > "$world/trees/example_web/.github/ci-wiring-fail"
   gh_fixture "$world" "$(schedule_path example/web daily-release.yml)" \
@@ -181,7 +182,7 @@ test_first_sweep_names_each_drifted_practice_on_one_line() {
   assert_lines 1 "$out"
   assert_contains "$out" "practice drift: web: " "the line does not name the repository"
   assert_contains "$out" "kit-pin: pins 0.61.1, newest release 0.69.0" "an old kit pin went unreported"
-  assert_contains "$out" "night-gates: kit 0.61.1 and no workflow runs checks-lint --night" "a missing night step went unreported"
+  assert_contains "$out" "retired-workflow: night-run.yml" "a retired workflow still in place went unreported"
   assert_contains "$out" "author: package.json names no author and no contributors" "a missing author went unreported"
   assert_contains "$out" "ci-wiring: 1 job(s) can run for hours" "a failing ci-wiring went unreported"
   assert_not_contains "$out" "6 gate(s) run on pull requests" "a passing ci-wiring line was reported as drift"
@@ -190,7 +191,7 @@ test_first_sweep_names_each_drifted_practice_on_one_line() {
   assert_contains "$out" "schedule-daily-release: daily-release.yml failure on main, 2 scheduled runs in a row" "a failing scheduled workflow went unreported"
   assert_contains "$out" "release-pr-7: https://github.com/example/web/pull/7 open since 2026-10-20" "a stale release pull request went unreported"
   assert_not_contains "$out" "release-pr-8" "a hand-made pull request was taken for a release pull request"
-  assert_contains "$out" "issue-110: https://github.com/example/web/issues/110 open 2 days, 1 comment, last comment 2026-10-31 by run 4242" "an open night-run issue went unreported"
+  assert_contains "$out" "issue-110: https://github.com/example/web/issues/110 open 2 days, 1 comment, last comment 2026-10-31 by run 4242" "an open failure issue went unreported"
   assert_not_contains "$out" "issue-111" "a pull request was taken for an issue"
   pass "the first sweep names every drifted practice on one line per repository"
 }
@@ -208,7 +209,6 @@ test_same_findings_next_day_are_silent_and_changes_are_reported() {
   out=$(run_check "$world" "$((NOV_1_2026_1600 + 2 * DAY))")
   assert_equals "" "$out" "the same pin behind a newer release was reported as a change"
   printf '{"name":"app","author":"Example","devDependencies":{"%s":"^0.70.0"}}\n' "$KIT" > "$world/trees/example_app/package.json"
-  printf 'run: checks-lint --night\n' > "$world/trees/example_app/.github/workflows/night-run.yml"
   out=$(run_check "$world" "$((NOV_1_2026_1600 + 3 * DAY))")
   assert_equals "practice drift: app: kit-pin cleared" "$out" "a fixed pin was not reported as cleared"
   pass "unchanged findings stay silent, a fix is reported as cleared"
@@ -320,14 +320,19 @@ test_kit_clone_without_github_origin_is_unreadable() {
   pass "a kit clone whose origin is not on GitHub is unreadable"
 }
 
-test_the_kit_itself_needs_its_own_night_step() {
+test_retired_gate_under_another_workflow_name_is_still_reported() {
   local world out
   world=$(make_world self)
   kit_release "$world" v0.69.0
   add_project "$world" checks "{\"name\":\"$KIT\",\"author\":\"Example\"}"
+  printf 'jobs:\n  gate:\n    steps:\n      - run: bun src/lint.ts --night\n' > "$world/trees/example_checks/.github/workflows/sweep.yaml"
+  printf 'jobs:\n  lint:\n    steps:\n      - run: bun src/lint.ts\n' > "$world/trees/example_checks/.github/workflows/ci.yml"
   out=$(run_check "$world" "$NOV_1_2026_1600")
-  assert_equals "practice drift: checks: night-gates: the kit runs no checks-lint --night step" "$out" "the kit's own missing night step went unreported"
-  pass "the kit repository is held to its own night step"
+  assert_equals "practice drift: checks: retired-workflow: sweep.yaml" "$out" "a retired gate under another workflow name went unreported"
+  rm "$world/trees/example_checks/.github/workflows/sweep.yaml"
+  out=$(run_check "$world" "$((NOV_1_2026_1600 + DAY))")
+  assert_equals "practice drift: checks: retired-workflow cleared" "$out" "removing the retired workflow was not reported as cleared"
+  pass "a retired gate is reported by what it runs and cleared when removed"
 }
 
 test_many_findings_stay_one_capped_line() {
@@ -420,7 +425,7 @@ fm_test_run \
   test_bot_issue_without_a_drift_label_stays_silent \
   test_unreadable_backlog_does_not_mark_an_issue_untracked \
   test_kit_clone_without_github_origin_is_unreadable \
-  test_the_kit_itself_needs_its_own_night_step \
+  test_retired_gate_under_another_workflow_name_is_still_reported \
   test_many_findings_stay_one_capped_line \
   test_missing_configuration_is_one_line \
   test_help_names_every_action \
