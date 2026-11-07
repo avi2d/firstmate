@@ -42,7 +42,8 @@ Usage:
 Repositories: every clone directly under this home's projects/ whose origin is on GitHub.
 The kit, named in config/practice-drift.json, applies to a clone whose package.json
 depends on the kit package or is the kit itself. Every repository is read for its open
-issues filed by github-actions[bot]; a repository the kit applies to is also shallow
+issues filed by github-actions[bot] carrying label night-run, daily-tests, or daily-ci;
+a repository the kit applies to is also shallow
 cloned at its default branch into a temporary directory and read for the rest.
 
 Practice keys, recorded as <repository>:<key>:
@@ -51,11 +52,12 @@ Practice keys, recorded as <repository>:<key>:
   author           package.json names no author and no contributors
   ci-wiring        checks-ci-wiring from the newest kit release fails, with its summary
   merge-methods    the repository allows merge commits or rebase merges
-  runs-on          the repository is private and sets no CI_RUNS_ON Actions variable
+  runs-on          the repository is private and sets no CI_RUNS_ON repository or organization variable
   schedule-<name>  the last completed scheduled run of workflow <name> on the default branch did not succeed
-  release-pr-<n>   pull request <n> titled "chore: release" by github-actions[bot] is open
-  issue-<n>        issue <n> by github-actions[bot] is open; it prints when first seen and once more
-                   when it is 7 days old and no row in this home's backlog names its URL
+  release-pr-<n>   pull request <n> titled "chore: release" by github-actions[bot] open 7 days or longer
+  issue-<n>        issue <n> by github-actions[bot] carrying label night-run, daily-tests, or daily-ci
+                   is open; it prints when first seen and once more when it is 7 days old
+                   and no row in this home's backlog names its URL
 
 A sweep runs once a day, at the first check after the configured UTC hour, and prints one
 "practice drift: <repository>: ..." line for each repository with a new, changed, cleared, or
@@ -66,7 +68,6 @@ project tests, and never touches a clone under projects/.
 Environment:
   FM_PRACTICE_DRIFT_HOUR         UTC hour of the daily sweep, 0-23 (default 15)
   FM_PRACTICE_DRIFT_BUDGET_SECS  bound on one sweep, 1-120 (default 25), cut to fit FM_CHECK_TIMEOUT
-  FM_PRACTICE_DRIFT_CI_WIRING    an installed checks-ci-wiring to run instead of installing the newest kit release
 
 See docs/configuration.md "Practice drift" for the configuration file and what a report means.
 EOF
@@ -309,15 +310,16 @@ read_schedules() {
 }
 
 read_issues() {
-  local out=$1 slug=$2 number
+  local out=$1 slug=$2 number comments
   gh_read "$out/issues" "repos/$slug/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100" \
-    "[.[] | select(.pull_request == null and .user.login == \"$BOT_LOGIN\") | {number, url: .html_url, created: (.created_at | fromdateiso8601), comments}]"
+    "[.[] | select(.pull_request == null and .user.login == \"$BOT_LOGIN\" and ([(.labels // [])[].name] | any(. == \"night-run\" or . == \"daily-tests\" or . == \"daily-ci\"))) | {number, url: .html_url, created: (.created_at | fromdateiso8601), comments}]"
   [ -f "$out/issues.json" ] || return 0
   mkdir -p "$out/comments"
-  for number in $(jq -r '.[] | select(.comments > 0) | .number' "$out/issues.json"); do
-    gh_read "$out/comments/$number" "repos/$slug/issues/$number/comments?per_page=100" \
-      'last // null | if . == null then null else {day: .created_at[0:10], run: ([(.body // "") | match("actions/runs/([0-9]+)") | .captures[0].string] | first // null)} end' &
-  done
+  while IFS=$'\t' read -r number comments; do
+    [ -n "$number" ] || continue
+    gh_read "$out/comments/$number" "repos/$slug/issues/$number/comments?per_page=1&page=$comments" \
+      '.[0] // null | if . == null then null else {day: .created_at[0:10], run: ([(.body // "") | match("actions/runs/([0-9]+)") | .captures[0].string] | first // null)} end' &
+  done < <(jq -r '.[] | select(.comments > 0) | [.number, .comments] | @tsv' "$out/issues.json")
   wait
 }
 
@@ -330,8 +332,9 @@ read_repo() {
     gh_read "$out/repo" "repos/$slug" \
       '{private, merge: .allow_merge_commit, rebase: .allow_rebase_merge}' &
     gh_read "$out/runs-on" "repos/$slug/actions/variables/CI_RUNS_ON" '.value' &
+    gh_read "$out/org-vars" "repos/$slug/actions/organization-variables" '[.variables[]?.name]' &
     gh_read "$out/pulls" "repos/$slug/pulls?state=open&per_page=100" \
-      "[.[] | select((.title | startswith(\"chore: release\")) and .user.login == \"$BOT_LOGIN\") | {number, url: .html_url, day: .created_at[0:10]}]" &
+      "[.[] | select((.title | startswith(\"chore: release\")) and .user.login == \"$BOT_LOGIN\") | {number, url: .html_url, day: .created_at[0:10], created: (.created_at | fromdateiso8601)}]" &
     if clone_main "$out" "$slug"; then
       read_schedules "$out" "$slug"
     fi
@@ -347,10 +350,6 @@ read_kit() {
   tag=$(jq -r '. // empty' "$out/release.json")
   tag=${tag#v}
   printf '%s\n' "$tag" > "$out/newest"
-  if [ -n "${FM_PRACTICE_DRIFT_CI_WIRING:-}" ]; then
-    printf '%s\n' "$FM_PRACTICE_DRIFT_CI_WIRING" > "$out/ci-wiring"
-    return 0
-  fi
   if ! command -v bun >/dev/null 2>&1; then
     printf 'bun is required to install the kit\n' > "$out/install.err"
     return 0
@@ -396,10 +395,13 @@ finding() {
   printf '%s:%s\t%s\t%s\n' "$label" "$key" "$(clean_field "$value")" "$(clean_field "$text")" >> "$TMP/current"
 }
 
-# Recorded findings whose key starts with <label>:<prefix> survive this sweep unchanged.
 unread() {
-  local label=$1 prefix=$2 text=$3
-  printf '%s:%s\n' "$label" "$prefix" >> "$TMP/protected"
+  local label=$1 prefix=$2 text=$3 kind
+  case "$prefix" in
+    ''|issue-|release-pr-|schedule-) kind=prefix ;;
+    *) kind=exact ;;
+  esac
+  printf '%s:%s\t%s\n' "$label" "$prefix" "$kind" >> "$TMP/protected"
   [ -z "$text" ] || printf '%s\t%s\n' "$label" "$(clean_field "$text")" >> "$TMP/unread"
 }
 
@@ -466,36 +468,56 @@ judge_issues() {
 }
 
 judge_settings() {
-  local label=$1 out=$2 err allowed private
+  local label=$1 out=$2 err allowed private org_err
   err=$(read_error "$out/repo")
   if [ -n "$err" ]; then
     unread "$label" merge-methods "settings unreadable: $(why_unread "$err")"
     unread "$label" runs-on ''
     return 0
   fi
-  allowed=$(jq -r '[(if .merge then "merge commits" else empty end), (if .rebase then "rebase merges" else empty end)] | join(" and ")' "$out/repo.json")
-  [ -z "$allowed" ] || finding "$label" merge-methods "$allowed" "merge-methods: allows $allowed"
+  if jq -e '.merge == null or .rebase == null' "$out/repo.json" >/dev/null 2>&1; then
+    unread "$label" merge-methods "merge-methods unreadable: the GitHub read omitted merge settings"
+  else
+    allowed=$(jq -r '[(if .merge then "merge commits" else empty end), (if .rebase then "rebase merges" else empty end)] | join(" and ")' "$out/repo.json")
+    [ -z "$allowed" ] || finding "$label" merge-methods "$allowed" "merge-methods: allows $allowed"
+  fi
   private=$(jq -r '.private' "$out/repo.json")
   [ "$private" = true ] || return 0
   err=$(read_error "$out/runs-on")
   case "$err" in
     '') ;;
-    absent) finding "$label" runs-on missing "runs-on: private and sets no CI_RUNS_ON variable" ;;
+    absent)
+      org_err=$(read_error "$out/org-vars")
+      case "$org_err" in
+        '')
+          if jq -e 'any(. == "CI_RUNS_ON")' "$out/org-vars.json" >/dev/null 2>&1; then
+            :
+          else
+            finding "$label" runs-on missing "runs-on: private and sets no CI_RUNS_ON variable"
+          fi
+          ;;
+        absent) finding "$label" runs-on missing "runs-on: private and sets no CI_RUNS_ON variable" ;;
+        *) unread "$label" runs-on "runs-on unreadable: $(why_unread "$org_err")" ;;
+      esac
+      ;;
     *) unread "$label" runs-on "runs-on unreadable: $(why_unread "$err")" ;;
   esac
 }
 
 judge_pulls() {
-  local label=$1 out=$2 err number url day
+  local label=$1 out=$2 err number url day created age
   err=$(read_error "$out/pulls")
   if [ -n "$err" ]; then
     unread "$label" release-pr- "release pull requests unreadable: $(why_unread "$err")"
     return 0
   fi
-  while IFS=$'\t' read -r number url day; do
+  while IFS=$'\t' read -r number url day created; do
     [ -n "$number" ] || continue
+    case "$created" in ''|*[!0-9]*) continue ;; esac
+    age=$((NOW - created))
+    [ "$age" -ge "$ISSUE_OVERDUE_SECS" ] || continue
     finding "$label" "release-pr-$number" open "release-pr-$number: $url open since $day"
-  done < <(jq -r '.[] | [.number, .url, .day] | @tsv' "$out/pulls.json")
+  done < <(jq -r '.[] | [.number, .url, .day, .created] | @tsv' "$out/pulls.json")
 }
 
 judge_schedules() {
@@ -541,6 +563,7 @@ judge_tree() {
     unread "$label" kit-pin "package.json unreadable at main"
     unread "$label" night-gates ''
     unread "$label" author ''
+    judge_ci_wiring "$label" "$out"
     judge_schedules "$label" "$out"
     return 0
   fi
@@ -573,6 +596,12 @@ judge_tree() {
     or ((.contributors // []) | length) > 0
   ' "$tree/package.json" >/dev/null 2>&1 \
     || finding "$label" author missing "author: package.json names no author and no contributors"
+  judge_ci_wiring "$label" "$out"
+  judge_schedules "$label" "$out"
+}
+
+judge_ci_wiring() {
+  local label=$1 out=$2 rc summary
   if [ -f "$out/ci-wiring.rc" ]; then
     rc=$(cat "$out/ci-wiring.rc")
     if fm_timed_out "$rc"; then
@@ -585,13 +614,12 @@ judge_tree() {
   else
     unread "$label" ci-wiring "ci-wiring unreadable: $(cat "$TMP/kit/install.err" 2>/dev/null || printf 'the newest kit release is unknown')"
   fi
-  judge_schedules "$label" "$out"
 }
 
 diff_record() {
   touch "$TMP/protected" "$TMP/current"
   awk -F '\t' -v next_file="$TMP/next" '
-    FILENAME == ARGV[1] { protect[++np] = $1; next }
+    FILENAME == ARGV[1] { protect[++np] = $1; kind[np] = $2; next }
     FILENAME == ARGV[2] { old[$1] = $2; order[++no] = $1; next }
     {
       cur[$1] = $2
@@ -605,7 +633,10 @@ diff_record() {
         if (key in cur) continue
         label = key; sub(/:.*/, "", label)
         kept = 0
-        for (j = 1; j <= np; j++) if (index(key, protect[j]) == 1) { kept = 1; break }
+        for (j = 1; j <= np; j++) {
+          if (kind[j] == "prefix") { if (index(key, protect[j]) == 1) { kept = 1; break } }
+          else if (key == protect[j]) { kept = 1; break }
+        }
         if (kept) { print key "\t" old[key] > next_file; continue }
         practice = substr(key, length(label) + 2)
         word = (practice ~ /^(issue|release-pr)-/) ? "closed" : "cleared"

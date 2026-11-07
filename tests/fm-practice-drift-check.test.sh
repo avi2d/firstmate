@@ -14,7 +14,7 @@ KIT='@example/checks'
 fm_git_identity fmtest fmtest@example.invalid
 
 # make_world <name>: a home with config, an empty backlog, and fake gh-axi, git clone,
-# tasks-axi, and checks-ci-wiring that answer from fixtures under the world.
+# tasks-axi, and bun that answer from fixtures under the world.
 make_world() {
   local world="$TMP_ROOT/$1" fakebin
   mkdir -p "$world/home/state" "$world/home/config" "$world/home/projects" "$world/home/data" \
@@ -57,6 +57,19 @@ if [ -f .github/ci-wiring-fail ]; then
 fi
 printf 'ci-wiring: 6 gate(s) run on pull requests to main\n'
 SH
+  cat > "$fakebin/bun" <<SH
+#!/usr/bin/env bash
+cwd=""
+prev=""
+for arg in "\$@"; do
+  if [ "\$prev" = "--cwd" ]; then cwd="\$arg"; fi
+  prev="\$arg"
+done
+[ -n "\$cwd" ] || exit 1
+mkdir -p "\$cwd/node_modules/.bin"
+cp "$world/fakebin/checks-ci-wiring" "\$cwd/node_modules/.bin/checks-ci-wiring"
+chmod +x "\$cwd/node_modules/.bin/checks-ci-wiring"
+SH
   chmod +x "$fakebin"/*
   printf '%s\n' "$world"
 }
@@ -66,7 +79,6 @@ gh_key() {
   printf '%s' "$path" | tr '/?&=%' '_____'
 }
 
-# gh_fixture <world> <api-path> <json>
 gh_fixture() {
   local world=$1 path=$2 json=$3
   printf '%s\n' "$json" > "$world/gh/$(gh_key "$path").json"
@@ -127,7 +139,6 @@ run_check() {
   shift 2
   env FM_CHECK_TIMEOUT=30 FM_PRACTICE_DRIFT_NOW="$now" "$@" \
     PATH="$world/fakebin:$PATH" FM_HOME="$world/home" \
-    FM_PRACTICE_DRIFT_CI_WIRING="$world/fakebin/checks-ci-wiring" \
     "$CHECK" check > "$world/out.txt" 2>&1 || status=$?
   expect_code 0 "$status" "check exit"
   cat "$world/out.txt"
@@ -163,8 +174,8 @@ test_first_sweep_names_each_drifted_practice_on_one_line() {
   gh_fixture "$world" "repos/example/web/pulls?state=open&per_page=100" \
     '[{"number":7,"title":"chore: release 1.2.0","html_url":"https://github.com/example/web/pull/7","created_at":"2026-10-20T00:00:00Z","user":{"login":"github-actions[bot]"}},{"number":8,"title":"chore: release by hand","html_url":"https://github.com/example/web/pull/8","created_at":"2026-10-20T00:00:00Z","user":{"login":"someone"}}]'
   gh_fixture "$world" "$(issues_path example/web)" \
-    '[{"number":110,"html_url":"https://github.com/example/web/issues/110","created_at":"2026-10-30T16:00:00Z","comments":1,"user":{"login":"github-actions[bot]"}},{"number":111,"pull_request":{},"html_url":"https://github.com/example/web/pull/111","created_at":"2026-10-30T16:00:00Z","comments":0,"user":{"login":"github-actions[bot]"}}]'
-  gh_fixture "$world" "repos/example/web/issues/110/comments?per_page=100" \
+    '[{"number":110,"html_url":"https://github.com/example/web/issues/110","created_at":"2026-10-30T16:00:00Z","comments":1,"user":{"login":"github-actions[bot]"},"labels":[{"name":"night-run"}]},{"number":111,"pull_request":{},"html_url":"https://github.com/example/web/pull/111","created_at":"2026-10-30T16:00:00Z","comments":0,"user":{"login":"github-actions[bot]"}}]'
+  gh_fixture "$world" "repos/example/web/issues/110/comments?per_page=1&page=1" \
     '[{"created_at":"2026-10-31T03:00:00Z","body":"failed again: https://github.com/example/web/actions/runs/4242"}]'
   out=$(run_check "$world" "$NOV_1_2026_1600")
   assert_lines 1 "$out"
@@ -211,7 +222,7 @@ test_daily_gate_holds_until_the_sweep_hour() {
   out=$(run_check "$world" "$NOV_1_2026_1600")
   assert_lines 1 "$out"
   gh_fixture "$world" "$(issues_path example/app)" \
-    '[{"number":5,"html_url":"https://github.com/example/app/issues/5","created_at":"2026-11-02T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"}}]'
+    '[{"number":5,"html_url":"https://github.com/example/app/issues/5","created_at":"2026-11-02T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"},"labels":[{"name":"night-run"}]}]'
   out=$(run_check "$world" "$((NOV_1_2026_1600 + DAY - 2 * 3600))")
   assert_equals "" "$out" "a sweep ran before the next day's sweep hour"
   out=$(run_check "$world" "$((NOV_1_2026_1600 + DAY - 3600 + 60))")
@@ -228,7 +239,7 @@ test_unreadable_reads_print_every_sweep_and_keep_findings() {
   add_project "$world" app "{\"name\":\"app\",\"author\":\"Example\",\"devDependencies\":{\"$KIT\":\"0.60.0\"}}"
   gh_fixture "$world" "repos/example/app" '{"private":false,"allow_merge_commit":true,"allow_rebase_merge":false}'
   gh_fixture "$world" "$(issues_path example/app)" \
-    '[{"number":5,"html_url":"https://github.com/example/app/issues/5","created_at":"2026-11-01T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"}}]'
+    '[{"number":5,"html_url":"https://github.com/example/app/issues/5","created_at":"2026-11-01T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"},"labels":[{"name":"night-run"}]}]'
   run_check "$world" "$NOV_1_2026_1600" > /dev/null
   gh_break "$world" "repos/example/app"
   gh_break "$world" "$(issues_path example/app)"
@@ -267,7 +278,7 @@ test_issue_prints_when_seen_and_once_more_when_a_week_old_without_a_backlog_row(
   world=$(make_world issues)
   add_project "$world" tool '{"name":"tool"}'
   gh_fixture "$world" "$(issues_path example/tool)" \
-    '[{"number":15,"html_url":"https://github.com/example/tool/issues/15","created_at":"2026-11-01T03:00:00Z","comments":5,"user":{"login":"github-actions[bot]"}},{"number":150,"html_url":"https://github.com/example/tool/issues/150","created_at":"2026-11-01T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"}}]'
+    '[{"number":15,"html_url":"https://github.com/example/tool/issues/15","created_at":"2026-11-01T03:00:00Z","comments":5,"user":{"login":"github-actions[bot]"},"labels":[{"name":"night-run"}]},{"number":150,"html_url":"https://github.com/example/tool/issues/150","created_at":"2026-11-01T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"},"labels":[{"name":"daily-tests"}]}]'
   out=$(run_check "$world" "$NOV_1_2026_1600")
   assert_contains "$out" "issue-15: https://github.com/example/tool/issues/15 open 0 days, 5 comments" "a new issue went unreported"
   out=$(run_check "$world" "$((NOV_1_2026_1600 + 3 * DAY))")
@@ -290,7 +301,7 @@ test_unreadable_backlog_does_not_mark_an_issue_untracked() {
   world=$(make_world nobacklog)
   add_project "$world" tool '{"name":"tool"}'
   gh_fixture "$world" "$(issues_path example/tool)" \
-    '[{"number":15,"html_url":"https://github.com/example/tool/issues/15","created_at":"2026-11-01T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"}}]'
+    '[{"number":15,"html_url":"https://github.com/example/tool/issues/15","created_at":"2026-11-01T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"},"labels":[{"name":"night-run"}]}]'
   run_check "$world" "$NOV_1_2026_1600" > /dev/null
   : > "$world/backlog.fail"
   out=$(run_check "$world" "$((NOV_1_2026_1600 + 8 * DAY))")
@@ -325,7 +336,7 @@ test_many_findings_stay_one_capped_line() {
   add_project "$world" tool '{"name":"tool"}'
   json='['
   for i in $(seq 1 60); do
-    json="$json{\"number\":$i,\"html_url\":\"https://github.com/example/tool/issues/$i\",\"created_at\":\"2026-11-01T03:00:00Z\",\"comments\":0,\"user\":{\"login\":\"github-actions[bot]\"}},"
+    json="$json{\"number\":$i,\"html_url\":\"https://github.com/example/tool/issues/$i\",\"created_at\":\"2026-11-01T03:00:00Z\",\"comments\":0,\"user\":{\"login\":\"github-actions[bot]\"},\"labels\":[{\"name\":\"night-run\"}]},"
   done
   gh_fixture "$world" "$(issues_path example/tool)" "${json%,}]"
   out=$(run_check "$world" "$NOV_1_2026_1600")
@@ -372,6 +383,31 @@ test_arm_and_disarm() {
   pass "arm writes and binds the shim, disarm removes it"
 }
 
+test_young_release_pull_request_stays_silent_until_a_week_old() {
+  local world out
+  world=$(make_world youngpr)
+  kit_release "$world" v0.69.0
+  add_tidy_project "$world" app
+  gh_fixture "$world" "repos/example/app/pulls?state=open&per_page=100" \
+    '[{"number":9,"title":"chore: release 1.2.0","html_url":"https://github.com/example/app/pull/9","created_at":"2026-10-29T16:00:00Z","user":{"login":"github-actions[bot]"}}]'
+  out=$(run_check "$world" "$NOV_1_2026_1600")
+  assert_equals "" "$out" "a 3 day old release pull request was reported"
+  out=$(run_check "$world" "$((NOV_1_2026_1600 + 4 * DAY))")
+  assert_contains "$out" "release-pr-9: https://github.com/example/app/pull/9 open since 2026-10-29" "the same release pull request at 7 days went unreported"
+  pass "a young release pull request stays silent until a week old"
+}
+
+test_bot_issue_without_a_drift_label_stays_silent() {
+  local world out
+  world=$(make_world otherlabel)
+  add_project "$world" tool '{"name":"tool"}'
+  gh_fixture "$world" "$(issues_path example/tool)" \
+    '[{"number":21,"html_url":"https://github.com/example/tool/issues/21","created_at":"2026-10-20T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"},"labels":[{"name":"dependency-update"}]}]'
+  out=$(run_check "$world" "$NOV_1_2026_1600")
+  assert_equals "" "$out" "a bot issue with another label was reported"
+  pass "a bot issue with another label stays silent"
+}
+
 fm_test_run \
   test_tidy_kit_user_is_not_reported_as_drift \
   test_first_sweep_names_each_drifted_practice_on_one_line \
@@ -380,6 +416,8 @@ fm_test_run \
   test_unreadable_reads_print_every_sweep_and_keep_findings \
   test_unread_kit_release_is_unreadable_not_clean \
   test_issue_prints_when_seen_and_once_more_when_a_week_old_without_a_backlog_row \
+  test_young_release_pull_request_stays_silent_until_a_week_old \
+  test_bot_issue_without_a_drift_label_stays_silent \
   test_unreadable_backlog_does_not_mark_an_issue_untracked \
   test_kit_clone_without_github_origin_is_unreadable \
   test_the_kit_itself_needs_its_own_night_step \

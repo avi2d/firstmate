@@ -2693,7 +2693,7 @@ See [`docs/examples/practice-drift.json`](examples/practice-drift.json) for a st
 Without that file, a sweep reports the missing configuration on one line.
 
 The kit applies to a clone whose `package.json` depends on the kit package or is the kit itself.
-Every repository is read for its open issues filed by `github-actions[bot]`, and a repository the kit applies to is also cloned shallowly at its default branch into a temporary directory and read for these practices:
+Every repository is read for its open issues filed by `github-actions[bot]` carrying label `night-run`, `daily-tests`, or `daily-ci`, and a repository the kit applies to is also cloned shallowly at its default branch into a temporary directory and read for these practices:
 
 | Key | Reported when |
 | --- | --- |
@@ -2702,14 +2702,15 @@ Every repository is read for its open issues filed by `github-actions[bot]`, and
 | `author` | `package.json` names no author and no contributors. |
 | `ci-wiring` | `checks-ci-wiring` from the newest kit release fails, and the report carries its failing headings. |
 | `merge-methods` | The repository allows merge commits or rebase merges. |
-| `runs-on` | The repository is private and sets no `CI_RUNS_ON` Actions variable. |
+| `runs-on` | The repository is private and sets no `CI_RUNS_ON` repository or organization variable. |
 | `schedule-<name>` | The last completed scheduled run of workflow `<name>` on the default branch did not succeed, and the report counts the runs in a row. |
-| `release-pr-<n>` | A pull request titled `chore: release` by `github-actions[bot]` is open. |
-| `issue-<n>` | An issue by `github-actions[bot]` is open, such as a night-run or daily-suite failure issue. |
+| `release-pr-<n>` | A pull request titled `chore: release` by `github-actions[bot]` open 7 days or longer. |
+| `issue-<n>` | An issue by `github-actions[bot]` carrying label `night-run`, `daily-tests`, or `daily-ci` is open. |
 
 A sweep prints one `practice drift: <repository>: ...` line for each repository with a new, changed, cleared, or unreadable finding, and nothing when no finding changed.
 A cleared practice reads `<key> cleared`, and a closed issue or release pull request reads `<key> closed`.
 An open issue prints once when first seen, and once more when it is 7 days old and no row in this home's backlog names its URL.
+An open release pull request prints once it is 7 days old.
 The backlog is read through `bin/fm-tasks-axi.sh`, and an unreadable backlog is printed as unreadable rather than taken as no row.
 
 A read that fails, a clone that cannot be made, an unknown newest kit release, or a kit clone whose origin is not on GitHub is printed as unreadable on every sweep, never as clean.
@@ -2735,7 +2736,6 @@ A sweep runs at the first check after the daily sweep hour, and the first check 
 | --- | --- | --- |
 | `FM_PRACTICE_DRIFT_HOUR` | 15 | UTC hour of the daily sweep. |
 | `FM_PRACTICE_DRIFT_BUDGET_SECS` | 25 | Bounds one sweep, whose reads run in parallel. |
-| `FM_PRACTICE_DRIFT_CI_WIRING` | unset | An installed `checks-ci-wiring` to run instead of installing the newest kit release. |
 
 The whole sweep must finish inside `FM_CHECK_TIMEOUT`, which defaults to 30, so a budget that leaves less than three seconds for judging the reads is cut down to fit.
 A read that runs out of time is printed as unreadable.
