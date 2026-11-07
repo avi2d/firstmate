@@ -47,7 +47,7 @@ cloned at its default branch into a temporary directory and read for the rest.
 
 Practice keys, recorded as <repository>:<key>:
   kit-pin          the kit pin is older than the kit's newest GitHub release
-  retired-workflow a workflow under .github/workflows is the retired night-run workflow or runs checks-lint --night
+  retired-workflow a workflow under .github/workflows is the retired scheduled whole-tree workflow or runs the retired whole-tree lint flag
   author           package.json names no author and no contributors
   ci-wiring        checks-ci-wiring from the newest kit release fails, with its summary
   merge-methods    the repository allows merge commits or rebase merges
@@ -329,9 +329,9 @@ read_repo() {
   read_issues "$out" "$slug" &
   if [ "$kit" -eq 1 ]; then
     gh_read "$out/repo" "repos/$slug" \
-      '{private, merge: .allow_merge_commit, rebase: .allow_rebase_merge}' &
+      '{private, owner: (.owner.type // empty), merge: .allow_merge_commit, rebase: .allow_rebase_merge}' &
     gh_read "$out/runs-on" "repos/$slug/actions/variables/CI_RUNS_ON" '.value' &
-    gh_read "$out/org-vars" "repos/$slug/actions/organization-variables" '[.variables[]?.name]' &
+    gh_read "$out/org-vars" "repos/$slug/actions/organization-variables?per_page=30" '{total: .total_count, names: [.variables[]?.name]}' &
     gh_read "$out/pulls" "repos/$slug/pulls?state=open&per_page=100" \
       "[.[] | select((.title | startswith(\"chore: release\")) and .user.login == \"$BOT_LOGIN\") | {number, url: .html_url, day: .created_at[0:10], created: (.created_at | fromdateiso8601)}]" &
     if clone_main "$out" "$slug"; then
@@ -467,7 +467,7 @@ judge_issues() {
 }
 
 judge_settings() {
-  local label=$1 out=$2 err allowed private org_err
+  local label=$1 out=$2 err allowed private owner org_err
   err=$(read_error "$out/repo")
   if [ -n "$err" ]; then
     unread "$label" merge-methods "settings unreadable: $(why_unread "$err")"
@@ -486,10 +486,17 @@ judge_settings() {
   case "$err" in
     '') ;;
     absent)
+      owner=$(jq -r '.owner // empty' "$out/repo.json")
+      if [ "$owner" != "Organization" ]; then
+        finding "$label" runs-on missing "runs-on: private and sets no CI_RUNS_ON variable"
+        return 0
+      fi
       org_err=$(read_error "$out/org-vars")
       case "$org_err" in
         '')
-          if jq -e 'any(. == "CI_RUNS_ON")' "$out/org-vars.json" >/dev/null 2>&1; then
+          if jq -e 'select(type == "object" and (.total | type) == "number") | select(.total > ((.names // []) | length))' "$out/org-vars.json" >/dev/null 2>&1; then
+            unread "$label" runs-on "runs-on unreadable: the GitHub read failed"
+          elif jq -e '(.names // .) | any(. == "CI_RUNS_ON")' "$out/org-vars.json" >/dev/null 2>&1; then
             :
           else
             finding "$label" runs-on missing "runs-on: private and sets no CI_RUNS_ON variable"

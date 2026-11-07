@@ -2698,7 +2698,7 @@ Every repository is read for its open issues filed by `github-actions[bot]` carr
 | Key | Reported when |
 | --- | --- |
 | `kit-pin` | The kit pin is older than the kit's newest GitHub release. |
-| `retired-workflow` | A workflow under `.github/workflows` is the retired `night-run.yml` or runs `checks-lint --night`, so it is still waiting to be removed. |
+| `retired-workflow` | A workflow under `.github/workflows` is the retired scheduled whole-tree workflow or runs the retired whole-tree lint flag, so it is still waiting to be removed. |
 | `author` | `package.json` names no author and no contributors. |
 | `ci-wiring` | `checks-ci-wiring` from the newest kit release fails, and the report carries its failing headings. |
 | `merge-methods` | The repository allows merge commits or rebase merges. |

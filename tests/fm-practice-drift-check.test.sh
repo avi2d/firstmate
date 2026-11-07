@@ -13,8 +13,7 @@ KIT='@example/checks'
 
 fm_git_identity fmtest fmtest@example.invalid
 
-# make_world <name>: a home with config, an empty backlog, and fake gh-axi, git clone,
-# tasks-axi, and bun that answer from fixtures under the world.
+# Fakes answer from fixtures under the world.
 make_world() {
   local world="$TMP_ROOT/$1" fakebin
   mkdir -p "$world/home/state" "$world/home/config" "$world/home/projects" "$world/home/data" \
@@ -104,8 +103,7 @@ schedule_path() {
   printf 'repos/%s/actions/workflows/%s/runs?event=schedule&branch=main&status=completed&per_page=10\n' "$slug" "$file"
 }
 
-# add_project <world> <name> <package-json> [origin]: a local clone under projects/ and
-# the same manifest as the tree a fresh clone of main would see.
+# Writes the same manifest a fresh clone of main would see.
 add_project() {
   local world=$1 name=$2 manifest=$3 origin=${4:-https://github.com/example/$2.git} dir
   dir="$world/home/projects/$name"
@@ -118,7 +116,7 @@ add_project() {
   mkdir -p "$world/trees/example_$name/.github/workflows"
   printf '%s\n' "$manifest" > "$world/trees/example_$name/package.json"
   gh_fixture "$world" "$(issues_path "example/$name")" '[]'
-  gh_fixture "$world" "repos/example/$name" '{"private":false,"allow_merge_commit":false,"allow_rebase_merge":false,"allow_squash_merge":true}'
+  gh_fixture "$world" "repos/example/$name" '{"private":false,"owner":{"type":"Organization"},"allow_merge_commit":false,"allow_rebase_merge":false,"allow_squash_merge":true}'
   gh_fixture "$world" "repos/example/$name/pulls?state=open&per_page=100" '[]'
 }
 
@@ -171,7 +169,7 @@ test_first_sweep_names_each_drifted_practice_on_one_line() {
     > "$world/trees/example_web/.github/ci-wiring-fail"
   gh_fixture "$world" "$(schedule_path example/web daily-release.yml)" \
     '{"workflow_runs":[{"conclusion":"failure","created_at":"2026-11-01T03:00:00Z"},{"conclusion":"failure","created_at":"2026-10-31T03:00:00Z"},{"conclusion":"success","created_at":"2026-10-30T03:00:00Z"}]}'
-  gh_fixture "$world" "repos/example/web" '{"private":true,"allow_merge_commit":true,"allow_rebase_merge":false}'
+  gh_fixture "$world" "repos/example/web" '{"private":true,"owner":{"type":"Organization"},"allow_merge_commit":true,"allow_rebase_merge":false}'
   gh_fixture "$world" "repos/example/web/pulls?state=open&per_page=100" \
     '[{"number":7,"title":"chore: release 1.2.0","html_url":"https://github.com/example/web/pull/7","created_at":"2026-10-20T00:00:00Z","user":{"login":"github-actions[bot]"}},{"number":8,"title":"chore: release by hand","html_url":"https://github.com/example/web/pull/8","created_at":"2026-10-20T00:00:00Z","user":{"login":"someone"}}]'
   gh_fixture "$world" "$(issues_path example/web)" \
@@ -237,7 +235,7 @@ test_unreadable_reads_print_every_sweep_and_keep_findings() {
   world=$(make_world unread)
   kit_release "$world" v0.69.0
   add_project "$world" app "{\"name\":\"app\",\"author\":\"Example\",\"devDependencies\":{\"$KIT\":\"0.60.0\"}}"
-  gh_fixture "$world" "repos/example/app" '{"private":false,"allow_merge_commit":true,"allow_rebase_merge":false}'
+  gh_fixture "$world" "repos/example/app" '{"private":false,"owner":{"type":"Organization"},"allow_merge_commit":true,"allow_rebase_merge":false}'
   gh_fixture "$world" "$(issues_path example/app)" \
     '[{"number":5,"html_url":"https://github.com/example/app/issues/5","created_at":"2026-11-01T03:00:00Z","comments":0,"user":{"login":"github-actions[bot]"},"labels":[{"name":"night-run"}]}]'
   run_check "$world" "$NOV_1_2026_1600" > /dev/null
@@ -413,6 +411,35 @@ test_bot_issue_without_a_drift_label_stays_silent() {
   pass "a bot issue with another label stays silent"
 }
 
+test_user_owned_private_repo_reports_missing_when_org_read_fails() {
+  local world out
+  world=$(make_world userorg)
+  kit_release "$world" v0.69.0
+  add_tidy_project "$world" app
+  gh_fixture "$world" "repos/example/app" '{"private":true,"owner":{"type":"User"},"allow_merge_commit":false,"allow_rebase_merge":false}'
+  gh_break "$world" "repos/example/app/actions/organization-variables?per_page=30"
+  out=$(run_check "$world" "$NOV_1_2026_1600")
+  assert_contains "$out" "runs-on: private and sets no CI_RUNS_ON variable" "a user-owned private repository without a repo variable went unreported"
+  assert_not_contains "$out" "runs-on unreadable" "a user-owned repository misreported the org read as unreadable"
+  pass "a user-owned private repository without a variable reports missing"
+}
+
+test_org_repo_with_unread_org_vars_is_unreadable_not_missing() {
+  local world out
+  world=$(make_world orgvars)
+  kit_release "$world" v0.69.0
+  add_tidy_project "$world" app
+  gh_fixture "$world" "repos/example/app" '{"private":true,"owner":{"type":"Organization"},"allow_merge_commit":false,"allow_rebase_merge":false}'
+  gh_fixture "$world" "repos/example/app/actions/organization-variables?per_page=30" '{"total_count":31,"variables":[{"name":"OTHER"}]}'
+  out=$(run_check "$world" "$NOV_1_2026_1600")
+  assert_contains "$out" "runs-on unreadable" "a truncated org variable page passed as missing"
+  assert_not_contains "$out" "sets no CI_RUNS_ON variable" "a truncated org variable page was reported as missing"
+  gh_fixture "$world" "repos/example/app/actions/organization-variables?per_page=30" '{"total_count":1,"variables":[{"name":"CI_RUNS_ON"}]}'
+  out=$(run_check "$world" "$((NOV_1_2026_1600 + DAY))")
+  assert_not_contains "$out" "runs-on" "an org variable present past the default page was reported as missing"
+  pass "an org repository with unread org variables stays unreadable, not missing"
+}
+
 fm_test_run \
   test_tidy_kit_user_is_not_reported_as_drift \
   test_first_sweep_names_each_drifted_practice_on_one_line \
@@ -423,6 +450,8 @@ fm_test_run \
   test_issue_prints_when_seen_and_once_more_when_a_week_old_without_a_backlog_row \
   test_young_release_pull_request_stays_silent_until_a_week_old \
   test_bot_issue_without_a_drift_label_stays_silent \
+  test_user_owned_private_repo_reports_missing_when_org_read_fails \
+  test_org_repo_with_unread_org_vars_is_unreadable_not_missing \
   test_unreadable_backlog_does_not_mark_an_issue_untracked \
   test_kit_clone_without_github_origin_is_unreadable \
   test_retired_gate_under_another_workflow_name_is_still_reported \
