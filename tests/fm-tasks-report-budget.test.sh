@@ -9,7 +9,7 @@ TASKS_AXI="$ROOT/bin/fm-tasks-axi.sh"
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v tasks-axi >/dev/null 2>&1 || { echo "skip: tasks-axi not found"; exit 0; }
 
-# tui-dash abandons this report after 15s, and a loaded host runs it at several
+# orc-dash abandons this report after 15s, and a loaded host runs it at several
 # times the fixture's cost.
 BUDGET_SECS=${FM_TASKS_REPORT_BUDGET_SECS:-6}
 
