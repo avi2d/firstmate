@@ -91,6 +91,7 @@ jobs:
             ${{ runner.temp }}/fm-lint/partition-${{ matrix.partition }}.tsv
             ${{ runner.temp }}/fm-lint/partition-${{ matrix.partition }}.roots.tsv
           if-no-files-found: warn
+          retention-days: 7
 
   # Deterministic proof that portable parallel shards + portable serial + Herdr
   # equal the complete tests/*.test.sh inventory with no missing or duplicates,
@@ -447,6 +448,7 @@ jobs:
             ${{ runner.temp }}/fm-herdr/sessions-before.json
             ${{ runner.temp }}/fm-herdr/default-server.log
           if-no-files-found: warn
+          retention-days: 7
 
   # Aggregate per-lane timing into one summary artifact for critical-path review.
   tests-timing-aggregate:
@@ -488,6 +490,7 @@ jobs:
           name: fm-test-timing-aggregate
           path: ${{ runner.temp }}/fm-test/fm-test-timing-aggregate.json
           if-no-files-found: warn
+          retention-days: 7
 
   macos-stock-bash:
     name: Stock macOS Bash snapshot compatibility
