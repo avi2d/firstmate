@@ -8,8 +8,8 @@ set -u
 REPORT="$ROOT/bin/fm-tasks-report.sh"
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
-TUI_DASH_CONTRACT_SOURCE="tui-dash packages/schema/src/contract/tasks.ts and recorded fixture tests/fixtures/tasks/linux.json"
-[ -n "$TUI_DASH_CONTRACT_SOURCE" ] || exit 1
+ORC_DASH_CONTRACT_SOURCE="orc packages/schema/src/contract/tasks.ts and recorded fixture tests/fixtures/tasks/linux.json"
+[ -n "$ORC_DASH_CONTRACT_SOURCE" ] || exit 1
 
 TMP_ROOT=$(fm_test_tmproot fm-tasks-report)
 HOME_FIX="$TMP_ROOT/home"
@@ -249,4 +249,4 @@ jq -e --arg at "${PLUS7}T00:00:00Z" '.schedules == [{name: "alpha-hold", at: $at
 jq -e --arg a "$ALPHA" --arg b "$BETA" '(.overhead | sort_by(.name)) == [{name: "fm-alpha", folders: [$a]}, {name: "fm-beta", folders: [$b]}]' "$OUT" >/dev/null || fail "overhead names each home"
 ! grep -q "SECRET-MARKER" "$OUT" || fail "prompt-adjacent record text leaks into output"
 
-pass "tasks report v1 matches the tui-dash fixture field set"
+pass "tasks report v1 matches the orc-dash fixture field set"

@@ -69,4 +69,4 @@ kind_of() {
 [ "$(kind_of k-mate)" = "secondmate" ] || fail "secondmate keeps its raw kind"
 [ "$(kind_of k-ship-bare)" = "ship" ] || fail "ship without a recorded mode keeps its raw kind"
 
-pass "tasks report names each task kind in the tui-dash stage vocabulary"
+pass "tasks report names each task kind in the orc-dash stage vocabulary"
