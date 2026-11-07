@@ -898,6 +898,7 @@ tests/fm-pr-health.test.sh 27563
 tests/fm-pr-reviewers.test.sh 157
 tests/fm-pr-state-live-e2e.test.sh 47
 tests/fm-pr-state.test.sh 525
+tests/fm-practice-drift-check.test.sh 30200
 tests/fm-procevent-board-resolve.test.sh 9434
 tests/fm-procevent-lavish.test.sh 2500
 tests/fm-procevent-quota.test.sh 2459

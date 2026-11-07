@@ -2685,6 +2685,61 @@ Every sweep that finds drift reports it again, so a copy left behind or dirty is
 The whole sweep must finish inside `FM_CHECK_TIMEOUT`, which defaults to 30, so a fetch bound that leaves less than five seconds for the local comparisons is cut down to fit.
 A sweep that runs out of time reports the copy it did not reach.
 
+## Practice drift
+
+[`bin/fm-practice-drift-check.sh`](../bin/fm-practice-drift-check.sh) sweeps, once a day, every clone directly under this home's `projects/` whose origin is on GitHub, and reports where a repository has drifted from the checks kit's practices.
+The kit lives in `config/practice-drift.json`, an optional local gitignored file that names its npm package and its GitHub repository.
+See [`docs/examples/practice-drift.json`](examples/practice-drift.json) for a starting point to copy into local `config/practice-drift.json`.
+Without that file, a sweep reports the missing configuration on one line.
+
+The kit applies to a clone whose `package.json` depends on the kit package or is the kit itself.
+Every repository is read for its open issues filed by `github-actions[bot]`, and a repository the kit applies to is also cloned shallowly at its default branch into a temporary directory and read for these practices:
+
+| Key | Reported when |
+| --- | --- |
+| `kit-pin` | The kit pin is older than the kit's newest GitHub release. |
+| `night-gates` | The kit pin is 0.57.0 or newer, or the repository is the kit itself, and no workflow runs `checks-lint --night`. |
+| `author` | `package.json` names no author and no contributors. |
+| `ci-wiring` | `checks-ci-wiring` from the newest kit release fails, and the report carries its failing headings. |
+| `merge-methods` | The repository allows merge commits or rebase merges. |
+| `runs-on` | The repository is private and sets no `CI_RUNS_ON` Actions variable. |
+| `schedule-<name>` | The last completed scheduled run of workflow `<name>` on the default branch did not succeed, and the report counts the runs in a row. |
+| `release-pr-<n>` | A pull request titled `chore: release` by `github-actions[bot]` is open. |
+| `issue-<n>` | An issue by `github-actions[bot]` is open, such as a night-run or daily-suite failure issue. |
+
+A sweep prints one `practice drift: <repository>: ...` line for each repository with a new, changed, cleared, or unreadable finding, and nothing when no finding changed.
+A cleared practice reads `<key> cleared`, and a closed issue or release pull request reads `<key> closed`.
+An open issue prints once when first seen, and once more when it is 7 days old and no row in this home's backlog names its URL.
+The backlog is read through `bin/fm-tasks-axi.sh`, and an unreadable backlog is printed as unreadable rather than taken as no row.
+
+A read that fails, a clone that cannot be made, an unknown newest kit release, or a kit clone whose origin is not on GitHub is printed as unreadable on every sweep, never as clean.
+Its recorded findings are kept, so a repository that becomes readable again with the same drift stays quiet.
+
+The check only reads GitHub: it never posts, runs no project tests, and never touches a clone under `projects/`.
+It installs the newest kit release with `bun` into its temporary directory to run `checks-ci-wiring`.
+Acting on a report is a separate decision.
+
+**Arm and disarm**
+
+Arm the check once per home with `bin/fm-practice-drift-check.sh arm`.
+
+- That writes `state/practice-drift.check.sh` and binds its bytes with `bin/fm-check-register.sh`, so the existing watcher polls it on its normal cadence and turns its one line into a `check:` wake.
+- `bin/fm-practice-drift-check.sh disarm` removes the shim, its trust binding, and the record.
+
+**Timing**
+
+`state/.practice-drift` records when the last sweep ran and what it found.
+A sweep runs at the first check after the daily sweep hour, and the first check after arming sweeps at once.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `FM_PRACTICE_DRIFT_HOUR` | 15 | UTC hour of the daily sweep. |
+| `FM_PRACTICE_DRIFT_BUDGET_SECS` | 25 | Bounds one sweep, whose reads run in parallel. |
+| `FM_PRACTICE_DRIFT_CI_WIRING` | unset | An installed `checks-ci-wiring` to run instead of installing the newest kit release. |
+
+The whole sweep must finish inside `FM_CHECK_TIMEOUT`, which defaults to 30, so a budget that leaves less than three seconds for judging the reads is cut down to fit.
+A read that runs out of time is printed as unreadable.
+
 ## Daily session reset
 
 Supervisor sessions accumulate context, so the fleet resets them once a day.
