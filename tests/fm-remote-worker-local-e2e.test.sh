@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -eu
+# shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 TMP_ROOT=$(fm_test_tmproot fm-remote-worker-local-e2e)
 PARENT="$TMP_ROOT/parent"
@@ -117,7 +118,7 @@ while [ "\$#" -gt 0 ]; do case "\$1" in -o) shift 2 ;; --) shift; break ;; *) ex
 [ "\$1" = testhost ] || exit 91
 [ "\$2" = fm-remote-entrypoint.sh ] || exit 92
 shift 2
-export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_STATE_ROOT='$JOB_STATE'
+export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_STATE_ROOT='$JOB_STATE' FM_MAC_LOAD_MOCK_5MIN=0
 exec '$REMOTE_ROOT/bin/fm-remote-entrypoint.sh' "\$@"
 SH
 chmod +x "$FAKE/ssh"
