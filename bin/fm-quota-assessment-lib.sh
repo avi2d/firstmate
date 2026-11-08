@@ -3,12 +3,14 @@ fm_quota_assessment_jq() {
   cat <<'JQ'
   def quota_rows($row): ($row | .quotaSemantics.effectiveAvailability // []);
   def quota_bare_model($model): ($model | split("/") | last);
-  def quota_applicable_rows($row; $model):
+  def quota_applicable_rows($row; $model; $quota_scope):
     (quota_bare_model($model)) as $bare |
     [quota_rows($row)[] | select(
       .scope == "all_models" or .scope == "all_products" or
-      ($model != "" and (.scope == ("model:" + $bare) or .scope == ("product:" + $bare)))
+      ($model != "" and (.scope == ("model:" + $bare) or .scope == ("product:" + $bare))) or
+      ($quota_scope != null and .scope == $quota_scope)
     )];
+  def quota_applicable_rows($row; $model): quota_applicable_rows($row; $model; null);
   def quota_floor_state($floor; $row):
     if $floor == null then "none"
     elif $row == null or (["known", "partial"] | index($row.quotaSemantics.status)) == null then "unknown"

@@ -91,7 +91,7 @@ Load `session-start-recovery` when the digest reports unfinished checks, actiona
 ## 4. Harness and runtime dispatch
 
 - Load `harness-adapters` before every spawn or recovery and before trust handling, skill invocation, interrupt, exit, resume, or adapter verification.
-- The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor`, `omp`, and `agy`, plus `muse`, `gemini`, `rovo`, `devin`, `commandcode` (Command Code), `polytoken`, `cortex`, and `kiro` for crewmates and scouts only; never dispatch on an unverified adapter.
+- The verified harnesses are `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor`, `omp`, and `agy`, plus `muse`, `gemini`, `rovo`, `devin`, `commandcode` (Command Code), `polytoken`, `cortex`, `kiro`, and `hermes` for crewmates and scouts only; never dispatch on an unverified adapter.
 - `cloud-claude` is also verified, for direct-PR ship tasks on GitHub-hosted projects only.
 - If static `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, report it and fall back only to a verified adapter rather than launching it.
 - Only the captain chooses or changes a worker account pin (`config/claude-account`, `config/pi-account`) or the Claude account map (`config/claude-accounts`), so on a pin refusal report the needed login and never edit or remove the file to unblock a spawn.
@@ -111,7 +111,7 @@ Break genuine evidence ties without array-order or harness bias.
 `quota-axi` owns how model or product windows relate to bounding account windows and remains data-only.
 Load `quota-array-dispatch` before choosing among a matched profile array; that skill is the single owner of the TOON-first spendPriority selection procedure.
 Run `bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name>` directly on the written brief in the same turn, with no preflight.
-On `clear`, pass its `profile:` line to `fm-spawn` unless you state a reason to override.
+On `clear`, pass its `profile:` line to `fm-spawn`, or pass your reason to override as `--dispatch-override <reason>`, because `fm-spawn` refuses other flags without it.
 `ambiguous`, `escalate`, `error`, and off all mean the intake above, unchanged, under `docs/configuration.md` Typed dispatch resolution.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.

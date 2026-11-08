@@ -50,12 +50,29 @@ DEFAULT_WHEN="No listed rule applies to this task."
 SIZE_HINT=' Judge size by the whole pull request a worker will merge for this brief, not only the core code: new or changed tests, fixtures, docs, schema and config all count, and so does a decision record where the repository keeps them. A new option, field, check or command carried through code, schema, docs and tests, a fix that must first be reproduced by a new test, or work across several source files usually changes more than 150 lines. A version bump, a pin, a release, a single setting flip, or copying an existing file or workflow usually changes far fewer.'
 
 die() { printf 'error: %s\n' "$1" >&2; exit 2; }
+record_task() {
+  [ -n "$TASK_RECORD" ] || return 0
+  if ! { jq -cn --arg task "$TASK_ID" --arg status "$1" --argjson profile "${2:-null}" \
+      '{task: $task, status: $status, profile: $profile}' > "$TASK_RECORD.tmp.$$" \
+      && mv -f -- "$TASK_RECORD.tmp.$$" "$TASK_RECORD"; } 2>/dev/null; then
+    rm -f -- "$TASK_RECORD.tmp.$$"
+    echo "dispatch-resolve: could not write $TASK_RECORD" >&2
+    return 1
+  fi
+}
+resolver_off() {
+  echo "dispatch-resolve: off ($1)" >&2
+  record_task off || true
+  exit 0
+}
 no_rules() {
+  record_task escalate || true
   printf 'dispatch-resolve:\n  status: escalate\n  reason: no rules to match\n'
   exit 0
 }
 emit_error() {
   local reason=$1
+  record_task error || true
   echo "dispatch-resolve: error ($reason)" >&2
   printf 'dispatch-resolve:\n  status: error\n  reason: %s\n' "$reason"
   exit 0
@@ -128,12 +145,24 @@ while [ $# -gt 0 ]; do
     *) [ -z "$BRIEF" ] || die "one brief file only"; BRIEF=$1; shift ;;
   esac
 done
+TASK_ID='' TASK_RECORD=''
+# Matched against the same data directory fm-brief.sh and fm-spawn.sh use, so a
+# FM_DATA_OVERRIDE home records where fm-spawn.sh reads.
+task_dir=$(CDPATH='' cd -- "$(dirname -- "$BRIEF")" 2>/dev/null && pwd -P) || task_dir=''
+data_dir=$(CDPATH='' cd -- "${FM_DATA_OVERRIDE:-$FM_HOME/data}" 2>/dev/null && pwd -P) || data_dir=''
+if [ "$(basename -- "$BRIEF")" = brief.md ] && [ -n "$task_dir" ] && [ -n "$data_dir" ] \
+  && [ "$(dirname -- "$task_dir")" = "$data_dir" ]; then
+  TASK_ID=$(basename -- "$task_dir")
+  TASK_RECORD="$task_dir/dispatch-resolution.json"
+  if [ -e "$TASK_RECORD" ] || [ -L "$TASK_RECORD" ]; then
+    rm -f -- "$TASK_RECORD" || die "could not clear the previous dispatch resolution: $TASK_RECORD"
+  fi
+fi
 
 typesafe_key_or_off() {
   local id_file="$CONFIG/bws-typesafe-secret-id"
   if [ ! -e "$id_file" ]; then
-    echo "dispatch-resolve: off (no typesafe secret id at $id_file; nothing sent)" >&2
-    exit 0
+    resolver_off "no typesafe secret id at $id_file; nothing sent"
   fi
   if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
     TYPESAFE_API_KEY_PRIVATE=$(fm_bws_secret_value "$id_file") || die "TYPESAFE key unavailable through bws (see the refusal above)"
@@ -177,9 +206,41 @@ select_key() {
   [ -n "${!var}" ] || printf -v "$var" '%s' "$(fmx_env_get "$name" "$FM_HOME/.env")"
   [ -n "${!var}" ] || declared_key "$provider" "$var"
   if [ -z "${!var}" ]; then
-    echo "dispatch-resolve: off ($name absent from the environment and $FM_HOME/.env)" >&2
-    exit 0
+    resolver_off "$name absent from the environment and $FM_HOME/.env"
   fi
+}
+
+# Select and validate the same optional base for implicit and explicit TypeSafe.
+# Never echo a rejected value: a misconfigured URL may contain credentials.
+select_typesafe_base() {
+  local base=${TYPESAFE_BASE:-}
+  [ -n "$base" ] || base=$(fmx_env_get TYPESAFE_BASE "$FM_HOME/.env")
+  [ -n "$base" ] || return 0
+  command -v jq >/dev/null 2>&1 || die "jq required"
+  jq -en --arg base "$base" '
+    def ipv4:
+      split(".") | length == 4 and all(.[];
+        test("\\A(0|[1-9][0-9]{0,2})\\z") and (tonumber <= 255));
+    def ipv6:
+      # An IPv4 tail occupies two of the eight IPv6 groups.
+      (if contains(".") then
+        split(":") | if (.[-1] | ipv4) then .[-1] = "0:0" | join(":") else "!" end
+       else . end) |
+      split("::") as $sides |
+      if ($sides | length) == 1 then
+        test("\\A[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){7}\\z")
+      elif ($sides | length) == 2 then
+        all($sides[]; test("\\A([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*)?\\z")) and
+        (split(":") | map(select(length > 0)) | length < 8)
+      else false end;
+    $base | capture("\\Ahttps?://(?<host>\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9._-]+)(:(?<port>[0-9]+))?(?<path>/[^?#[:space:]\\\\]*)?\\z"; "i") |
+    ((.path // "") | (contains("[") or contains("]")) | not) and
+    (if .host | startswith("[") then .host[1:-1] | ipv6
+     else true end) and
+    (.port == null or (.port | tonumber | . >= 1 and . <= 65535))
+  ' >/dev/null 2>&1 || die "TYPESAFE_BASE must be an http(s) URL with a host and no userinfo, query, fragment, whitespace, or brackets in its path"
+  while [ "${base%/}" != "$base" ]; do base=${base%/}; done
+  TS_BASE=$base
 }
 
 DISPATCH_PROVIDER=${FM_DISPATCH_PROVIDER:-}
@@ -190,10 +251,12 @@ case "$DISPATCH_PROVIDER" in
   '')
     DISPATCH_PROVIDER=typesafe
     DISPATCH_MODEL=$TS_MODEL
+    select_typesafe_base
     typesafe_key_or_off
     ;;
   typesafe)
     [ -n "$DISPATCH_MODEL" ] || DISPATCH_MODEL=$TS_MODEL
+    select_typesafe_base
     typesafe_key_or_off
     ;;
   openrouter)
@@ -217,8 +280,7 @@ case "$DISPATCH_PROVIDER" in
     [ -n "$DISPATCH_MODEL" ] || die "FM_DISPATCH_MODEL required when FM_DISPATCH_PROVIDER=openai"
     [ -n "$OPENAI_API_KEY_PRIVATE" ] || OPENAI_API_KEY_PRIVATE=$(fmx_env_get OPENAI_API_KEY "$FM_HOME/.env")
     if [ -z "$OPENAI_API_KEY_PRIVATE" ]; then
-      echo "dispatch-resolve: off (OPENAI_API_KEY absent from the environment and $FM_HOME/.env)" >&2
-      exit 0
+      resolver_off "OPENAI_API_KEY absent from the environment and $FM_HOME/.env"
     fi
     ;;
   *) die "unknown FM_DISPATCH_PROVIDER: $DISPATCH_PROVIDER (expected typesafe, openrouter, systemone, or openai)" ;;
@@ -300,12 +362,14 @@ rules_err=$(jq -r --argjson verified_harnesses "$VERIFIED_HARNESSES" --arg provi
   elif .array_order == "preference" and any((.rules // [])[]; has("select")) then "select quota-balanced conflicts with array_order preference"
   elif has("shared_quota") and (.shared_quota | type) != "boolean" then "shared_quota must be true or false when present"
   elif any((.rules // [])[]; has("floor") and floor_bad(.floor; true)) then "rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\\z"
+  elif any((.rules // [])[] | profiles(.use)[]; type == "object" and has("quota_scope") and ((.quota_scope | type) != "string" or (.quota_scope | length) == 0)) then "each use profile quota_scope must be a non-empty string when present"
   elif any((.rules // [])[] | profiles(.use)[]; profile_bad(.)) then "each use profile needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
   elif any((.rules // [])[] | profiles(.use)[]; account_bad(.)) then account_error
   elif any((.rules // [])[]; duplicate_profiles(profiles(.use))) then "each rule use must not contain duplicate harness, model, and effort profiles"
   elif any((.rules // [])[] | profiles(.use)[]; (verified(.harness) | not)) then "each use profile must name a verified harness"
   elif any((.rules // [])[] | profiles(.use)[]; (effort_ok(.harness; .model; .effort) | not)) then "each use profile effort must be supported by its harness and model"
   elif has("default") and (profiles(.default) | length) == 0 then "default must be a profile object or non-empty profile array"
+  elif has("default") and any(profiles(.default)[]; type == "object" and has("quota_scope") and ((.quota_scope | type) != "string" or (.quota_scope | length) == 0)) then "each default profile quota_scope must be a non-empty string when present"
   elif has("default") and any(profiles(.default)[]; profile_bad(.)) then "each default profile needs harness; model, effort, and floor must be well formed, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\\z when present"
   elif has("default") and any(profiles(.default)[]; account_bad(.)) then account_error
   elif has("default") and duplicate_profiles(profiles(.default)) then "default must not contain duplicate harness, model, and effort profiles"
@@ -357,8 +421,7 @@ RESP_HEADERS=$(mktemp) || { rm -f "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT
 trap 'rm -f "$RULES" "$RESP_FILE" "$QUOTA" "$TASK_TEXT" "$SEND_TEXT" "$RESP_HEADERS"' EXIT
 
 never_send_off() {
-  echo "dispatch-resolve: off ($1; nothing sent)" >&2
-  exit 0
+  resolver_off "$1; nothing sent"
 }
 
 # Checks the endpoint and every string the final request body carries,
@@ -471,12 +534,12 @@ else
   ATTEMPT=1
   while :; do
     if [ -n "$KEY_PRIVATE" ]; then
-      HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
+      HTTP=$(printf '%s' "$BODY" | curl --globoff -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
         -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
         -H @/dev/fd/3 3< <(printf 'Authorization: Bearer %s\n' "$KEY_PRIVATE") \
         --data-binary @- 2>/dev/null) || HTTP=000
     else
-      HTTP=$(printf '%s' "$BODY" | curl -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
+      HTTP=$(printf '%s' "$BODY" | curl --globoff -sS --max-time "$TIMEOUT" -o "$RESP_FILE" -D "$RESP_HEADERS" -w '%{http_code}' \
         -X POST "$ENDPOINT" -H 'Content-Type: application/json' \
         --data-binary @- 2>/dev/null) || HTTP=000
     fi
@@ -596,7 +659,7 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
                 then "provider \($p) has no quota row for account \(if $lane == "" then "default" else $lane end)"
                 else "provider \($p) not in the quota snapshot" end)}
     else
-      (quota_applicable_rows($row; ($c.model // ""))) as $rows |
+      (quota_applicable_rows($row; ($c.model // ""); ($c.quota_scope // null))) as $rows |
       (evidence($rows)) as $bounds |
       (quota_profile_floor_state($c.floor; $row)) as $profile_floor_state |
       (if (quota_runway_exhausted_rows($rows) | length) > 0 then
@@ -614,6 +677,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       elif (row_measured($row) | not) then
         ($rows | first) as $first_row |
         {profile: $c, provider: $p, bounds: $bounds, scope: ($first_row.scope // null), pct: ($first_row.effectivePercentRemaining // null), runway: ($first_row.runway.status // null), eligible: true, unranked: true, unknown: true, reason: "provider \($p) unmeasured (\($row.quotaSemantics.status))"}
+      elif ($c.quota_scope != null and (any($rows[]; .scope == $c.quota_scope) | not)) then
+        {profile: $c, provider: $p, bounds: $bounds, scope: $c.quota_scope, eligible: true, unranked: true, unknown: true, reason: "declared quota_scope \($c.quota_scope) has no quota row for provider \($p): not rankable"}
       elif ($rows | length) == 0 then
         {profile: $c, provider: $p, bounds: $bounds, eligible: true, unranked: true, unknown: true, reason: "no applicable quota row for provider \($p)"}
       elif $profile_floor_state == "unknown" then
@@ -795,5 +860,9 @@ TEXT=$(jq -r '
       + (if .chosen.profile.model then " --model \(.chosen.profile.model | shell_arg)" else "" end)
       + (if .chosen.profile.effort then " --effort \(.chosen.profile.effort | shell_arg)" else "" end)
       + (if .chosen.profile.claude_account then " --claude-account \(.chosen.profile.claude_account | shell_arg)" else "" end) else empty end)' <<<"$RESULT") || emit_error "output rendering failed"
+STATUS=$(jq -r '.status' <<<"$RESULT") || emit_error "status rendering failed"
+PROFILE=$(jq -c 'if .chosen then .chosen.profile | {harness, model: (.model // null), effort: (.effort // null), claude_account: (.claude_account // null)} else null end' <<<"$RESULT") \
+  || emit_error "profile rendering failed"
+record_task "$STATUS" "$PROFILE" || emit_error "could not record the dispatch resolution"
 printf '%s\n' "$TEXT"
 exit 0

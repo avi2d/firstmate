@@ -36,6 +36,7 @@ SH
   printf '%s\n' '{"rules":[{"when":"test work","use":[{"harness":"codex","model":"gpt-5"},{"harness":"grok","model":"grok-4"},{"harness":"pi","model":"claude-bridge/opus-5-5"}]}]}' > "$home/config/crew-dispatch.json"
   fm_git_worktree "$proj" "$wt" "wt-$name"
   fm_test_spawn_brief "$home" "$id"
+  printf '{"task":"%s","status":"ambiguous","profile":null}\n' "$id" > "$home/data/$id/dispatch-resolution.json"
   : > "$launchlog"
   printf '%s\n' "$home|$proj|$wt|$fakebin|$launchlog"
 }
@@ -65,6 +66,8 @@ dispatch-resolve:
   candidate: grok:grok-4  provider=grok  scope=all_models  remaining=50%  spendPriority=10  runway=through_reset  -> eligible
   profile: --harness grok --model grok-4
 EOF
+  printf '{"task":"%s","status":"clear","profile":{"harness":"grok","model":"grok-4","effort":null,"claude_account":null}}\n' \
+    "$(basename "$(dirname "$1")")" > "$(dirname "$1")/dispatch-resolution.json"
 }
 
 write_selection_record() {
