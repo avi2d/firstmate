@@ -676,7 +676,8 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
         {profile: $c, provider: $p, bounds: $bounds, scope: ($floor_row.scope // $c.floor.scope), pct: ($floor_row.effectivePercentRemaining // null), runway: ($floor_row.runway.status // null), eligible: false, reason: "profile floor \($c.floor.scope) below \($c.floor.min_percent)%"}
       elif (row_measured($row) | not) then
         ($rows | first) as $first_row |
-        {profile: $c, provider: $p, bounds: $bounds, scope: ($first_row.scope // null), pct: ($first_row.effectivePercentRemaining // null), runway: ($first_row.runway.status // null), eligible: true, unranked: true, unknown: true, reason: "provider \($p) unmeasured (\($row.quotaSemantics.status))"}
+        {profile: $c, provider: $p, bounds: $bounds, scope: ($first_row.scope // null), pct: ($first_row.effectivePercentRemaining // null), runway: ($first_row.runway.status // null), eligible: true, unranked: true, unknown: true,
+         reason: ("provider \($p) unmeasured (\($row.quotaSemantics.status))" + (if $row.uncertainty then ": " + $row.uncertainty else "" end))}
       elif ($c.quota_scope != null and (any($rows[]; .scope == $c.quota_scope) | not)) then
         {profile: $c, provider: $p, bounds: $bounds, scope: $c.quota_scope, eligible: true, unranked: true, unknown: true, reason: "declared quota_scope \($c.quota_scope) has no quota row for provider \($p): not rankable"}
       elif ($rows | length) == 0 then
@@ -690,8 +691,9 @@ RESULT=$(jq -n --arg floor "$CONFIDENCE_FLOOR" --argjson lat "$LAT_MS" --arg non
       elif $row.clauth then
         ($rows | min_by(.effectivePercentRemaining)) as $limiting |
         {profile: $c, provider: $p, bounds: $bounds, scope: $limiting.scope, pct: $limiting.effectivePercentRemaining, runway: $limiting.runway.status, eligible: true}
-        + (if $cfg.array_order == "preference" then {reason: "ok"}
-           else {unranked: true, reason: "clauth measures windows, not spendPriority: not rankable"} end)
+        + (if $row.uncertainty then {unranked: true} else {} end)
+        + (if $cfg.array_order == "preference" then {reason: (["ok", ($row.uncertainty // empty)] | join(": "))}
+           else {unranked: true, reason: ("clauth measures windows, not spendPriority: not rankable" + (if $row.uncertainty then ": " + $row.uncertainty else "" end))} end)
       elif any($rows[]; (.selection.spendPriority | type) != "number") then
         ($rows | map(select((.selection.spendPriority | type) != "number")) | first) as $bad |
         {profile: $c, provider: $p, bounds: $bounds, scope: $bad.scope, pct: $bad.effectivePercentRemaining, runway: $bad.runway.status, eligible: true, unranked: true, reason: "spendPriority missing or non-numeric at \($bad.scope): not rankable"}
