@@ -142,7 +142,7 @@ No fast mode, path skips, or paid runner provisioning is part of this layout.
 
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the three watch-triage members still sum to about 26 minutes of CI test time and the ten captain-hold members sum to about 21 minutes of macOS local test time.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-Pull requests and pushes run six paired lint shards of two canonical partitions each, capped at 15 minutes, one static gate holding the repo invariants plus the pull request secrets scan, capped at 10 minutes, and the changed-tests gate, capped at 10 minutes.
+Pull requests and pushes run six paired lint shards of two canonical partitions each, capped at 15 minutes, one static gate holding the repo invariants plus the pull request secrets scan, capped at 10 minutes, and four changed-tests shards splitting the selection round-robin, capped at 10 minutes.
 A pull request that touches a shared test helper also runs the portable lanes and the timing aggregate, which keep their dispatch budgets.
 A manual dispatch run adds the coverage guard, twelve portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
 Insufficient shared account capacity can erase the packing gain.
@@ -156,17 +156,17 @@ The workflow retains per-PR supersession without cancelling main pushes or chang
 
 ## Timeouts
 
-CI job timeouts follow one policy: pull request and push runs cap lint at 15 minutes and the static gate and changed-tests gate at 10 minutes, escalated portable lanes keep their dispatch budgets, and manual dispatch jobs use three tiers, so the workflow reads as a policy rather than as a collection of per-job numbers.
+CI job timeouts follow one policy: pull request and push runs cap lint at 15 minutes and the static gate and changed-tests shards at 10 minutes, escalated portable lanes keep their dispatch budgets, and manual dispatch jobs use three tiers, so the workflow reads as a policy rather than as a collection of per-job numbers.
 Every tier is a hang tripwire with headroom above the healthy duration, never a packing estimate or a runtime target.
 A lane that reaches its tier bound needs investigation and a distribution or runtime fix, not a larger timeout to fit the same work.
 
 | Tier | Jobs | Bound | Rationale |
 |---|---|---|---|
-| Pull request and push | paired lint shards, static gate, changed-tests gate | 15 minutes for lint, 10 minutes for the static gate and the changed-tests gate | The jobs that gate a merge. Lint pairs its twelve partitions heaviest with lightest so each shard stays under its cap. |
+| Pull request and push | paired lint shards, static gate, changed-tests gate coordinator and shards | 15 minutes for lint, 10 minutes for the static gate and the changed-tests jobs | The jobs that gate a merge. Lint pairs its twelve partitions heaviest with lightest so each shard stays under its cap. |
 | Dispatch fast | coverage guard, timing aggregate | 5 minutes | Seconds-long local work, so the tripwire only catches a hung runner. |
 | Dispatch normal | portable parallel shards, portable serial shards, macOS stock Bash | 30 minutes, one value shared by every job in the tier | One shared hang tripwire keeps every ordinary test and lint lane on the same policy instead of allowing per-lane packing estimates or one-off caps to set the bound. |
 | Heavy | Herdr | family-run step 20 minutes under a 75-minute job-level last-resort backstop | Healthy runs finish in about 7-10 minutes, so the step tripwire fails a wedged suite while the `always()` cleanup and timing upload still run, and the job cap only catches a hang outside that step. |
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) holds the executable values and names each job's tier beside its `timeout-minutes`.
-[`tests/fm-ci-workflow.test.sh`](../tests/fm-ci-workflow.test.sh) holds the policy against the parsed workflow: every job belongs to exactly one tier, the workflow carries exactly five distinct job-level values, pull request lint is 15 minutes and the static gate and changed-tests gate are 10 minutes, a shared-helper pull request fans out the portable lanes and the timing aggregate, the fast tier stays within 5-10 minutes, the normal jobs share one 30-minute budget, and the Herdr family-run step is the 20-minute tripwire below its job backstop with an `always()` teardown after it.
+[`tests/fm-ci-workflow.test.sh`](../tests/fm-ci-workflow.test.sh) holds the policy against the parsed workflow: every job belongs to exactly one tier, the workflow carries exactly five distinct job-level values, pull request lint is 15 minutes and the static gate and changed-tests jobs are 10 minutes, a shared-helper pull request fans out the portable lanes and the timing aggregate, the fast tier stays within 5-10 minutes, the normal jobs share one 30-minute budget, and the Herdr family-run step is the 20-minute tripwire below its job backstop with an `always()` teardown after it.
 A passing coverage guard does not establish a healthy job duration; refresh the healthy figures above from the lanes' uploaded timing artifacts.

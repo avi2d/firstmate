@@ -120,11 +120,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # Changed-parts behavior gate. Selection, conservatism, and the 1500-second
-  # per-script bound belong to bin/fm-test-run.sh. The detect step reports
-  # whether the pull request touches a shared test helper, and the portable
-  # lanes below fan out on that output. Curated family mappings stay with
-  # --changed: only reference-scanned shared helpers escalate.
+  # Changed-parts behavior gate coordinator. Curated family mappings stay with
+  # --changed: only reference-scanned shared helpers escalate. The detect step
+  # reports whether the pull request touches a shared test helper, and the
+  # portable lanes below fan out on that output. The shard jobs after this one
+  # run the selection; this job only publishes the shared-helper output, so it
+  # stays seconds-long on every pull request and push.
   tests-changed:
     name: Behavior changed tests
     runs-on: ubuntu-24.04
@@ -148,17 +149,49 @@ jobs:
           else
             printf 'shared-helpers=false\n' >>"$GITHUB_OUTPUT"
           fi
+
+  # Changed-parts behavior gate, sharded. One selection never fits a capped
+  # pull request job, so four shards split the sorted selection round-robin
+  # and every selected script runs in exactly one shard. Selection and the
+  # 1500-second per-script bound belong to bin/fm-test-run.sh.
+  tests-changed-shards:
+    name: Behavior changed tests ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
+    # Pull request and push cap (see the timeout policy above).
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Select shard slice
+        id: slice
+        run: |
+          set -eu
+          slice=$(bin/fm-test-run.sh --list --changed --base origin/main | LC_ALL=C sort | awk -v k="${{ matrix.shard }}" '(NR - 1) % 4 == k - 1')
+          {
+            printf 'scripts<<FM_EOF\n'
+            printf '%s\n' "$slice"
+            printf 'FM_EOF\n'
+          } >>"$GITHUB_OUTPUT"
       - name: Install pinned ShellCheck
+        if: steps.slice.outputs.scripts != ''
         run: |
           set -eu
           bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Install pinned actionlint
+        if: steps.slice.outputs.scripts != ''
         run: |
           set -eu
           bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Require tmux for e2e tests
+        if: steps.slice.outputs.scripts != ''
         run: |
           set -eu
           command -v tmux >/dev/null || {
@@ -167,6 +200,7 @@ jobs:
           }
           tmux -V
       - name: Restore cached tasks-axi
+        if: steps.slice.outputs.scripts != ''
         uses: actions/cache@v4
         with:
           path: |
@@ -174,6 +208,7 @@ jobs:
             /usr/local/bin/tasks-axi
           key: tasks-axi-${{ env.FM_CI_TASKS_AXI_VERSION }}-${{ runner.os }}
       - name: Install tasks-axi
+        if: steps.slice.outputs.scripts != ''
         run: |
           set -eu
           if [ -x /usr/local/bin/tasks-axi ] && [ "$(tasks-axi --version)" = "${FM_CI_TASKS_AXI_VERSION}" ]; then
@@ -183,6 +218,7 @@ jobs:
           fi
           tasks-axi --version
       - name: Restore cached Pi package
+        if: steps.slice.outputs.scripts != ''
         uses: actions/cache@v4
         with:
           path: |
@@ -190,6 +226,7 @@ jobs:
             /usr/local/bin/pi
           key: pi-coding-agent-${{ env.FM_CI_PI_VERSION }}-${{ runner.os }}
       - name: Install the Pi package for the Pi extension tests
+        if: steps.slice.outputs.scripts != ''
         run: |
           set -eu
           installed=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/package.json 2>/dev/null | head -1)
@@ -199,19 +236,25 @@ jobs:
             npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
           fi
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
-      - name: Run changed tests
+      - name: Run changed shard
+        if: steps.slice.outputs.scripts != ''
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          bin/fm-test-run.sh --changed --base origin/main \
+          # One script path per line from the slice step; explicit paths keep
+          # the bounded automatic scheduler, with the --changed per-script
+          # bound passed explicitly because naming scripts does not apply it.
+          # shellcheck disable=SC2086
+          bin/fm-test-run.sh ${{ steps.slice.outputs.scripts }} \
+            --per-script-timeout-secs 1500 \
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
-            --json "$RUNNER_TEMP/fm-test/fm-test-timing-changed.json"
-      - name: Upload changed timing artifact
-        if: always()
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-changed-${{ matrix.shard }}.json"
+      - name: Upload changed shard timing artifact
+        if: always() && steps.slice.outputs.scripts != ''
         uses: actions/upload-artifact@v4
         with:
-          name: fm-test-timing-changed
-          path: ${{ runner.temp }}/fm-test/fm-test-timing-changed.json
+          name: fm-test-timing-changed-${{ matrix.shard }}
+          path: ${{ runner.temp }}/fm-test/fm-test-timing-changed-${{ matrix.shard }}.json
           if-no-files-found: warn
 
   # Deterministic proof that portable parallel shards + portable serial + Herdr
