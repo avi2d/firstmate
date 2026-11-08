@@ -119,6 +119,39 @@ gh_read() { # deadline args... : one bounded forge read
   fm_run_timed "$left" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 gh "$@"
 }
 
+# The rollup names the check but not its step, so the step comes from the
+# check's newest failed Actions job. Anything unreadable keeps the check-only
+# wake, so this prints a detail fragment or nothing and never fails the pass.
+resolve_failing_step() { # owner repo head name deadline -> detail or nothing
+  local owner=$1 repo=$2 head=$3 name=$4 deadline=$5
+  local runs ids run_id jobs job attempt steps count detail
+  local run_ids=()
+  [ -n "$owner" ] && [ -n "$repo" ] && [ -n "$head" ] && [ -n "$name" ] || return 0
+  runs=$(gh_read "$deadline" api "repos/$owner/$repo/actions/runs" -f "head_sha=$head" -f per_page=5 2>/dev/null) || return 0
+  ids=$(printf '%s' "$runs" | jq -r '.workflow_runs // [] | .[0:2] | map(.id | tostring) | join(" ")' 2>/dev/null) || return 0
+  [ -n "$ids" ] || return 0
+  read -r -a run_ids <<< "$ids" || return 0
+  for run_id in ${run_ids[@]+"${run_ids[@]}"}; do
+    case "$run_id" in ''|*[!0-9]*) continue ;; esac
+    jobs=$(gh_read "$deadline" api "repos/$owner/$repo/actions/runs/$run_id/jobs" -f filter=latest -f per_page=30 2>/dev/null) || continue
+    job=$(printf '%s' "$jobs" | jq --arg name "$name" '
+      [.jobs[]? | select(.name == $name and .status == "completed" and .conclusion == "failure")]
+      | max_by(.run_attempt // 0) // empty' 2>/dev/null) || continue
+    [ -n "$job" ] || continue
+    attempt=$(printf '%s' "$job" | jq -r '.run_attempt // 0' 2>/dev/null) || continue
+    steps=$(printf '%s' "$job" | jq -r '[.steps[]? | select(.conclusion == "failure") | .name][:3] | join(", ")' 2>/dev/null) || continue
+    count=$(printf '%s' "$job" | jq -r '[.steps[]? | select(.conclusion == "failure")] | length' 2>/dev/null) || continue
+    detail=""
+    case "$attempt" in ''|0) ;; *) detail="attempt $attempt" ;; esac
+    if [ -n "$steps" ]; then detail=${detail:+$detail, }"failing step: $steps"; fi
+    [ "$count" -gt 3 ] 2>/dev/null && detail="$detail and $((count - 3)) more"
+    [ -n "$detail" ] || continue
+    printf '%s' "$detail"
+    return 0
+  done
+  return 0
+}
+
 PR_QUERY='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){
 headRefOid
 statusCheckRollup{contexts(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{__typename
@@ -126,15 +159,17 @@ statusCheckRollup{contexts(first:100,after:$endCursor){pageInfo{hasNextPage endC
 ... on StatusContext{context state createdAt isRequired(pullRequestNumber:$number)}}}}}}}'
 
 # The fingerprint step: previous fingerprint plus one REST and one GraphQL
-# read -> {fp, lines}. A null result means the reads disagree and nothing moves.
+# read -> {fp, conflict, failing, required, head}. A null result means the
+# reads disagree and nothing moves. checks[] entries carry the head, the check
+# name, and the newest observed run start; a new start wakes again, the same
+# start never repeats, and an entry without a start is adopted silently.
 STEP='
   $rest[0] as $r | ($gql[0].data.repository.pullRequest // null) as $g
   | ($prev[0] // {}) as $p
-  | if $r.merged_at != null or $r.state == "closed" then {fp:($p + {final:true}),lines:[]}
+  | if $r.merged_at != null or $r.state == "closed" then {fp:($p + {final:true}),conflict:false,failing:[],required:false,head:null}
     elif $g == null or $g.headRefOid != $r.head.sha then null
     else
       $r.head.sha as $head
-      | ($tasks | join(", ")) as $owners
       | ($g.statusCheckRollup // null) as $roll
       | [$roll.contexts.nodes[]? | if .__typename == "CheckRun"
           then {name, started_at:.startedAt, required:(.isRequired == true),
@@ -143,19 +178,18 @@ STEP='
                 failing:(.state | IN("FAILURE","ERROR"))} end]
         | latest_checks as $ctx
       | any($ctx[]; .required) as $has_required
-      | ([$ctx[] | select(.failing and (.required or ($has_required | not))) | .name] | unique) as $failing
+      | [$ctx[] | select(.failing and (.required or ($has_required | not)))] as $bad
+      | ([$bad[].name]) as $bad_names
       | ($p.conflicts // []) as $conflicts | ($p.checks // []) as $checks
       | ($r.mergeable == false and ($conflicts | index($head) | not)) as $conflict_new
-      | [$failing[] | select(. as $name | any($checks[]; .head == $head and .name == $name) | not)] as $new_failing
-      | (($new_failing | length) > 0) as $checks_new
-      | ("at latest commit " + $head[:7]) as $where
+      | ([$checks[] | select(.head == $head)] | map({(.name): (.started_at // null)}) | add // {}) as $seen
+      | [$bad[] | select(.name as $n | .started_at as $at
+          | ($seen | has($n) | not) or ($seen[$n] != null and $at != null and $seen[$n] != $at))
+        | {name, started_at}] as $new_failing
       | {fp:{conflicts:($conflicts + if $conflict_new then [$head] else [] end),
-             checks:($checks + [$new_failing[] | {head:$head,name:.}])},
-         lines:([
-           (select($conflict_new)
-            | "pr-health: \($url) conflicts with its base \($where) (task \($owners))"),
-           (select($checks_new)
-            | "pr-health: \($url) has failing \(if $has_required then "required " else "" end)checks \($where): \($new_failing[:3] | join(", "))\(if ($new_failing | length) > 3 then " and \(($new_failing | length) - 3) more" else "" end) (task \($owners))")])}
+             checks:([$checks[] | select(.head != $head or (.name as $n | $bad_names | index($n) | not))]
+                     + [$bad[] | {head:$head, name, started_at}])},
+         conflict:$conflict_new, failing:$new_failing, required:$has_required, head:$head}
     end'
 
 read_pr() { # url deadline output-directory -> rest.json gql.json
@@ -248,7 +282,8 @@ enroll_new() { # deadline : enroll recorded and branch PRs not yet durably owned
 }
 
 poll() {
-  local deadline timeout url step pid index=0 read_dir
+  local deadline timeout url step pid index=0 read_dir owners head_full short required_word
+  local detail_owner detail_repo display shown extra name entry detail
   local pids=()
   flag_on || exit 0
   [ -d "$STATE" ] && [ ! -L "$STATE" ] || fail 'state directory unavailable'
@@ -305,11 +340,41 @@ poll() {
     [ -f "$read_dir/ok" ] || continue
     jq -L "$SCRIPT_DIR" -n --arg url "$url" --slurpfile rest "$read_dir/rest.json" --slurpfile gql "$read_dir/gql.json" \
       --slurpfile prev <(jq --arg url "$url" '.prs[$url] // {}' "$TMP/health.json") \
-      --argjson tasks "$(jq -c --arg url "$url" '[.[] | select(.url == $url) | .tasks[]] | unique' "$TMP/owned.json")" \
       "include \"fm-contributions\"; $STEP" > "$TMP/step.json" 2>/dev/null || continue
     step=$(cat "$TMP/step.json")
     [ "$step" != null ] || continue
-    jq -r '.lines[]' "$TMP/step.json"
+    owners=$(jq -r --arg url "$url" '[.[] | select(.url == $url) | .tasks[]] | unique | join(", ")' "$TMP/owned.json")
+    head_full=$(printf '%s' "$step" | jq -r '.head // ""')
+    short=${head_full:0:7}
+    if [ "$(printf '%s' "$step" | jq -r '.conflict')" = true ]; then
+      printf 'pr-health: %s conflicts with its base at latest commit %s (task %s)\n' "$url" "$short" "$owners"
+    fi
+    if [ "$(printf '%s' "$step" | jq -r '.failing | length')" -gt 0 ]; then
+      if [ "$(printf '%s' "$step" | jq -r '.required')" = true ]; then required_word='required '; else required_word=''; fi
+      detail_owner=
+      if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ]; then
+        detail_owner=$FM_PR_OWNER
+        detail_repo=${FM_PR_PATH#*/}
+      fi
+      display=; shown=0; extra=0
+      while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        if [ "$shown" -lt 3 ]; then
+          entry=$name
+          if [ -n "$detail_owner" ]; then
+            detail=$(resolve_failing_step "$detail_owner" "$detail_repo" "$head_full" "$name" "$deadline")
+            if [ -n "$detail" ]; then entry="$name ($detail)"; fi
+          fi
+          display=${display:+$display, }$entry
+          shown=$((shown + 1))
+        else
+          extra=$((extra + 1))
+        fi
+      done < <(printf '%s' "$step" | jq -r '.failing[].name')
+      if [ "$extra" -gt 0 ]; then display="$display and $extra more"; fi
+      printf 'pr-health: %s has failing %schecks at latest commit %s: %s (task %s)\n' \
+        "$url" "$required_word" "$short" "$display" "$owners"
+    fi
     jq --arg url "$url" --slurpfile step "$TMP/step.json" '.prs[$url] = $step[0].fp' "$TMP/health.json" > "$TMP/next.json"
     if ! cmp -s "$TMP/next.json" "$TMP/health.json"; then
       save_health "$TMP/next.json"
