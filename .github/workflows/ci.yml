@@ -35,8 +35,9 @@ env:
   FM_CI_CHECKS_VERSION: '0.57.0'
   FM_CI_BUN_VERSION: '1.4.3'
 
-# Timeout policy: every job on a pull request or push run is capped at 10
-# minutes. Manual dispatch jobs keep the tiers in docs/fm-test-portable-shards.md "Timeouts".
+# Timeout policy: paired lint shards are capped at 15 minutes and every other
+# pull request or push job at 10 minutes. Manual dispatch jobs keep the tiers
+# in docs/fm-test-portable-shards.md "Timeouts".
 # Each job comment identifies the tier implemented by its executable value.
 
 # Fork opt-out: the repository variable FM_CI_SKIP_PUSH=1 skips the push run,
@@ -46,15 +47,37 @@ env:
 # workflow filtered out at the trigger stays pending and blocks the merge.
 jobs:
   lint:
-    name: Lint ${{ matrix.partition }}
+    name: Lint ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
-    # Pull request and push cap (see the timeout policy above).
-    timeout-minutes: 10
+    # Pull request and push lint cap (see the timeout policy above).
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        # Six shards of two canonical partitions, paired heaviest with
+        # lightest from measured runs so every shard runs about nine
+        # sequential minutes. The pairs stay here as data so the workflow
+        # test can prove they still cover the canonical twelve exactly once.
+        include:
+          - shard: 1
+            part_a: 4
+            part_b: 11
+          - shard: 2
+            part_a: 7
+            part_b: 5
+          - shard: 3
+            part_a: 1
+            part_b: 3
+          - shard: 4
+            part_a: 6
+            part_b: 10
+          - shard: 5
+            part_a: 8
+            part_b: 12
+          - shard: 6
+            part_a: 2
+            part_b: 9
     steps:
       - uses: actions/checkout@v6
       - name: Install pinned ShellCheck
@@ -71,7 +94,7 @@ jobs:
       # and GitHub workflow lint). Do not re-spell the checks here; keep CI
       # and the pre-push gate on this script so a self-broken ci.yml still
       # fails locally before merge.
-      - name: Lint canonical partition
+      - name: Lint canonical partition pair
         env:
           # Fail closed rather than lint uncapped when a configured per-root
           # bound (wall deadline or memory rlimit) cannot be enforced here.
@@ -80,16 +103,18 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-lint"
-          bin/fm-lint.sh --partition "${{ matrix.partition }}of${{ strategy.job-total }}" \
-            --telemetry "$RUNNER_TEMP/fm-lint/partition-${{ matrix.partition }}.tsv"
+          for part in '${{ matrix.part_a }}' '${{ matrix.part_b }}'; do
+            bin/fm-lint.sh --partition "${part}of12" \
+              --telemetry "$RUNNER_TEMP/fm-lint/partition-${part}.tsv"
+          done
       - name: Upload lint telemetry
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fm-lint-telemetry-${{ matrix.partition }}
+          name: fm-lint-telemetry-shard-${{ matrix.shard }}
           path: |
-            ${{ runner.temp }}/fm-lint/partition-${{ matrix.partition }}.tsv
-            ${{ runner.temp }}/fm-lint/partition-${{ matrix.partition }}.roots.tsv
+            ${{ runner.temp }}/fm-lint/partition-*.tsv
+            ${{ runner.temp }}/fm-lint/partition-*.roots.tsv
           if-no-files-found: warn
           retention-days: 7
 
@@ -658,38 +683,22 @@ jobs:
           FM_TEST_STOCK_BASH=1 FM_TEST_BASH=/bin/bash \
             /bin/bash bin/fm-test-tap-verify.sh tests/fm-backend.test.sh
 
-  # Required pull-request gate: checks-secrets scans the lines each commit in
-  # the PR's range adds with the kit's pinned gitleaks rules, and fails the PR
-  # on any secret. CHECKS_SECRETS_PACK stays unset, so no private pack runs.
-  secrets:
-    name: Secrets
-    runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'pull_request' }}
-    # Pull request and push cap (see the timeout policy above).
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.FM_CI_BUN_VERSION }}
-      - name: Scan the PR range for added secrets
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -eu
-          bunx --package "@avi2dg/checks@$FM_CI_CHECKS_VERSION" checks-secrets "$BASE_SHA" "$HEAD_SHA"
-
-  invariants:
-    name: Repo invariants
+  # One static gate: the repo invariants run on every pull request and push,
+  # and the added-lines secrets scan joins them on pull requests, sharing one
+  # checkout and one runner instead of two. CHECKS_SECRETS_PACK stays unset,
+  # so no private pack runs.
+  static:
+    name: Static checks
     runs-on: ubuntu-24.04
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
     # Pull request and push cap (see the timeout policy above).
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The secrets scan diffs the pull request range, so the gate takes
+          # full history even though the invariants need none of it.
+          fetch-depth: 0
       - name: Compatibility pointers must stay intact
         run: |
           set -eu
@@ -710,4 +719,16 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          bun-version: ${{ env.FM_CI_BUN_VERSION }}
+      - name: Scan the PR range for added secrets
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          bunx --package "@avi2dg/checks@$FM_CI_CHECKS_VERSION" checks-secrets "$BASE_SHA" "$HEAD_SHA"
 
