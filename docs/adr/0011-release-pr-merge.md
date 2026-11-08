@@ -68,8 +68,15 @@ exception; every other unreadable required source refuses.
 Every failing condition is reported, not just the first.
 The verified head is then passed to gh as
 --match-head-commit, so a push that lands between that read and the merge
-fails the merge instead of landing commits nothing verified. Reading that
-state needs gh and jq, and either one absent stops the merge before any
+fails the merge instead of landing commits nothing verified.
+An optional --expected-head <full-sha> pins the commit the caller already
+reviewed. It must be one full lowercase hex commit of 40 or 64 characters,
+given once as its own argument. The initial live head must equal it or the
+request is refused before any forge write. The forge head match receives that same
+supplied value on GitHub, GitLab, and Forgejo. A later preflight in this run
+does not replace it with a newly read head. Omitting the flag keeps the
+previous behavior: the live head read at verification is the matched value.
+Reading that state needs gh and jq, and either one absent stops the merge before any
 state is recorded. An attended --allow-red <check-name> may be passed once,
 with the name as a separate argument; it waives only checks with that exact
 name, still requires every other check green, and still binds the head. Its
@@ -89,6 +96,33 @@ GraphQL API supplies that queue-aware read; when that read fails, gh-axi's
 own view still proves a landed merge, and every outcome it cannot prove
 refuses, reporting the failed gh read and naming both failed reads when the
 gh-axi view could not prove the outcome either.
+A source-branch update is only a substep of an already-authorized merge
+request: fm-pr-merge resolves the merge authority, passes the captain-hold
+check and full live preflight, then re-resolves authority under the merge
+locks before it updates. This helper has no standalone branch-update path;
+any refused pre-update guard stops before the update.
+Updating a green BEHIND GitHub PR requires explicit --update-branch consent on the
+authorized merge request; without it, refusal leaves the source branch alone.
+Consent includes retaining the update if checks on the new head later fail.
+With that opt-in, any merge method may update the branch.
+A supplied --expected-head remains pinned through the update: the source
+branch may advance under explicit consent, but merging that new head needs
+a new authorized request naming it as the expected head.
+The REST update is bound to the verified old head with expected_head_sha;
+a concurrent push refuses the update without changing that replacement head,
+and this request never retries against the newly observed head.
+An accepted update uses GitHub's merge-commit default. Under the merge and
+away locks, a shared polling budget (15 seconds by default) covers waiting for
+the new head to appear, recording it, and waiting for its checks and a transient
+UNKNOWN mergeable state to settle. Every poll repeats the full preflight,
+even before the updated head appears. A draft, closed PR, conflict, unreadable
+required-check source or producer, or any other non-transient refusal stops
+the wait immediately, even while checks are pending or missing. Any unwaived
+failed check also refuses immediately. These refusals release both locks and
+report the actual reason without advice to retry once checks pass. Only an
+unseen updated head, unsettled checks, or UNKNOWN mergeability are awaited.
+If that budget expires, the helper stops without merging and says to run
+the merge again once checks pass.
 If the pull request remains open and the base branch has an effective
 merge_queue rule, an attended refusal names the queue's configured merge
 method and exact --attended-override -- --auto --<method> retry flags. While
@@ -185,8 +219,9 @@ still-matching task metadata.
 
 Extra args must not include --repo or -R in any form, including a bundled
 short-option cluster such as -yR, because the repository comes only from the
-URL, nor --sha or --match-head-commit because the head comes only from the
-live read. An existing task-meta pr= must equal the requested canonical URL,
+URL, nor --sha or --match-head-commit. The head match is the live read, or
+the supplied --expected-head when the caller passed one. An existing task-meta
+pr= must equal the requested canonical URL,
 unless that bound PR has already merged - proven by its recorded merge
 notification - in which case the task's next PR is accepted so several PRs
 from one task can each merge in turn; while the bound PR is still unmerged a
@@ -198,7 +233,7 @@ before the optional -- separator, re-enables those forge flags for an
 explicit captain instruction and never skips the live green check, the
 away-record read, or a captain hold.
 
-Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [-- <extra forge merge args>]
+Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--update-branch] [--expected-head <full-sha>] [--allow-red <check-name>] [--allow-missing <check-name>] [--allow-no-pipeline] [-- <extra forge merge args>]
 
 On GitLab, this script confirms the MR is actually merged before reporting it;
 an auto-merge-queued or unconfirmed request leaves the poll armed and records

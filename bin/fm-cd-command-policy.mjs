@@ -9,11 +9,21 @@
 // scoping to the real primary checkout lives in the bin/fm-cd-pretool-check.sh
 // transport, not here. See docs/cd-guard.md for the full contract.
 //
+// One target is exempt: a `cd` or `pushd` whose single literal absolute
+// argument resolves to exactly the home passed as --home under both path rules:
+// logical (`..` collapsed lexically, Bash's default) and physical (symlinks
+// followed component by component, as under `set -P`). Either rule leaving the
+// home, or failing to resolve, denies. That command cannot
+// move the shell out of the home, so it is allowed. A relative, expanded, tilde,
+// glob, or option-bearing target is never resolved and stays denied, as does
+// every popd. Without --home no target is exempt.
+//
 // The shell tokenizer and command-position analysis are imported from
 // bin/fm-arm-command-policy.mjs, the sole owner of firstmate's shell
 // classification, so this guard never duplicates shell lexing. This policy
 // never evaluates, expands, sources, or runs any byte of the submitted command;
-// it inspects lexical command positions only.
+// it inspects lexical command positions only, and resolves the one literal
+// absolute path it compares against the home.
 
 import { Lexer, splitProgram, commandPosition } from "./fm-arm-command-policy.mjs";
 import path from "node:path";
@@ -62,7 +72,7 @@ function isHomeTarget(words, homeReal) {
   if (!word.literal || word.subs.length > 0 || word.unquotedExpansion) return false;
   if (!path.isAbsolute(word.value)) return false;
   try {
-    return realpathSync(word.value) === homeReal;
+    return realpathSync(word.value) === homeReal && realpathSync.native(word.value) === homeReal;
   } catch {
     return false;
   }
@@ -96,7 +106,7 @@ function decision(command, home) {
   let homeReal = "";
   if (home) {
     try {
-      homeReal = realpathSync(home);
+      homeReal = realpathSync.native(home);
     } catch {
       homeReal = "";
     }

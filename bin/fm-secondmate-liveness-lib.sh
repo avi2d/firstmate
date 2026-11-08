@@ -28,8 +28,9 @@
 # remote route is never replaced by a local endpoint.
 #
 # Replacement relaunch goes through `bin/fm-spawn.sh <id> --secondmate` with
-# FM_SPAWN_NO_GUARD=1, the same guarded path every recovery uses. That path
-# re-resolves placement from the task's own metadata and registry route, so a
+# FM_SPAWN_NO_GUARD=1, the same guarded path every recovery uses. A local mate
+# is pinned to its recorded backend. That path re-resolves placement from the
+# task's own metadata and registry route, so a
 # remote mate is relaunched on its recorded remote host through bin/fm-on.sh -
 # never as a local replacement - behind fm-spawn's own readiness gate and
 # per-task spawn lock.
@@ -37,7 +38,8 @@
 # Modes:
 #   full - session-start sweep: remote routes run the full readiness repair
 #          sequence before probing, and an alive remote route is revalidated
-#          (route readable, backend herdr) so the sweep reports drift.
+#          (route readable, backend matches the recorded one) so the sweep
+#          reports drift.
 #   poll - watcher tick: remote routes take one read-only state probe per
 #          check; repair still happens, but inside fm-spawn's launch gate only
 #          when a relaunch is actually authorized.
@@ -150,7 +152,7 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
   local meta=$1 id=$2 mode=$3
   FM_SM_LIVE_STATUS=skipped FM_SM_LIVE_STATE=unknown FM_SM_LIVE_KILL=0 FM_SM_LIVE_RESUME=0
   FM_SM_LIVE_CAUSE='' FM_SM_LIVE_WHERE='' FM_SM_LIVE_REASON='' FM_SM_LIVE_LINE=''
-  local window harness remote_host remote_rc out agent_state readiness_reason remote_backend startup_call_budget
+  local window harness remote_host remote_rc out agent_state readiness_reason remote_backend startup_call_budget expected_remote_backend
   window=$(fm_meta_get "$meta" window)
   [ -n "$window" ] || { FM_SM_LIVE_STATUS=silent; return 0; }
   harness=$(fm_meta_get "$meta" harness)
@@ -162,9 +164,13 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
       FM_SECOND_MATE_STARTUP_CALL_TIMEOUT=$startup_call_budget
       export FM_SECOND_MATE_STARTUP_CALL_TIMEOUT
     fi
+    # A record written before rex existed carries no remote_backend; those
+    # endpoints are herdr.
+    expected_remote_backend=$(fm_meta_get "$meta" remote_backend)
+    [ -n "$expected_remote_backend" ] || expected_remote_backend=herdr
     if [ "$mode" = full ]; then
       remote_rc=0
-      fm_remote_readiness_ensure "$FM_SM_LIVE_LIB_DIR" "$id" || remote_rc=$?
+      fm_remote_readiness_ensure "$FM_SM_LIVE_LIB_DIR" "$id" "$expected_remote_backend" || remote_rc=$?
       if [ "$remote_rc" -ne 0 ] && [ "$remote_rc" -ne 255 ] && [ -z "$FM_REMOTE_READINESS_OUT" ]; then
         remote_rc=124
       fi
@@ -220,8 +226,15 @@ fm_secondmate_liveness_probe() {  # <meta> <id> <full|poll>
             FM_SM_LIVE_REASON="alive remote endpoint route is unreadable on $remote_host; inspect and migrate or retire it explicitly"
             return 0
           fi
-          if [ "$remote_backend" != herdr ]; then
-            FM_SM_LIVE_REASON="alive remote endpoint is recorded on backend '${remote_backend:-missing}'; migrate or retire it explicitly"
+          case "$remote_backend" in
+            herdr | rex) ;;
+            *)
+              FM_SM_LIVE_REASON="alive remote endpoint is recorded on backend '${remote_backend:-missing}'; migrate or retire it explicitly"
+              return 0
+              ;;
+          esac
+          if [ "$remote_backend" != "$expected_remote_backend" ]; then
+            FM_SM_LIVE_REASON="alive remote endpoint runs on backend '$remote_backend', but this home recorded '$expected_remote_backend'; migrate or retire it explicitly"
             return 0
           fi
         fi
@@ -381,10 +394,16 @@ fm_secondmate_liveness_relaunch() {  # <meta> <id> [timeout-secs]
     fm_lock_release "$relaunch_lock" || true
     return "$rc"
   fi
+  # The respawn stays on the backend the mate is recorded on: a changed
+  # config/backend applies to new spawns, and moving a live mate to another
+  # backend is the explicit `fm-control.sh <id> relaunch --backend` path.
+  # A remote mate's backend is its host's, so it is never pinned from here.
+  local -a respawn_args=("$id" --secondmate)
+  [ -n "$(fm_meta_get "$meta" remote_host)" ] || respawn_args+=(--backend "$(fm_backend_of_meta "$meta")")
   if [ -n "$timeout" ]; then
-    FM_SM_LIVE_OUT=$(FM_SPAWN_NO_GUARD=1 fm_run_timed "$timeout" "$FM_ROOT/bin/fm-spawn.sh" "$id" --secondmate 2>&1) || rc=$?
+    FM_SM_LIVE_OUT=$(FM_SPAWN_NO_GUARD=1 fm_run_timed "$timeout" "$FM_ROOT/bin/fm-spawn.sh" "${respawn_args[@]}" 2>&1) || rc=$?
   else
-    FM_SM_LIVE_OUT=$(FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "$id" --secondmate 2>&1) || rc=$?
+    FM_SM_LIVE_OUT=$(FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${respawn_args[@]}" 2>&1) || rc=$?
   fi
   FM_SM_LIVE_RC=$rc
   if [ "$rc" -eq 0 ]; then

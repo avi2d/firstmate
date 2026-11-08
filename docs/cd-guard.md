@@ -54,6 +54,15 @@ The guard **allows** everything else, including these safe scoped forms that mus
 An absolute-path `cd` away from home is blocked on purpose: the ALLOW carve-out for absolute paths is for commands that address a target by absolute path, not for `cd`, which relocates the shell itself regardless of whether its argument is relative or absolute.
 A `cd` whose single target is the home root itself is allowed instead: the shell is already home, so nothing moves, and the steady state stays "always at the home".
 
+### The home itself
+
+The one allowed `cd` or `pushd` target is the home: a top-level `cd` or `pushd` whose single literal absolute argument resolves to exactly the primary checkout the transport scoped to, such as `cd /path/to/home`, `cd -- /path/to/home`, `cd /link/to/home`, `cd /path/to/home/bin/..`, or `pushd /path/to/home`.
+That command cannot move the shell out of the home, so denying it was only friction.
+The transport passes the checkout as `--home` to the policy, which compares the target against the symlink-resolved home by exact path under two rules: logical, with `..` collapsed lexically as Bash does by default, and physical, with symlinks followed component by component as under `set -P`.
+A target that leaves the home under either rule, such as `cd /path/to/home/link/..` where `link` points outside the home, is denied.
+Everything else stays denied: a child such as `cd /path/to/home/bin`, a sibling or parent directory, a relative target such as `cd .`, a target carrying an expansion, substitution, tilde, or glob the policy would have to evaluate, such as `cd "$PWD"` or `cd ~`, a `cd` with options such as `cd -P /path/to/home` or with extra arguments, any `popd`, and a later `cd` in the same command list, such as `cd /path/to/home && cd projects/foo`.
+Without `--home` the policy exempts no target.
+
 ### Accepted non-goals
 
 Consistent with the agent-mistake threat model, the guard deliberately does not chase every obfuscated bypass:
@@ -130,7 +139,8 @@ Every shell variable reference in the Grok hook command carries an inline defaul
 
 `tests/fm-cd-pretool-check.test.sh` owns the acceptance matrix.
 Every block and allow case runs through Codex-shaped stdin, Claude-shaped stdin, Grok-shaped stdin, OpenCode-shaped CLI, and Pi-shaped CLI entry forms.
-The suite also proves the end-to-end cwd-leak regression (a firstmate-owned backlog write leaking into a project clone, then denied at the exact command), the checkout scoping (fires in a git-cloned secondmate fixture, inert in a crewmate/scout linked worktree, inert outside a firstmate checkout, inert outside a git repo), the fail-open transport behavior, the prefilter fast path, the policy CLI output contract, and the per-harness wiring.
+The suite also proves the home exemption: a literal absolute `cd` or `pushd` to the primary checkout, with and without a symlink, is allowed, and a child, sibling, parent, `popd`, option-bearing, unexpanded, or glob target is denied.
+It also proves the end-to-end cwd-leak regression, where a firstmate-owned backlog write leaks into a project clone and is then denied at the exact command, the checkout scoping, which fires in a git-cloned secondmate fixture and stays inert in a crewmate or scout linked worktree, outside a firstmate checkout, and outside a git repo, the fail-open transport behavior, the prefilter fast path, the policy CLI output contract, and the per-harness wiring.
 
 Run:
 
