@@ -1422,6 +1422,10 @@ fm_remote_job_ensure_worker() { # <remote-root> <account-home>
   }
   platform=$(fm_remote_job_platform)
   if [ "$platform" = darwin ]; then
+    if [ -n "${FM_REMOTE_JOB_STATE_ROOT:-}" ]; then
+      FM_REMOTE_JOB_ERROR="private remote job state cannot use the account LaunchAgent"
+      return 1
+    fi
     uid=$(id -u 2>/dev/null || true)
     case "$uid" in ''|*[!0-9]*) FM_REMOTE_JOB_ERROR="remote account uid is unavailable; run fm-on.sh <route> fm-remote-doctor.sh --fix"; return 1 ;; esac
     if ! fm_remote_job_gui_available "$uid"; then

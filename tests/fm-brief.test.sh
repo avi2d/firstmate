@@ -1853,6 +1853,17 @@ test_scout_brief_requires_references_section() {
   pass "fm-brief.sh: scout brief ends the report with the teardown-accepted References heading"
 }
 
+test_remote_brief_marks_task_for_host_scaffold() {
+  local home="$TMP_ROOT/remote-home" brief
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" remote-scout project --scout --remote >/dev/null 2>&1 \
+    || fail "remote scout scaffold was rejected"
+  brief="$home/data/remote-scout/brief.md"
+  assert_grep 'Remote worker brief: host-local scaffold' "$brief" "remote brief is not marked"
+  pass "remote scout brief identifies host-local scaffolding"
+}
+
+test_remote_brief_marks_task_for_host_scaffold
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
