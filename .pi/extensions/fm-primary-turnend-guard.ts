@@ -536,6 +536,27 @@ function runChecker(script: string, command: string): Promise<{ code: number; st
   });
 }
 
+function runAwayOffer(): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolveResult) => {
+    const invocation = firstmateShellInvocation(`${root}/bin/fm-turnend-guard.sh`, ["--away-offer"]);
+    let child: ChildProcess;
+    try {
+      child = spawn(invocation.command, invocation.args, {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      resolveResult({ code: 1, stdout: "" });
+      return;
+    }
+    let stdout = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.on("error", () => resolveResult({ code: 1, stdout: "" }));
+    child.on("close", (code) => resolveResult({ code: code ?? 1, stdout }));
+  });
+}
+
 function runPretoolCheck(command: string): Promise<{ code: number; stderr: string }> {
   return runChecker("fm-arm-pretool-check.sh", command);
 }
@@ -652,7 +673,24 @@ export default function (pi: ExtensionAPI) {
     if (event.aborted) return;
 
     const result = await runGuard();
-    if (result.code !== 2) return;
+    if (result.code !== 2) {
+      // The offer follow-up settles into a fresh guarded turn: the --away-offer
+      // throttle bounds it to one offer per window, so this path leaves the
+      // latch to the repair path.
+      const offer = await runAwayOffer();
+      if (offer.code === 0 && offer.stdout.trim()) {
+        try {
+          const content = encodeFirstmateOperationalInput(
+            "turn-end-guard",
+            offer.stdout.trim(),
+          );
+          await pi.sendUserMessage(content, { deliverAs: "followUp" });
+        } catch {
+          // Advisory only: a failed offer delivery never disturbs the turn.
+        }
+      }
+      return;
+    }
 
     guardFollowupActive = true;
     try {

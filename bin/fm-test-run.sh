@@ -1652,6 +1652,7 @@ families_for_changed_path() {
     bin/fm-wake*|bin/fm-inactive-reconcile.sh|\
     bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
+      printf '%s\n' "__script__:fm-turnend-away-offer.test.sh"
       ;;
     bin/fm-afk*)
       printf '%s\n' afk
@@ -1779,6 +1780,7 @@ families_for_changed_path() {
       # The run tier's two harness-supplied facts (source vocabulary and
       # context-reset stdout injection) only show up against a real harness.
       printf '%s\n' __script__:fm-pi-windows-shell-invocation.test.sh
+      printf '%s\n' __script__:fm-turnend-away-offer.test.sh
       printf '%s\n' session-bootstrap
       printf '%s\n' live-harness-optin
       ;;
