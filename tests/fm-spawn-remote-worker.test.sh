@@ -24,7 +24,11 @@ cat > "$FAKE_ROOT/bin/fm-on.sh" <<'SH'
 set -eu
 case "$*" in
   *' capabilities') printf 'fm-remote-worker-control.v1\n' ;;
-  *' launch '*) cat >/dev/null; printf 'schema=fm-remote-worker-control.v1\nbackend=herdr\ntarget=fm-lab-test:w1:pane1\nherdr_session=fm-lab-test\nkind=%s\nharness=pi\nworktree=/remote/worktree\nproject=/remote/home/projects/alpha\n' "$7" ;;
+  *' launch '*)
+    cat >/dev/null
+    target=fm-lab-test:w1:pane1
+    [ "${FM_TEST_BAD_TARGET:-0}" != 1 ] || target=fm-lab-test:bad/path
+    printf 'schema=fm-remote-worker-control.v1\nbackend=herdr\ntarget=%s\nherdr_session=fm-lab-test\nkind=%s\nharness=pi\nworktree=/remote/worktree\nproject=/remote/home/projects/alpha\n' "$target" "$7" ;;
   *) exit 1 ;;
 esac
 SH
@@ -51,4 +55,12 @@ awk '$0 == "{TASK}" {print "Change alpha."; next} $0 == "{FIRSTMATE_SPEC}" {prin
 mv "$TMP_ROOT/ship-brief" "$HOME_DIR/data/ship-one/brief.md"
 out=$(FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" FM_SPAWN_NO_GUARD=1 bash "$FAKE_ROOT/bin/fm-spawn.sh" ship-one "$HOME_DIR/projects/alpha" --mode direct-PR --yolo off --harness pi 2>&1) || fail "remote forge ship was refused: $out"
 assert_grep 'mode=direct-PR' "$HOME_DIR/state/ship-one.meta" "remote ship mode was lost"
+assert_grep 'branch=fm/ship-one' "$HOME_DIR/state/ship-one.meta" "remote ship branch was lost"
+assert_no_grep 'mode=-' "$HOME_DIR/state/test-task.meta" "scout metadata invented a delivery mode"
 pass "remote ship accepts its selected forge contract"
+FM_HOME="$HOME_DIR" "$ROOT/bin/fm-tasks-axi.sh" add bad-route 'Research alpha' --kind scout >/dev/null
+mkdir -p "$HOME_DIR/data/bad-route"
+printf '# Task\n## Captain\x27s intent\nResearch.\n\n## Firstmate spec\nReport evidence.\n' > "$HOME_DIR/data/bad-route/brief.md"
+out=$(FM_TEST_BAD_TARGET=1 FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" FM_SPAWN_NO_GUARD=1 bash "$FAKE_ROOT/bin/fm-spawn.sh" bad-route "$HOME_DIR/projects/alpha" --scout --harness pi 2>&1) && fail "remote launch accepted a malformed endpoint"
+assert_grep 'remote_target=pending' "$HOME_DIR/state/bad-route.meta" "ambiguous launch was not preserved"
+pass "remote launch preserves an unconfirmed record instead of accepting a malformed endpoint"

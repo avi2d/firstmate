@@ -47,7 +47,7 @@ route() {
 launch() {
   local id=$1 project=$2 kind=$3 mode=$4 yolo=$5 prefix=$6 base=$7 harness=$8 model=$9
   shift 9
-  local effort=$1 backend=$2 temp session out contract token forge=none shape= pr=auto
+  local effort=$1 backend=$2 temp session out contract token forge=none shape='' pr=auto
   local -a brief_args spawn_args contract_fields
   validate_home
   case "$id" in ''|.|-*|*[!A-Za-z0-9._-]*|*..*) die "invalid task or project id" ;; esac
@@ -95,6 +95,9 @@ launch() {
     { print }
   ' "$TARGET_HOME/data/$id/brief.md" > "$temp/brief"
   mv "$temp/brief" "$TARGET_HOME/data/$id/brief.md"
+  if [ -f "$TARGET_HOME/config/crew-dispatch.json" ]; then
+    FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-dispatch-resolve.sh" "$TARGET_HOME/data/$id/brief.md" --project "$project" >/dev/null || die "host-local dispatch resolution failed"
+  fi
   session=$(execution_session)
   if ! out=$(FM_HOME="$TARGET_HOME" HERDR_SESSION="$session" "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" 2>&1); then
     printf '%s\n' "$out" >&2

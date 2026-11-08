@@ -16,7 +16,7 @@ if [ "$(uname -s)" = Darwin ]; then
   PRIVATE_AGENTS="$TMP_ROOT/private-home/Library/LaunchAgents"
   mkdir -p "$PRIVATE_AGENTS"
   cp /usr/bin/true "$FAKE/launchctl"
-  case "$AGENTS:$PRIVATE_AGENTS:$FAKE" in *'"'*|*'\\'*) fail "sandbox paths contain unsupported quoting" ;; esac
+  case "$AGENTS:$PRIVATE_AGENTS:$FAKE" in *'"'*|*\\*) fail "sandbox paths contain unsupported quoting" ;; esac
   printf '(version 1)(allow default)(deny file-write* (subpath "%s") (subpath "%s"))(deny process-exec (literal "/bin/launchctl") (literal "%s/launchctl"))\n' "$AGENTS" "$PRIVATE_AGENTS" "$FAKE" > "$TMP_ROOT/sandbox.sb"
   SANDBOX=(/usr/bin/sandbox-exec -f "$TMP_ROOT/sandbox.sb")
   touch "$PRIVATE_AGENTS/probe"

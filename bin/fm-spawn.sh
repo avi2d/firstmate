@@ -1755,7 +1755,7 @@ spawn_remote_secondmate() {
 
 spawn_remote_worker() {
   local route=$1 project=$2 host=$3 root home session harness backend brief meta tmp out rc target remote_kind remote_harness remote_session worktree remote_project
-  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch
+  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen
   local -a contract_fields
   [ "${#POS[@]}" -eq 2 ] || { echo "error: remote workers require one project argument" >&2; return 1; }
   case "$project" in ''|*[!A-Za-z0-9._-]*|*..*) echo "error: invalid remote project name" >&2; return 1 ;; esac
@@ -1776,7 +1776,10 @@ spawn_remote_worker() {
   case "$harness" in claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp|agy|muse|gemini|rovo|devin|commandcode|polytoken|cortex|kiro) ;; *) echo "error: unverified remote worker harness $harness" >&2; return 1 ;; esac
   brief="$DATA/$ID/brief.md"
   [ -f "$brief" ] && [ ! -L "$brief" ] || { echo "error: remote worker brief is unavailable" >&2; return 1; }
-  fm_brief_task_content_valid "$brief" && ! fm_brief_task_placeholders_present "$brief" || { echo "error: remote worker task sections are incomplete" >&2; return 1; }
+  if ! fm_brief_task_content_valid "$brief" || fm_brief_task_placeholders_present "$brief"; then
+    echo "error: remote worker task sections are incomplete" >&2
+    return 1
+  fi
   if fm_brief_intent_address_line "$brief" >/dev/null; then echo "error: remote worker intent has a direct address" >&2; return 1; fi
   if [ -f "$CONFIG/crew-dispatch.json" ]; then
     [ -f "$DATA/$ID/dispatch-resolution.json" ] || { echo "error: remote worker requires dispatch resolution" >&2; return 1; }
@@ -1822,7 +1825,10 @@ spawn_remote_worker() {
   [ ! -e "$meta" ] && [ ! -L "$meta" ] || { echo "error: task $ID already has metadata" >&2; return 1; }
   if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
     transition=1
-    fm_backlog_row_probe "$DATA" "$ID" && fm_backlog_row_dispatchable "$FM_BACKLOG_ROW_STATE" || { echo "error: task $ID has no dispatchable backlog item" >&2; return 1; }
+    if ! fm_backlog_row_probe "$DATA" "$ID" || ! fm_backlog_row_dispatchable "$FM_BACKLOG_ROW_STATE"; then
+      echo "error: task $ID has no dispatchable backlog item" >&2
+      return 1
+    fi
   else
     rc=$?
     [ "$rc" -ne 2 ] || { echo "error: backlog is inaccessible: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
@@ -1833,9 +1839,16 @@ spawn_remote_worker() {
   fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
   SPAWN_META_LOCK_HELD=1
   tmp="$STATE/.$ID.remote-meta.$$"
+  remote_spawn_gen="s$(date +%s).${BASHPID:-$$}.$RANDOM"
   {
     printf 'window=remote:%s\nendpoint_task_id=%s\nworktree=%s\nproject=%s/projects/%s\n' "$ID" "$ID" "$home" "$home" "$project"
-    printf 'kind=%s\nmode=%s\nyolo=%s\nharness=%s\nmodel=%s\neffort=%s\n' "$KIND" "$mode_arg" "$yolo_arg" "$harness" "$MODEL" "$EFFORT"
+    printf 'kind=%s\nharness=%s\nmodel=%s\neffort=%s\nspawn_gen=%s\n' "$KIND" "$harness" "${MODEL:-default}" "${EFFORT:-default}" "$remote_spawn_gen"
+    if [ "$KIND" = ship ]; then
+      printf 'mode=%s\nyolo=%s\nbranch=%s\n' "$MODE" "$YOLO" "$BRANCH_PREFIX$ID"
+      [ "$forge" != external ] || printf 'forge=external\n'
+    fi
+    [ -z "$BASE_BRANCH" ] || printf 'base_branch=%s\n' "$BASE_BRANCH"
+    [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
     printf 'remote_host=%s\nremote_route=%s\nremote_root=%s\nremote_backend=%s\nremote_target=pending\n' "$host" "$route" "$root" "$backend"
   } > "$tmp"
   fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE" || { echo "error: cannot publish remote task record: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
@@ -1862,9 +1875,20 @@ spawn_remote_worker() {
   case "$worktree:$remote_project" in /*:/*) ;; *) echo "error: remote launch returned invalid project paths; record preserved" >&2; return 1 ;; esac
   {
     printf 'window=remote:%s\nendpoint_task_id=%s\nworktree=%s\nproject=%s\n' "$ID" "$ID" "$worktree" "$remote_project"
-    printf 'kind=%s\nmode=%s\nyolo=%s\nharness=%s\nmodel=%s\neffort=%s\n' "$KIND" "$mode_arg" "$yolo_arg" "$harness" "$MODEL" "$EFFORT"
+    printf 'kind=%s\nharness=%s\nmodel=%s\neffort=%s\nspawn_gen=%s\n' "$KIND" "$harness" "${MODEL:-default}" "${EFFORT:-default}" "$remote_spawn_gen"
+    if [ "$KIND" = ship ]; then
+      printf 'mode=%s\nyolo=%s\nbranch=%s\n' "$MODE" "$YOLO" "$BRANCH_PREFIX$ID"
+      [ "$forge" != external ] || printf 'forge=external\n'
+    fi
+    [ -z "$BASE_BRANCH" ] || printf 'base_branch=%s\n' "$BASE_BRANCH"
+    [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
     printf 'remote_host=%s\nremote_route=%s\nremote_root=%s\nremote_backend=%s\nremote_target=%s\nremote_herdr_session=%s\n' "$host" "$route" "$root" "$backend" "$target" "$session"
   } > "$tmp"
+  if ! fm_backend_validate_task_endpoint "$tmp" "$ID"; then
+    rm -f -- "$tmp"
+    echo "error: remote launch returned an invalid endpoint; record preserved" >&2
+    return 1
+  fi
   fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE" || { echo "error: remote worker launched but its final route could not be published" >&2; return 1; }
   [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "$project" "$harness" "$MODEL" || true
   printf 'spawned %s kind=%s window=remote:%s remote=%s\n' "$ID" "$KIND" "$ID" "$host"

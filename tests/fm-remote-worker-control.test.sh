@@ -44,6 +44,7 @@ cat > "$FAKE_ROOT/bin/fm-spawn.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
 id=$1
+if [ -f "$FM_HOME/config/crew-dispatch.json" ] && [ ! -f "$FM_HOME/data/$id/dispatch-resolution.json" ]; then exit 8; fi
 kind=ship
 for arg in "$@"; do [ "$arg" != --scout ] || kind=scout; done
 printf '%s\n' "$@" > "$FM_HOME/state/$id.args"
@@ -68,10 +69,19 @@ mkdir -p "$TMP_ROOT/main/data"
 FM_HOME="$TMP_ROOT/main" "$ROOT/bin/fm-brief.sh" scout-e alpha --scout --herdr-lab >/dev/null
 awk '$0 == "{TASK}" {print "Inspect the session."; next} $0 == "{FIRSTMATE_SPEC}" {print "Use the lab."; next} {print}' "$TMP_ROOT/main/data/scout-e/brief.md" > "$TMP_ROOT/lab-brief"
 FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" bash "$FAKE_ROOT/bin/fm-remote-worker-control.sh" launch scout-e alpha scout - - fm/ - pi - - herdr < "$TMP_ROOT/lab-brief" >/dev/null || fail "lab brief launch failed"
-assert_grep 'This brief was explicitly scaffolded with `--herdr-lab`' "$HOME_DIR/data/scout-e/brief.md" "host scaffold dropped Herdr isolation"
+assert_grep "This brief was explicitly scaffolded with \`--herdr-lab\`" "$HOME_DIR/data/scout-e/brief.md" "host scaffold dropped Herdr isolation"
 pass "host scaffold retains the Herdr lab isolation contract"
 FM_HOME="$TMP_ROOT/main" "$ROOT/bin/fm-brief.sh" ship-one alpha --mode direct-PR --forge forgejo >/dev/null
 awk '$0 == "{TASK}" {print "Implement the request."; next} $0 == "{FIRSTMATE_SPEC}" {print "Use the selected forge."; next} {print}' "$TMP_ROOT/main/data/ship-one/brief.md" > "$TMP_ROOT/ship-brief"
 FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" bash "$FAKE_ROOT/bin/fm-remote-worker-control.sh" launch ship-one alpha ship direct-PR off fm/ - pi - - herdr < "$TMP_ROOT/ship-brief" >/dev/null || fail "remote ship launch failed"
 assert_grep 'Delivery contract: mode=direct-PR forge=forgejo' "$HOME_DIR/data/ship-one/brief.md" "host scaffold lost the selected forge"
 pass "remote ship preserves the forge delivery contract"
+printf '{}\n' > "$HOME_DIR/config/crew-dispatch.json"
+cat > "$FAKE_ROOT/bin/fm-dispatch-resolve.sh" <<'SH'
+#!/usr/bin/env bash
+printf '{"status":"off"}\n' > "$(dirname "$1")/dispatch-resolution.json"
+SH
+chmod +x "$FAKE_ROOT/bin/fm-dispatch-resolve.sh"
+FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" bash "$FAKE_ROOT/bin/fm-remote-worker-control.sh" launch scout-f alpha scout - - fm/ - pi - - herdr < "$TMP_ROOT/brief" >/dev/null || fail "remote launch skipped execution-home dispatch resolution"
+[ -f "$HOME_DIR/data/scout-f/dispatch-resolution.json" ] || fail "execution-home dispatch record was not created"
+pass "remote launch resolves the execution-home dispatch record before spawning"
