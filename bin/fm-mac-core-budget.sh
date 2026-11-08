@@ -111,7 +111,7 @@ cmd_release() {
 
 cmd_release_locked() {
   local usage f id pwd home kept=0 released=0 failed=0 rc
-  local -a argv
+  local -a spawn_argv
   budget_resolve || return 2
   if [ ! -d "$BUDGET_HELD" ]; then
     printf 'released: nothing held\n'
@@ -129,7 +129,7 @@ cmd_release_locked() {
     if [ ! -d "$pwd" ]; then echo "kept $id: its working directory is gone" >&2; kept=$((kept + 1)); continue; fi
     if [ ! -d "$home" ]; then echo "kept $id: its home is gone" >&2; kept=$((kept + 1)); continue; fi
     rc=0
-    (CDPATH='' cd -- "$pwd" && FM_HOME="$home" "$FM_ROOT/bin/fm-spawn.sh" "${argv[@]}") || rc=$?
+    (CDPATH='' cd -- "$pwd" && FM_HOME="$home" "$FM_ROOT/bin/fm-spawn.sh" "${spawn_argv[@]}") || rc=$?
     if [ "$rc" -eq 0 ]; then
       rm -f -- "$f"
       released=$((released + 1))
@@ -146,14 +146,14 @@ cmd_release_locked() {
   [ "$failed" = 0 ]
 }
 
-holder_read_argv() { # <holder-file>; sets pwd, home globals above plus argv
+holder_read_argv() { # <holder-file>; sets pwd, home globals above plus spawn_argv
   local file=$1 line n=0
-  argv=()
+  spawn_argv=()
   while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
     if [ "$n" -eq 1 ]; then pwd=$line
     elif [ "$n" -eq 2 ]; then home=$line
-    else argv+=("$line"); fi
+    else spawn_argv+=("$line"); fi
   done < "$file" || return 1
   [ "$n" -ge 3 ] || return 1
 }
