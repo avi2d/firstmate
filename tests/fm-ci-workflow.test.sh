@@ -464,6 +464,9 @@ pattern = /\(NR\s*-\s*1\)\s*%\s*#{n}\s*==\s*k\s*-\s*1/
 raise "shard slice must round-robin modulo #{n}" unless run.match?(pattern)
 raise "shard runs must bound each script" unless run.include?("--per-script-timeout-secs 1500")
 raise "shard timing artifacts must stay per-shard" unless run.include?("fm-test-timing-changed-")
+raise "slice output must never expand into a runner command line" if run.include?('fm-test-run.sh ${{')
+raise "shard must read slice paths line-wise" unless run.include?('IFS= read -r')
+raise "empty slice must skip instead of running the whole suite" unless run.include?("has no scripts; skipping")
 RUBY
   pass "changed-tests shards split the sorted selection round-robin with per-script bounds"
 }

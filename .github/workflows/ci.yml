@@ -241,11 +241,20 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          # One script path per line from the slice step; explicit paths keep
-          # the bounded automatic scheduler, with the --changed per-script
-          # bound passed explicitly because naming scripts does not apply it.
-          # shellcheck disable=SC2086
-          bin/fm-test-run.sh ${{ steps.slice.outputs.scripts }} \
+          # Naming scripts does not apply the changed per-script bound, so it is passed explicitly.
+          slice_file="$RUNNER_TEMP/fm-test/changed-slice-${{ matrix.shard }}.txt"
+          cat >"$slice_file" <<'FM_EOF'
+          ${{ steps.slice.outputs.scripts }}
+          FM_EOF
+          scripts=()
+          while IFS= read -r line; do
+            [ -n "$line" ] && scripts+=("$line")
+          done <"$slice_file"
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "changed shard ${{ matrix.shard }} has no scripts; skipping."
+            exit 0
+          fi
+          bin/fm-test-run.sh "${scripts[@]}" \
             --per-script-timeout-secs 1500 \
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-changed-${{ matrix.shard }}.json"
