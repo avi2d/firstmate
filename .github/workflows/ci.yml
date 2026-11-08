@@ -158,8 +158,8 @@ jobs:
     name: Behavior changed tests ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
-    # Pull request and push cap (see the timeout policy above).
-    timeout-minutes: 10
+    # Pull request cap: the heaviest observed slice needs eleven minutes warm.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -238,6 +238,8 @@ jobs:
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run changed shard
         if: steps.slice.outputs.scripts != ''
+        # Step tripwire under the job cap, so a hung script still uploads partial timing.
+        timeout-minutes: 13
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"

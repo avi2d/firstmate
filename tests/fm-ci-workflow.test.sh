@@ -401,7 +401,7 @@ test_pull_request_and_push_runs_carry_only_their_capped_gates() {
 lint 15
 static 10
 tests-changed 10
-tests-changed-shards 10
+tests-changed-shards 15
 TABLE
   pass "pull request and push runs carry only their capped gates"
 }
@@ -467,6 +467,14 @@ raise "shard timing artifacts must stay per-shard" unless run.include?("fm-test-
 raise "slice output must never expand into a runner command line" if run.include?('fm-test-run.sh ${{')
 raise "shard must read slice paths line-wise" unless run.include?('IFS= read -r')
 raise "empty slice must skip instead of running the whole suite" unless run.include?("has no scripts; skipping")
+job_cap = shards.fetch("timeout-minutes").to_i
+raise "shards must take the full pull request cap" unless job_cap == 15
+steps = shards.fetch("steps")
+run_step = steps.find { |s| s["name"].to_s == "Run changed shard" }
+step_cap = run_step.fetch("timeout-minutes").to_i
+raise "shard run step must trip under the job cap" unless step_cap < job_cap
+upload_step = steps.find { |s| s["name"].to_s.include?("timing artifact") }
+raise "shard timing must upload even when the run step trips" unless upload_step.fetch("if").to_s.include?("always()")
 RUBY
   pass "changed-tests shards split the sorted selection round-robin with per-script bounds"
 }
