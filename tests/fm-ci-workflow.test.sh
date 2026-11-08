@@ -468,6 +468,18 @@ RUBY
   pass "changed-tests shards split the sorted selection round-robin with per-script bounds"
 }
 
+test_no_ci_job_lists_a_dependency_twice() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "unique job dependencies"
+jobs = YAML.load_file(ARGV[0]).fetch("jobs")
+jobs.each do |name, job|
+  needs = Array(job["needs"])
+  dupes = needs.group_by { |n| n }.select { |_, v| v.length > 1 }.keys
+  raise "#{name} lists #{dupes.join(", ")} twice in needs" unless dupes.empty?
+end
+RUBY
+  pass "no ci job lists a dependency twice in needs"
+}
+
 test_changed_shard_slices_cover_any_selection_exactly_once() {
   local fixture one two three four all
   fixture=$(printf '%s\n' tests/fm-brief.test.sh tests/fm-ci-workflow.test.sh tests/fm-crew-state.test.sh tests/fm-lint.test.sh tests/fm-test-run.test.sh tests/fm-captain-hold-core.test.sh tests/fm-captain-hold-merge.test.sh | LC_ALL=C sort)
@@ -567,6 +579,7 @@ test_fork_skip_variables_are_opt_in
 test_pull_request_and_push_runs_carry_only_their_capped_gates
 test_shared_helper_pr_runs_matrix_and_ordinary_pr_does_not
 test_changed_shards_split_the_selection_round_robin
+test_no_ci_job_lists_a_dependency_twice
 test_changed_shard_slices_cover_any_selection_exactly_once
 test_no_ci_job_writes_issues
 test_timing_aggregate_still_runs_after_a_failed_lane

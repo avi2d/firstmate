@@ -722,7 +722,7 @@ jobs:
       - tests-portable-serial
       - tests-herdr
       - tests-hc
-      - tests-changed
+      - tests-changed-shards
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.tests-changed.outputs.shared-helpers == 'true')) }}
     steps:
       - uses: actions/checkout@v6
