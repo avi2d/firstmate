@@ -290,7 +290,12 @@ family_for_basename() {
     fm-calm-pi-extension.test.sh|fm-cd-pretool-check.test.sh|\
     fm-classify-decision-key.test.sh|\
     fm-composer-ghost.test.sh|fm-composer-lib.test.sh|\
-    fm-crew-state.test.sh|fm-captain-hold-lifecycle.test.sh|\
+    fm-crew-state.test.sh|\
+    fm-captain-hold-answers.test.sh|fm-captain-hold-bodies.test.sh|\
+    fm-captain-hold-core.test.sh|fm-captain-hold-merge.test.sh|\
+    fm-captain-hold-migration.test.sh|fm-captain-hold-origin-moves.test.sh|\
+    fm-captain-hold-origins.test.sh|fm-captain-hold-reconcile.test.sh|\
+    fm-captain-hold-retention.test.sh|fm-captain-hold-secondmate.test.sh|\
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-forge-detect.test.sh|fm-grok-harness.test.sh|\
     fm-fork-free-helpers.test.sh|\
     fm-harness-precedence.test.sh|fm-install-herdr.test.sh|\
@@ -531,7 +536,6 @@ tests/fm-arm-pretool-check.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-backend-t3code.test.sh
 tests/fm-brief.test.sh
-tests/fm-captain-hold-lifecycle.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
@@ -565,7 +569,6 @@ tests/fm-arm-pretool-check.test.sh 33778
 tests/fm-backend-herdr.test.sh 36331
 tests/fm-backend-t3code.test.sh 239245
 tests/fm-brief.test.sh 10594
-tests/fm-captain-hold-lifecycle.test.sh 343658
 tests/fm-cd-pretool-check.test.sh 16801
 tests/fm-composer-ghost.test.sh 2292
 tests/fm-composer-lib.test.sh 9521
@@ -608,38 +611,37 @@ portable_parallel_lane_weight() {
 # its own header owns temporary dependency provisioning.
 list_portable_parallel_1() {
   cat <<'EOF'
-tests/fm-captain-hold-lifecycle.test.sh
-tests/fm-backend-t3code.test.sh
+tests/fm-pr-merge.test.sh
+tests/fm-test-run.test.sh
 tests/fm-crew-state.test.sh
-tests/fm-t3-mcp.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-herdr-lab.test.sh
-tests/fm-cd-pretool-check.test.sh
-tests/fm-grok-harness.test.sh
+tests/fm-brief.test.sh
+tests/fm-composer-lib.test.sh
 tests/fm-pi-primary-types.test.sh
-tests/fm-review-diff.test.sh
-tests/fm-tmux-submit-busy.test.sh
+tests/fm-send-strict.test.sh
+tests/fm-spawn-batch.test.sh
 tests/fm-composer-ghost.test.sh
-tests/fm-transition-lib.test.sh
+tests/fm-supervision-instructions.test.sh
 EOF
 }
 
 # Portable parallel shard 2: the complementary LPT half of the proven set.
 list_portable_parallel_2() {
   cat <<'EOF'
-tests/fm-pr-merge.test.sh
+tests/fm-backend-t3code.test.sh
 tests/fm-lint.test.sh
-tests/fm-test-run.test.sh
+tests/fm-t3-mcp.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-x-mode.test.sh
-tests/fm-brief.test.sh
-tests/fm-composer-lib.test.sh
+tests/fm-cd-pretool-check.test.sh
+tests/fm-grok-harness.test.sh
 tests/fm-send-popup-settle.test.sh
-tests/fm-send-strict.test.sh
-tests/fm-spawn-batch.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-tmux-submit-busy.test.sh
 tests/fm-send-settle.test.sh
 tests/fm-ensure-agents-md.test.sh
-tests/fm-supervision-instructions.test.sh
+tests/fm-transition-lib.test.sh
 EOF
 }
 
@@ -782,6 +784,16 @@ tests/fm-calm-claude-mod.test.sh 2527
 tests/fm-calm-pi-extension.test.sh 56463
 tests/fm-calm-pi-queue-retention-live-e2e.test.sh 1345
 tests/fm-capacity.test.sh 6773
+tests/fm-captain-hold-answers.test.sh 85000
+tests/fm-captain-hold-bodies.test.sh 56000
+tests/fm-captain-hold-core.test.sh 99000
+tests/fm-captain-hold-merge.test.sh 108000
+tests/fm-captain-hold-migration.test.sh 24000
+tests/fm-captain-hold-origin-moves.test.sh 223000
+tests/fm-captain-hold-origins.test.sh 164000
+tests/fm-captain-hold-reconcile.test.sh 113000
+tests/fm-captain-hold-retention.test.sh 216000
+tests/fm-captain-hold-secondmate.test.sh 38000
 tests/fm-check-unregister.test.sh 469
 tests/fm-ci-workflow.test.sh 5833
 tests/fm-classify-corr-token.test.sh 23085
