@@ -12,7 +12,12 @@ TMP_ROOT=$(fm_test_tmproot fm-on)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 cleanup() {
-  local pid
+  local pid i=0 pids=''
+  # shellcheck disable=SC2046 # one argument per job pid
+  kill $(jobs -p) 2>/dev/null || true
+  pids=$(ps -ww -eo pid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" 'index($0, root) { print $1 }')
+  # shellcheck disable=SC2086 # one argument per reaped pid
+  [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
     pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid")
     # Stop the detached Linux supervisor's whole process group and wait for its
@@ -22,7 +27,13 @@ cleanup() {
     FM_REMOTE_JOB_STATE="$TMP_ROOT/remote-jobs"
     fm_remote_job_stop_worker_tree "$pid" 2>/dev/null || true
   fi
-  rm -rf -- "$TMP_ROOT"
+  wait 2>/dev/null || true
+  while [ "$i" -lt 50 ] && [ -e "$TMP_ROOT" ]; do
+    rm -rf -- "$TMP_ROOT" 2>/dev/null || true
+    i=$((i + 1))
+    sleep 0.1
+  done
+  rm -rf -- "$TMP_ROOT" 2>/dev/null || true
 }
 trap cleanup EXIT
 LOCAL_HOME="$TMP_ROOT/local-home"

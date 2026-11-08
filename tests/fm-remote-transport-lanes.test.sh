@@ -40,10 +40,23 @@ FAKEBIN=$(fm_fakebin "$TMP_ROOT/fakebin")
 mkdir -p "$REMOTE_ROOT/bin" "$HOME_A" "$HOME_B" "$HOME_EDGE" "$LOCAL_HOME/data" "$ACCOUNT_HOME"
 
 cleanup_lane_fixture() {
+  local i=0 pids=''
+  # shellcheck disable=SC2046 # one argument per job pid
+  kill $(jobs -p) 2>/dev/null || true
+  [ -z "${LANE_WORKER_PID:-}" ] || kill -KILL "$LANE_WORKER_PID" 2>/dev/null || true
+  pids=$(ps -ww -eo pid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" 'index($0, root) { print $1 }')
+  # shellcheck disable=SC2086 # one argument per reaped pid
+  [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
   if [ -f "$STATE_ROOT/worker.pid" ]; then
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
   fi
-  rm -rf -- "$TMP_ROOT"
+  wait 2>/dev/null || true
+  while [ "$i" -lt 50 ] && [ -e "$TMP_ROOT" ]; do
+    rm -rf -- "$TMP_ROOT" 2>/dev/null || true
+    i=$((i + 1))
+    sleep 0.1
+  done
+  rm -rf -- "$TMP_ROOT" 2>/dev/null || true
 }
 trap cleanup_lane_fixture EXIT
 
@@ -174,7 +187,8 @@ wait_for_state() { # <id> <state>
 
 HOME="$ACCOUNT_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
-  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
+LANE_WORKER_PID=$!
 for _ in $(seq 1 100); do
   [ -f "$STATE_ROOT/worker.ready" ] && break
   sleep 0.05
