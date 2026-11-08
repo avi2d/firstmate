@@ -144,7 +144,7 @@ The longer-term performance objective remains a complete green run under fifteen
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
 Pull requests and pushes run six paired lint shards of two canonical partitions each, capped at 15 minutes, one static gate holding the repo invariants plus the pull request secrets scan, capped at 10 minutes, and four changed-tests shards splitting the selection round-robin, capped at 10 minutes.
 A pull request that touches a shared test helper also runs the portable lanes and the timing aggregate, which keep their dispatch budgets.
-A manual dispatch run adds the coverage guard, twelve portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
+A manual dispatch run adds the coverage guard, thirteen portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
 Insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
