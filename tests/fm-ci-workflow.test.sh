@@ -159,19 +159,22 @@ puts [interpolate.call(concurrency.fetch("group")),
 }
 
 # Print, one per line in workflow order, the jobs whose job-level `if`
-# resolves true under one simulated event and fork variable setting; an unset
-# repository variable reads as the empty string, as GitHub documents.
-jobs_running_under() {  # <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS>
+# resolves true under one simulated event, fork variable setting, and the
+# tests-changed shared-helper output; an unset repository variable reads as
+# the empty string, as GitHub documents, and an absent shared-helper output
+# reads as the empty string, which never equals 'true'.
+jobs_running_under() {  # <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS> [shared]
   ruby -ryaml -e "$EXPRESSION_RUBY" -e '
 context = {
   "github.event_name" => ARGV[1],
   "vars.FM_CI_SKIP_PUSH" => ARGV[2],
   "vars.FM_CI_SKIP_MACOS" => ARGV[3],
+  "needs.tests-changed.outputs.shared-helpers" => ARGV[4].to_s,
 }
 YAML.load_file(ARGV[0]).fetch("jobs").each do |name, job|
   puts name if Expression.condition(job["if"], context)
 end
-' "$CI_WORKFLOW" "$1" "$2" "$3"
+' "$CI_WORKFLOW" "$1" "$2" "$3" "${4:-}"
 }
 
 job_timeout() {
@@ -183,7 +186,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-PR_TIER_JOBS='lint static'
+PR_TIER_JOBS='lint static tests-changed'
 FAST_TIER_JOBS='test-coverage tests-timing-aggregate'
 NORMAL_TIER_JOBS='tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr tests-hc'
@@ -401,6 +404,38 @@ TABLE
   pass "pull request and push runs carry only their capped gates"
 }
 
+# A shared test helper change fans the portable lanes and their timing
+# aggregate out on the pull request. Any other pull request, any push, and
+# manual dispatch keep their existing sets.
+test_shared_helper_pr_runs_matrix_and_ordinary_pr_does_not() {
+  local all pr push_gate dispatch event shared expected want actual
+  all=$(workflow_jobs | LC_ALL=C sort) || fail "could not list ci.yml jobs"
+  pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
+  push_gate=$(printf '%s\n' "$pr" | grep -vx secrets)
+  dispatch=$(comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$pr"))
+  while read -r event shared expected; do
+    case $expected in
+      pr) want=$pr ;;
+      escalated) want=$(printf '%s\n%s\n' "$pr" "$(printf '%s\n' tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial tests-timing-aggregate)" | LC_ALL=C sort) ;;
+      pushgate) want=$push_gate ;;
+      dispatch) want=$dispatch ;;
+      *) fail "unknown expectation $expected" ;;
+    esac
+    actual=$(jobs_running_under "$event" '' '' "$shared" | LC_ALL=C sort) \
+      || fail "could not resolve the jobs $event runs with shared-helpers=$shared"
+    [ "$actual" = "$want" ] \
+      || fail "$event with shared-helpers=$shared must run $expected jobs"$'\n'"ran: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"wanted: $(printf '%s' "$want" | tr '\n' ' ')"
+  done <<'TABLE'
+pull_request    false   pr
+pull_request    true    escalated
+push            false   pushgate
+push            true    pushgate
+workflow_dispatch false dispatch
+workflow_dispatch true  dispatch
+TABLE
+  pass "a shared test helper change fans the portable matrix out on the pull request only"
+}
+
 # No CI job may write issues: the scheduled failure reporter is gone, so a red
 # manual dispatch run is triaged by hand from its run page.
 test_no_ci_job_writes_issues() {
@@ -413,13 +448,14 @@ raise "no CI job may write issues, got #{writers.inspect}" unless writers.empty?
 
 # Print true or false: whether one job's job-level `if` resolves true under
 # one simulated event, fork variable setting, and outcome of its needed jobs.
-job_runs_under() {  # <job> <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS> <needs status>
+job_runs_under() {  # <job> <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS> <needs status> [shared]
   ruby -ryaml -e "$EXPRESSION_RUBY" -e '
 context = {
   "github.event_name" => ARGV[2],
   "vars.FM_CI_SKIP_PUSH" => ARGV[3],
   "vars.FM_CI_SKIP_MACOS" => ARGV[4],
   "needs.status" => ARGV[5],
+  "needs.tests-changed.outputs.shared-helpers" => ARGV[6].to_s,
 }
 puts Expression.condition(YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1])["if"], context)
 ' "$CI_WORKFLOW" "$@"
@@ -479,6 +515,7 @@ test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
 test_fork_skip_variables_are_opt_in
 test_pull_request_and_push_runs_carry_only_their_capped_gates
+test_shared_helper_pr_runs_matrix_and_ordinary_pr_does_not
 test_no_ci_job_writes_issues
 test_timing_aggregate_still_runs_after_a_failed_lane
 test_every_job_has_a_finite_timeout
