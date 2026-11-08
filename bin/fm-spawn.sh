@@ -997,6 +997,7 @@ fm_refuse_if_gate_agent
 [ -n "${FM_SPAWN_NO_GUARD:-}" ] || "$FM_ROOT/bin/fm-guard.sh" || true
 KIND=ship
 KIND_SET=0
+LOCAL_OVERRIDE=0
 HARNESS_ARG=
 MODEL=
 EFFORT=
@@ -1115,6 +1116,7 @@ for a in "$@"; do
     KIND=secondmate
     KIND_SET=1
     ;;
+  --local) LOCAL_OVERRIDE=1 ;;
   --relaunch) RELAUNCH=1 ;;
   --herdr-resume-lock-wait) HERDR_RESUME_LOCK_WAIT=1 ;;
   --harness) want_value=harness ;;
@@ -1193,6 +1195,10 @@ done
   echo "error: --$want_value requires a value" >&2
   exit 1
 }
+if [ "$LOCAL_OVERRIDE" -eq 1 ] && { [ "$KIND" = secondmate ] || [ "$RELAUNCH" -eq 1 ]; }; then
+  echo 'error: --local applies only to fresh ship and scout workers' >&2
+  exit 1
+fi
 [ "$HARNESS_SET" -eq 0 ] || [ -n "$HARNESS_ARG" ] || {
   echo "error: --harness requires a non-empty value" >&2
   exit 1
@@ -1745,6 +1751,147 @@ spawn_remote_secondmate() {
   [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$id" secondmate "" "$harness" "${model#-}" || true
   echo "spawned $id harness=$harness kind=secondmate mode=secondmate yolo=off window=remote:$id worktree=$home remote=$host backend=$remote_backend"
   return 0
+}
+
+spawn_remote_worker() {
+  local route=$1 project=$2 host=$3 root home session harness backend brief meta tmp out rc target remote_kind remote_harness remote_session worktree remote_project
+  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen
+  local -a contract_fields
+  [ "${#POS[@]}" -eq 2 ] || { echo "error: remote workers require one project argument" >&2; return 1; }
+  case "$project" in ''|*[!A-Za-z0-9._-]*|*..*) echo "error: invalid remote project name" >&2; return 1 ;; esac
+  [ "$KIND" != ship ] || [ "$MODE" != local-only ] || { echo "error: local-only work cannot run remotely" >&2; return 1; }
+  if [ "$CLAUDE_ACCOUNT_SET" -eq 1 ] || [ "$HERMES_PROFILE_SET" -eq 1 ] || [ "$UPSTREAM_CONSENT_SET" -eq 1 ] || [ "$QUOTA_OVERRIDE_SET" -eq 1 ] || [ "$WEIGHT_SET" -eq 1 ]; then
+    echo "error: selected launch flags are not supported for remote workers" >&2
+    return 1
+  fi
+  root=$(secondmate_registry_field "$DATA/remote-homes.md" "$route" root) || return 1
+  home=$(secondmate_registry_field "$DATA/remote-homes.md" "$route" home) || return 1
+  session=$(secondmate_registry_field "$DATA/remote-homes.md" "$route" session) || return 1
+  [ "$(secondmate_registry_field "$DATA/remote-homes.md" "$route" remote)" = 1 ] || return 1
+  case "$host:$session" in *[!A-Za-z0-9._:-]*) echo "error: invalid remote placement" >&2; return 1 ;; esac
+  backend=${BACKEND_ARG:-herdr}
+  [ "$backend" = herdr ] || { echo "error: remote worker launch currently requires herdr" >&2; return 1; }
+  harness=$HARNESS_ARG
+  if [ -z "$harness" ]; then harness=$("$SCRIPT_DIR/fm-harness.sh" crew) || return 1; fi
+  case "$harness" in claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|omp|agy|muse|gemini|rovo|devin|commandcode|polytoken|cortex|kiro) ;; *) echo "error: unverified remote worker harness $harness" >&2; return 1 ;; esac
+  brief="$DATA/$ID/brief.md"
+  [ -f "$brief" ] && [ ! -L "$brief" ] || { echo "error: remote worker brief is unavailable" >&2; return 1; }
+  if ! fm_brief_task_content_valid "$brief" || fm_brief_task_placeholders_present "$brief"; then
+    echo "error: remote worker task sections are incomplete" >&2
+    return 1
+  fi
+  if fm_brief_intent_address_line "$brief" >/dev/null; then echo "error: remote worker intent has a direct address" >&2; return 1; fi
+  if [ -f "$CONFIG/crew-dispatch.json" ]; then
+    [ -f "$DATA/$ID/dispatch-resolution.json" ] || { echo "error: remote worker requires dispatch resolution" >&2; return 1; }
+    if ! jq -e --arg id "$ID" --arg h "$harness" --arg m "$MODEL" --arg e "$EFFORT" --arg override "$DISPATCH_OVERRIDE" '
+      .task == $id and (.status | IN("clear","ambiguous","escalate","error","off")) and
+      (if .status == "clear" and $override == "" then .profile.harness == $h and ((.profile.model // "") == "" or .profile.model == $m) and ((.profile.effort // "") == "" or .profile.effort == $e) else true end)
+    ' "$DATA/$ID/dispatch-resolution.json" >/dev/null 2>&1; then
+      echo "error: remote worker dispatch selection is invalid or does not match" >&2
+      return 1
+    fi
+  fi
+  if [ "$KIND" = ship ]; then
+    contract=$(grep '^Delivery contract: mode=' "$brief" || true)
+    case "$contract" in *$'\n'*|'') echo "error: remote worker delivery contract is missing or ambiguous" >&2; return 1 ;; esac
+    read -r -a contract_fields <<< "$contract"
+    [ "${contract_fields[2]:-}" = "mode=$MODE" ] || { echo "error: remote worker delivery contract does not match" >&2; return 1; }
+    for token in "${contract_fields[@]:3}"; do
+      case "$token" in forge=*) forge=${token#forge=} ;; pr=*) pr=${token#pr=} ;; shape=*) ;; *) echo "error: unsupported remote delivery field" >&2; return 1 ;; esac
+    done
+    standing_forge=$("$SCRIPT_DIR/fm-project-mode.sh" --forge "$project") || return 1
+    standing_pr=$("$SCRIPT_DIR/fm-project-mode.sh" --pr "$project") || return 1
+    [ "$forge" = "${standing_forge:-none}" ] && [ "$pr" = "${standing_pr:-auto}" ] || { echo "error: remote worker forge or PR contract does not match the project" >&2; return 1; }
+    fm_forge_valid_for_mode "$forge" "$MODE" fm-spawn || return 1
+    fm_base_branch_valid "$BASE_BRANCH" "$MODE" "$forge" fm-spawn || return 1
+    if [ "$YOLO" = on ] && { [ "$forge" = gerrit ] || [ "$forge" = external ]; }; then echo "error: remote forge does not support yolo" >&2; return 1; fi
+    brief_branch=$(sed -n 's/^Ship branch: //p' "$brief")
+    [ "$brief_branch" = "$BRANCH_PREFIX$ID" ] || { echo "error: remote worker branch does not match the brief" >&2; return 1; }
+    mode_arg=$MODE; yolo_arg=$YOLO
+  else
+    mode_arg=-; yolo_arg=-
+  fi
+  if [ -n "$BASE_BRANCH" ]; then
+    fm_brief_base_branches "$brief" | grep -qxF -- "$BASE_BRANCH" || { echo "error: remote worker base branch does not match the brief" >&2; return 1; }
+  elif fm_brief_base_branches "$brief" >/dev/null; then
+    echo "error: remote worker brief requires a base branch" >&2
+    return 1
+  fi
+  base_arg=${BASE_BRANCH:--}; model_arg=${MODEL:--}; effort_arg=${EFFORT:--}
+  SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
+  fm_lock_try_acquire "$SPAWN_TASK_LOCK" || { echo "error: another spawn is creating task $ID" >&2; return 1; }
+  SPAWN_TASK_LOCK_HELD=1
+  meta="$STATE/$ID.meta"
+  [ ! -e "$meta" ] && [ ! -L "$meta" ] || { echo "error: task $ID already has metadata" >&2; return 1; }
+  if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
+    transition=1
+    if ! fm_backlog_row_probe "$DATA" "$ID" || ! fm_backlog_row_dispatchable "$FM_BACKLOG_ROW_STATE"; then
+      echo "error: task $ID has no dispatchable backlog item" >&2
+      return 1
+    fi
+  else
+    rc=$?
+    [ "$rc" -ne 2 ] || { echo "error: backlog is inaccessible: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
+  fi
+  out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh capabilities </dev/null) || return $?
+  [ "$out" = fm-remote-worker-control.v1 ] || { echo "error: remote worker protocol is unavailable" >&2; return 1; }
+  SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
+  fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
+  SPAWN_META_LOCK_HELD=1
+  tmp="$STATE/.$ID.remote-meta.$$"
+  remote_spawn_gen="s$(date +%s).${BASHPID:-$$}.$RANDOM"
+  {
+    printf 'window=remote:%s\nendpoint_task_id=%s\nworktree=%s\nproject=%s/projects/%s\n' "$ID" "$ID" "$home" "$home" "$project"
+    printf 'kind=%s\nharness=%s\nmodel=%s\neffort=%s\nspawn_gen=%s\n' "$KIND" "$harness" "${MODEL:-default}" "${EFFORT:-default}" "$remote_spawn_gen"
+    if [ "$KIND" = ship ]; then
+      printf 'mode=%s\nyolo=%s\nbranch=%s\n' "$MODE" "$YOLO" "$BRANCH_PREFIX$ID"
+      [ "$forge" != external ] || printf 'forge=external\n'
+    fi
+    [ -z "$BASE_BRANCH" ] || printf 'base_branch=%s\n' "$BASE_BRANCH"
+    [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+    printf 'remote_host=%s\nremote_route=%s\nremote_root=%s\nremote_backend=%s\nremote_target=pending\n' "$host" "$route" "$root" "$backend"
+  } > "$tmp"
+  fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE" || { echo "error: cannot publish remote task record: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
+  if [ "$transition" -eq 1 ] && ! fm_backlog_atomic_transition dispatch "$meta" "$DATA" "$ID" "$STATE"; then
+    fm_backlog_atomic_transition remove "$meta" "task record" "$STATE" || true
+    echo "error: cannot start backlog item: $FM_BACKLOG_TRANSITION_ERROR" >&2
+    return 1
+  fi
+  rc=0
+  out=$("$SCRIPT_DIR/fm-on.sh" --stdin "$route" fm-remote-worker-control.sh launch "$ID" "$project" "$KIND" "$mode_arg" "$yolo_arg" "$BRANCH_PREFIX" "$base_arg" "$harness" "$model_arg" "$effort_arg" "$backend" < "$brief" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$out" >&2
+    echo "error: remote launch outcome is unconfirmed; task record and backlog are preserved" >&2
+    return "$rc"
+  fi
+  target=$(printf '%s\n' "$out" | sed -n 's/^target=//p')
+  remote_session=$(printf '%s\n' "$out" | sed -n 's/^herdr_session=//p')
+  remote_kind=$(printf '%s\n' "$out" | sed -n 's/^kind=//p')
+  remote_harness=$(printf '%s\n' "$out" | sed -n 's/^harness=//p')
+  worktree=$(printf '%s\n' "$out" | sed -n 's/^worktree=//p')
+  remote_project=$(printf '%s\n' "$out" | sed -n 's/^project=//p')
+  case "$target" in "$session":?*) ;; *) echo "error: remote launch returned an invalid target; record preserved" >&2; return 1 ;; esac
+  [ "$remote_session" = "$session" ] && [ "$remote_kind" = "$KIND" ] && [ "$remote_harness" = "$harness" ] || { echo "error: remote launch returned inconsistent identity; record preserved" >&2; return 1; }
+  case "$worktree:$remote_project" in /*:/*) ;; *) echo "error: remote launch returned invalid project paths; record preserved" >&2; return 1 ;; esac
+  {
+    printf 'window=remote:%s\nendpoint_task_id=%s\nworktree=%s\nproject=%s\n' "$ID" "$ID" "$worktree" "$remote_project"
+    printf 'kind=%s\nharness=%s\nmodel=%s\neffort=%s\nspawn_gen=%s\n' "$KIND" "$harness" "${MODEL:-default}" "${EFFORT:-default}" "$remote_spawn_gen"
+    if [ "$KIND" = ship ]; then
+      printf 'mode=%s\nyolo=%s\nbranch=%s\n' "$MODE" "$YOLO" "$BRANCH_PREFIX$ID"
+      [ "$forge" != external ] || printf 'forge=external\n'
+    fi
+    [ -z "$BASE_BRANCH" ] || printf 'base_branch=%s\n' "$BASE_BRANCH"
+    [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+    printf 'remote_host=%s\nremote_route=%s\nremote_root=%s\nremote_backend=%s\nremote_target=%s\nremote_herdr_session=%s\n' "$host" "$route" "$root" "$backend" "$target" "$session"
+  } > "$tmp"
+  if ! fm_backend_validate_task_endpoint "$tmp" "$ID"; then
+    rm -f -- "$tmp"
+    echo "error: remote launch returned an invalid endpoint; record preserved" >&2
+    return 1
+  fi
+  fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE" || { echo "error: remote worker launched but its final route could not be published" >&2; return 1; }
+  [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "$project" "$harness" "$MODEL" || true
+  printf 'spawned %s kind=%s window=remote:%s remote=%s\n' "$ID" "$KIND" "$ID" "$host"
 }
 
 BACKEND=
@@ -2544,6 +2691,17 @@ if [ "$KIND" = secondmate ]; then
     remote_spawn_rc=$?
   fi
   [ "$remote_spawn_rc" -eq 3 ] || exit "$remote_spawn_rc"
+fi
+if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ "$LOCAL_OVERRIDE" -eq 0 ] && [ "${#POS[@]}" -ge 2 ]; then
+  remote_project=${POS[1]##*/}
+  remote_placement=$("$SCRIPT_DIR/fm-project-mode.sh" --placement "$remote_project") || exit 1
+  if [ -n "$remote_placement" ]; then
+    remote_host=$(secondmate_registry_field "$DATA/remote-homes.md" "$remote_placement" host 2>/dev/null || true)
+    [ -n "$remote_host" ] || { echo "error: no execution-home route for $remote_placement" >&2; exit 1; }
+    spawn_remote_worker "$remote_placement" "$remote_project" "$remote_host"
+    exit $?
+
+  fi
 fi
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
 # FM_BACKEND env, else config/backend, else runtime auto-detection, else

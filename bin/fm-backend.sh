@@ -730,6 +730,26 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: task $id has malformed endpoint metadata; preserving task state." >&2
     return 1
   esac
+  if [ "$window" = "remote:$id" ]; then
+    local remote_host remote_route remote_target remote_backend remote_session remote_kind
+    remote_host=$(fm_backend_meta_exact_value "$meta" remote_host) || return 1
+    remote_route=$(fm_backend_meta_exact_value "$meta" remote_route) || return 1
+    remote_target=$(fm_backend_meta_exact_value "$meta" remote_target) || return 1
+    remote_backend=$(fm_backend_meta_exact_value "$meta" remote_backend) || return 1
+    remote_session=$(fm_backend_meta_exact_value "$meta" remote_herdr_session) || return 1
+    remote_kind=$(fm_backend_meta_exact_value "$meta" kind) || return 1
+    [ "$(fm_backend_meta_exact_value "$meta" endpoint_task_id)" = "$id" ] || return 1
+    fm_backend_endpoint_atom_valid "$remote_host" && fm_backend_endpoint_atom_valid "$remote_route" && fm_backend_endpoint_atom_valid "$remote_session" || return 1
+    [ "$remote_backend" = herdr ] || return 1
+    case "$remote_kind" in ship|scout) ;; *) return 1 ;; esac
+    case "$remote_target" in "$remote_session":?*) ;; *) return 1 ;; esac
+    local remote_pane=${remote_target#*:}
+    fm_backend_endpoint_atom_valid "${remote_pane//:/_}" || return 1
+    case "$worktree:$project" in /*:/*) ;; *) return 1 ;; esac
+    FM_BACKEND_VALIDATED_BACKEND=remote
+    FM_BACKEND_VALIDATED_TARGET=$remote_target
+    return 0
+  fi
   backend_count=$(grep -c '^backend=' "$meta" 2>/dev/null || true)
   case "$backend_count" in
     0) backend=tmux ;;
