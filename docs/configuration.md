@@ -776,6 +776,7 @@ A pull request merges only when every one of these holds, each read by the progr
 - The worker's latest `done:` line does not flag a credential, token, secret, auth, permission, sandbox, or isolation change.
   A mention counts as a flag unless its clause negates it.
 - The diff touches no path naming a credential, auth, token, secret, sandbox, runner isolation, key, or `.env` file, and changes no `permissions:` line or scope inside a workflow.
+- The pull request head was not already refused for changing security-sensitive paths.
 - The branch does not conflict with its base.
 - The green is settled, so a check that registers late cannot be raced.
   It is settled when the last check finished at least `FM_MERGE_ON_GREEN_SETTLE_SECS` ago, or when the same head read green on two sweeps that far apart.
@@ -784,6 +785,7 @@ A pull request merges only when every one of these holds, each read by the progr
 Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the per-pull-request merge hold, the away record, and every check before the forge call.
 A head that is behind its base is first brought up to date with `gh pr update-branch`, which merges the base into the branch and never rebases, and merges once its new head is green.
 A refused merge or a failed update is retried at the same head only after `FM_MERGE_ON_GREEN_RETRY_SECS`, 300 seconds by default.
+A merge refused for security-sensitive paths instead holds the task for the captain once, and that head is never retried.
 A pull request skipped for what the forge reported, such as a red check, is read again only every `FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS`, 60 seconds by default, so a standing red pull request does not spend a forge read on every sweep.
 Every other pull request, including a red, pending, draft, conflicting, held, or boundary-touching one, stays open on the supervised path.
 
@@ -847,7 +849,7 @@ GitLab merge requests are not monitored yet.
 When no reported check is marked required, a failing reported check still counts, matching `bin/fm-pr-state.sh` for unprotected stacked bases.
 When a required check has reported, optional failures do not notify.
 A conflict and an author action each wake once per latest commit, and a missing approval is recorded once per latest commit.
-A failing check wakes once per latest commit and check name, so a check that newly fails at an already reported commit wakes once more while an already reported check never repeats.
+A failing check wakes once per latest commit, check name, and run start, so a rerun that fails again at an already reported commit wakes once more with its failing step while the same attempt never repeats.
 A maintainer-gated suite is recorded once per latest commit and workflow name.
 A home owns a PR it recorded, linked, or observed before, and the open PR on a live task copy's current branch, drafts and adopted branches included, until the PR merges or closes.
 A PR URL that only appears in a task's status lines is not owned.

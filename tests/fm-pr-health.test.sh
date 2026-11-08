@@ -111,6 +111,36 @@ case "$1 $2" in
   'api repos/o/r/issues/'*) printf '[[]]\n' ;;
   'api repos/o/r/commits/'*)
     case "$2" in *check-runs*) printf '[{"check_runs":[]}]\n' ;; *) printf '[[]]\n' ;; esac ;;
+  'api repos/o/r/actions/'*)
+    # Actions runs and jobs render from the model's actions_runs; a model
+    # with actions_error set fails the read, the way an outage would.
+    head_sha=
+    for arg in "$@"; do case "$arg" in head_sha=*) head_sha=${arg#head_sha=} ;; esac; done
+    case "$2" in
+      */jobs)
+        run=${2%/jobs}; run=${run##*/}
+        hit=
+        for f in "$FORGE"/pr-*.json; do
+          [ -e "$f" ] || continue
+          if jq -e --argjson id "$run" 'any(.actions_runs[]?; .id == $id)' "$f" >/dev/null 2>&1; then hit=$f; break; fi
+        done
+        if [ -z "$hit" ]; then
+          printf '{"total_count":0,"jobs":[]}\n'
+        elif jq -e '.actions_error // false' "$hit" >/dev/null 2>&1; then
+          printf 'actions jobs unavailable\n' >&2; exit 1
+        else
+          jq -c --argjson id "$run" '{total_count:([.actions_runs[]? | select(.id == $id) | (.jobs // []) | length] | add // 0),jobs:([.actions_runs[]? | select(.id == $id) | (.jobs // [])[]?])}' "$hit"
+        fi ;;
+      *)
+        for f in "$FORGE"/pr-*.json; do
+          [ -e "$f" ] || continue
+          if jq -e --arg h "$head_sha" '.head == $h and (.actions_error // false)' "$f" >/dev/null 2>&1; then
+            printf 'actions runs unavailable\n' >&2; exit 1
+          fi
+        done
+        jq -s --arg h "$head_sha" '[.[] | select(.head == $h) | .actions_runs[]? | select(.id != null) | {id}] | {total_count:length,workflow_runs:.}' "$FORGE"/pr-*.json 2>/dev/null \
+          || printf '{"total_count":0,"workflow_runs":[]}\n' ;;
+    esac ;;
   *) printf 'unexpected gh fixture call: %s\n' "$*" >&2; exit 1 ;;
 esac
 SH
@@ -149,7 +179,7 @@ with_home() {
 
 pr() { # home number head base mergeable(true|false|null) draft(true|false)
   jq -n --arg head "$3" --arg base "$4" --argjson mergeable "$5" --argjson draft "$6" \
-    '{state:"open",head:$head,base:$base,mergeable:$mergeable,draft:$draft,requests:1,reviews:0,checks:[]}' \
+    '{state:"open",head:$head,base:$base,mergeable:$mergeable,draft:$draft,requests:1,reviews:0,checks:[],actions_runs:[]}' \
     > "$1/forge/pr-$2.json"
 }
 
@@ -295,6 +325,54 @@ test_replaced_cancelled_run_is_not_failing() {
   expect_one "$home" 'pull/9 has failing required checks at latest commit aaaaaaa: CI Status' \
     'a newer failing run of the same check must wake'
   pass 'each check is judged by its newest run'
+}
+
+test_rerun_failure_wakes_again_with_failing_step() {
+  local home
+  home=$(new_home rerun-step)
+  task "$home" ship1 pr=https://github.com/o/r/pull/8
+  pr "$home" 8 "$HEAD_A" "$BASE_1" true false
+  set_pr "$home" 8 '.checks = [{name:"Backend",conclusion:"FAILURE",required:true,at:"2026-10-21T01:00:00Z"}]
+    | .actions_runs = [{id:42464401364, jobs:[{name:"Backend",status:"completed",conclusion:"failure",run_attempt:4,
+      steps:[{name:"install",conclusion:"success"},{name:"typecheck",conclusion:"failure"}]}]}]'
+  arm "$home"
+  expect_one "$home" 'pull/8 has failing required checks at latest commit aaaaaaa: Backend \(attempt 4, failing step: typecheck\) \(task ship1\)' \
+    'the first failure must wake with its failing step'
+  expect_silent "$home" 'the same attempt must not wake again'
+  set_pr "$home" 8 '.checks[0].at = "2026-10-21T01:10:00Z" | .actions_runs[0].jobs[0].run_attempt = 5'
+  expect_one "$home" ': Backend \(attempt 5, failing step: typecheck\) \(task ship1\)' \
+    'a rerun that fails again must wake with the new attempt and its failing step'
+  pass 'a rerun failure wakes again with its failing step'
+}
+
+test_unreadable_steps_keep_the_check_only_wake() {
+  local home
+  home=$(new_home unreadable-steps)
+  task "$home" ship1 pr=https://github.com/o/r/pull/8
+  pr "$home" 8 "$HEAD_A" "$BASE_1" true false
+  set_pr "$home" 8 '.checks = [{name:"Backend",conclusion:"FAILURE",required:true,at:"2026-10-21T01:00:00Z"}] | .actions_error = true'
+  arm "$home"
+  expect_one "$home" ': Backend \(task ship1\)$' 'an unreadable step read must keep the check-only wake'
+  expect_silent "$home" 'the check-only wake must still dedupe'
+  pass 'an unreadable step read keeps the check-only wake'
+}
+
+test_entry_without_a_run_start_is_adopted_silently() {
+  local home
+  home=$(new_home legacy-entry)
+  task "$home" ship1 pr=https://github.com/o/r/pull/8
+  pr "$home" 8 "$HEAD_A" "$BASE_1" true false
+  set_pr "$home" 8 '.checks = [{name:"Backend",conclusion:"FAILURE",required:true,at:"2026-10-21T01:00:00Z"}]
+    | .actions_runs = [{id:42464401364, jobs:[{name:"Backend",status:"completed",conclusion:"failure",run_attempt:4,
+      steps:[{name:"typecheck",conclusion:"failure"}]}]}]'
+  arm "$home"
+  expect_one "$home" 'Backend \(attempt 4, failing step: typecheck\)' 'the first failure must wake with its failing step'
+  jq 'del(.prs[].checks[].started_at)' "$home/state/pr-health.json" > "$home/state/adopt.json" \
+    && mv "$home/state/adopt.json" "$home/state/pr-health.json"
+  expect_silent "$home" 'an entry recorded before run starts were tracked must not re-wake'
+  set_pr "$home" 8 '.checks[0].at = "2026-10-21T01:10:00Z" | .actions_runs[0].jobs[0].run_attempt = 5'
+  expect_one "$home" 'Backend \(attempt 5, failing step: typecheck\)' 'the next attempt after adoption must wake'
+  pass 'an entry without a run start is adopted silently and wakes on its next attempt'
 }
 
 test_latest_commit_moving_between_reads_waits() {
@@ -967,7 +1045,9 @@ for test_name in test_maintainer_author_and_approval_states_are_distinct \
   test_unknown_then_dirty_wakes_once test_dirty_again_at_same_commits_is_silent \
   test_conflict_once_per_latest_commit test_adopted_draft_red_required_check_after_pause_wakes_once \
   test_reported_failure_does_not_hide_a_later_required_failure \
-  test_replaced_cancelled_run_is_not_failing test_latest_commit_moving_between_reads_waits \
+  test_replaced_cancelled_run_is_not_failing test_rerun_failure_wakes_again_with_failing_step \
+  test_unreadable_steps_keep_the_check_only_wake test_entry_without_a_run_start_is_adopted_silently \
+  test_latest_commit_moving_between_reads_waits \
   test_other_homes_red_check_is_silent test_enrolled_before_ready_and_after_cleanup_still_wake \
   test_open_pr_replacing_a_closed_one_on_the_same_branch_is_discovered \
   test_green_without_reviewer_is_silent test_base_without_required_checks_counts_any_failing_check \

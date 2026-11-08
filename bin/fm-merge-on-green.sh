@@ -41,6 +41,8 @@ sweep   Assess every task in this home that recorded a GitHub pr=, or whose
         after FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS (default 60).
         A failed merge or update is retried at the same head only after
         FM_MERGE_ON_GREEN_RETRY_SECS (default 300).
+        A merge refused for security-sensitive paths instead holds the task
+        for the captain once and never retries that head.
         Verdict changes are appended to state/merge-on-green.log.
 assess  Print one task's verdict without acting:
         <verdict><TAB><task><TAB><url><TAB><head><TAB><reason>
@@ -258,13 +260,15 @@ REC_SINCE=
 REC_REASON=
 REC_DIFF_HEAD=
 REC_DIFF_RESULT=
+REC_REFUSED_HEAD=
+REC_REFUSED_REASON=
 REC_ATTEMPT_KIND=
 REC_ATTEMPT_HEAD=
 REC_ATTEMPT_AT=
 REC_CHECKED_AT=
 record_load() {  # <task-id>
   local file key value
-  REC_VERDICT='' REC_HEAD='' REC_SINCE='' REC_REASON='' REC_DIFF_HEAD='' REC_DIFF_RESULT='' REC_CHECKED_AT=''
+  REC_VERDICT='' REC_HEAD='' REC_SINCE='' REC_REASON='' REC_DIFF_HEAD='' REC_DIFF_RESULT='' REC_REFUSED_HEAD='' REC_REFUSED_REASON='' REC_CHECKED_AT=''
   REC_ATTEMPT_KIND='' REC_ATTEMPT_HEAD='' REC_ATTEMPT_AT=''
   file=$(record_path "$1")
   [ -f "$file" ] && [ ! -L "$file" ] || return 0
@@ -276,6 +280,8 @@ record_load() {  # <task-id>
       reason) REC_REASON=$value ;;
       diff_head) REC_DIFF_HEAD=$value ;;
       diff_result) REC_DIFF_RESULT=$value ;;
+      refused_head) REC_REFUSED_HEAD=$value ;;
+      refused_reason) REC_REFUSED_REASON=$value ;;
       attempt_kind) REC_ATTEMPT_KIND=$value ;;
       attempt_head) REC_ATTEMPT_HEAD=$value ;;
       attempt_at) REC_ATTEMPT_AT=$value ;;
@@ -298,6 +304,8 @@ record_save() {  # <task-id>
     printf 'reason=%s\n' "$(printf '%s' "$REC_REASON" | fm_wake_clean_field)"
     printf 'diff_head=%s\n' "$REC_DIFF_HEAD"
     printf 'diff_result=%s\n' "$(printf '%s' "$REC_DIFF_RESULT" | fm_wake_clean_field)"
+    printf 'refused_head=%s\n' "$REC_REFUSED_HEAD"
+    printf 'refused_reason=%s\n' "$(printf '%s' "$REC_REFUSED_REASON" | fm_wake_clean_field)"
     printf 'attempt_kind=%s\n' "$REC_ATTEMPT_KIND"
     printf 'attempt_head=%s\n' "$REC_ATTEMPT_HEAD"
     printf 'attempt_at=%s\n' "$REC_ATTEMPT_AT"
@@ -439,6 +447,10 @@ EOF
   fi
 
   record_load "$id"
+  if [ -n "$REC_REFUSED_HEAD" ] && [ "$REC_REFUSED_HEAD" = "$HEAD" ] && [ -n "$REC_REFUSED_REASON" ]; then
+    verdict skip "$REC_REFUSED_REASON"
+    return
+  fi
   if [ "$REC_DIFF_HEAD" = "$HEAD" ] && [ -n "$REC_DIFF_RESULT" ]; then
     DIFF_RESULT=$REC_DIFF_RESULT
   else
@@ -463,6 +475,26 @@ attempted_recently() {  # <kind> <now>
     && [ $(($2 - REC_ATTEMPT_AT)) -lt "$RETRY_SECS" ]
 }
 
+# A security-paths refusal repeats for the same head, so it holds the task
+# once instead of retrying.
+record_security_refusal() {  # <task-id>
+  local id=$1 reason hold_rc=0
+  REC_REFUSED_HEAD=$HEAD
+  REC_REFUSED_REASON="merge refused: changes security-sensitive paths; needs the captain's explicit word"
+  record_save "$id" || true
+  reason="Merge of $URL refused: changes security-sensitive paths; needs the captain's explicit word to merge"
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" open "$id" --distinguish-absent >/dev/null 2>&1 || hold_rc=$?
+  case "$hold_rc" in
+    0) return 0 ;;
+    1|3) ;;
+    *) log_line "$id" hold-unreadable "the captain hold could not be read after a security refusal"; return 0 ;;
+  esac
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-captain-hold.sh" hold "$id" --reason "$reason" >/dev/null 2>&1 \
+    || log_line "$id" hold-failed "the security refusal could not be held for the captain"
+}
+
 merge_task() {  # <task-id> <now>
   local id=$1 now=$2 out rc=0
   REC_ATTEMPT_KIND=merge REC_ATTEMPT_HEAD=$HEAD REC_ATTEMPT_AT=$now
@@ -470,6 +502,11 @@ merge_task() {  # <task-id> <now>
   out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-pr-merge.sh" "$id" "$URL" 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
     log_line "$id" merge-refused "$(printf '%s\n' "$out" | grep -E '^(error|actionable):|^  - ' | tail -4 | tr '\n' ' ')"
+    case "$out" in
+      *changes\ security-sensitive\ paths:*)
+        record_security_refusal "$id"
+        ;;
+    esac
     return
   fi
   log_line "$id" merged "$(printf '%s\n' "$out" | grep '^verified:' | tail -1)"
