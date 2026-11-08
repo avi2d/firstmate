@@ -1982,6 +1982,83 @@ assert_contains "$out" 'candidate: pi:claude-bridge/claude-opus-5-5  account=mai
 assert_contains "$out" "--claude-account 'second'" "a stale first account falls to the next"
 
 reset_log
+cat > "$CLAUTH" <<'JSON'
+{ "schema": 2, "active_profile": "main", "profiles": [
+  { "name": "main", "active": true, "tier": "Max 20x", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "7d", "utilization_pct": 39.0 }, { "label": "7d fable", "utilization_pct": 50.0 } ] },
+  { "name": "second", "active": false, "tier": "Pro", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 10.0 }, { "label": "7d", "utilization_pct": 10.0 } ] } ] }
+JSON
+FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  scope=all_models  remaining=61%  spendPriority=-  runway=unknown  -> eligible, uncertain: ok: clauth reading for account main lacks its 5h window: disclosed uncertainty' "a reading with only its 7d window stays eligible on the remaining 61%"
+assert_contains "$out" "  profile: --harness 'pi' --model 'claude-bridge/claude-opus-5-5' --effort 'high' --claude-account 'main'" "the first account in order is still chosen with a missing window"
+assert_contains "$out" 'note: chosen candidate quota uncertain: ok: clauth reading for account main lacks its 5h window' "the missing window is disclosed on the choice"
+
+reset_log
+cat > "$CLAUTH" <<'JSON'
+{ "schema": 2, "active_profile": "main", "profiles": [
+  { "name": "main", "active": true, "tier": "Max 20x", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 12.0 } ] },
+  { "name": "second", "active": false, "tier": "Pro", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 10.0 }, { "label": "7d", "utilization_pct": 10.0 } ] } ] }
+JSON
+FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  scope=all_models  remaining=88%  spendPriority=-  runway=unknown  -> eligible, uncertain: ok: clauth reading for account main lacks its 7d window: disclosed uncertainty' "a reading with only its 5h window stays eligible on the remaining 88%"
+
+reset_log
+cat > "$CLAUTH" <<'JSON'
+{ "schema": 2, "active_profile": "main", "profiles": [
+  { "name": "main", "active": true, "tier": "Max 20x", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00", "windows": [] },
+  { "name": "second", "active": false, "tier": "Pro", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 10.0 }, { "label": "7d", "utilization_pct": 10.0 } ] } ] }
+JSON
+FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  -> eligible, uncertain: provider claude unmeasured (unknown): clauth reading for account main has neither a 5h nor a 7d window: disclosed uncertainty' "a reading with no window at all stays eligible and unknown"
+
+reset_log
+cat > "$CLAUTH" <<'JSON'
+{ "schema": 2, "active_profile": "main", "profiles": [
+  { "name": "main", "active": true, "tier": "Max 20x", "auth_status": "expired", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 24.0 }, { "label": "7d", "utilization_pct": 22.0 } ] },
+  { "name": "second", "active": false, "tier": "Pro", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 0.0 }, { "label": "7d", "utilization_pct": 10.0 } ] } ] }
+JSON
+FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  -> not eligible: clauth reports auth expired for account main' "a failed auth still refuses the account"
+
+reset_log
+cat > "$CLAUTH" <<'JSON'
+{ "schema": 2, "active_profile": "main", "profiles": [
+  { "name": "main", "active": true, "tier": "Max 20x", "auth_status": "ok", "fetch_status": "Failed", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 24.0 }, { "label": "7d", "utilization_pct": 22.0 } ] },
+  { "name": "second", "active": false, "tier": "Pro", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 0.0 }, { "label": "7d", "utilization_pct": 10.0 } ] } ] }
+JSON
+FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=main  provider=claude  -> not eligible: clauth could not read usage for account main' "a failed fetch still refuses the account"
+
+reset_log
+cat > "$CLAUTH" <<'JSON'
+{ "schema": 2, "active_profile": "main", "profiles": [
+  { "name": "main", "active": true, "tier": "Max 20x", "auth_status": "ok", "fetch_status": "Fresh", "stale": false,
+    "fetched_at": "2030-01-01T00:00:00+00:00",
+    "windows": [ { "label": "5h", "utilization_pct": 0.0 }, { "label": "7d", "utilization_pct": 10.0 } ] } ] }
+JSON
+printf '%s\n' 'main ordinary' "second $TMP_ROOT/claude-second" > "$HOME_DIR/config/claude-accounts"
+FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
+assert_contains "$out" 'account=second  provider=claude  -> not eligible: clauth has no profile second' "an account clauth never lists still refuses"
+
+reset_log
 write_clauth "$CLAUTH" 24.0 0.0 false second
 FAKE_CURL_RESPONSE="$ACCOUNT_RESPONSE" run code out err "$BRIEF"
 assert_contains "$out" 'account=main  provider=claude  -> not eligible: the ordinary Claude login is clauth profile second, not main' "an ordinary login is only its account while clauth reports it active"
@@ -2025,7 +2102,7 @@ run code out err "$BRIEF"
 assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "a file without accounts resolves exactly as before"
 assert_absent "$LOG/clauth.calls" "a file without accounts never reads clauth"
 assert_not_contains "$out" 'account=' "a file without accounts prints no account"
-pass "claude_account: each account's clauth windows gate its candidate, a missing or stale reading is never available, and files without accounts are unchanged"
+pass "claude_account: each account's clauth windows gate its candidate, an unreadable or stale reading is never treated as available, and files without accounts are unchanged"
 
 # --- schema 6: rows keyed by provider + accountKey bind per account ----------------
 # quota-axi emits schema 6 once a provider expands to several accounts; every
