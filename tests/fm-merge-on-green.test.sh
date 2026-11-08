@@ -46,6 +46,7 @@ make_case() {  # <name> [registry-tokens] [task-yolo]
   printf 'done [at=1792400000]: PR %s checks green\n' "$URL" > "$c/state/task-x1.status"
   write_view "$c" "$HEAD_A" "$green_rollup"
   plain_diff > "$c/diff.txt"
+  printf '[]\n' > "$c/files.json"
   printf '0\n' > "$c/behind"
   printf '%s\n' state=MERGED merged=true queued=false base=main > "$c/outcome"
   : > "$c/gh.log"
@@ -76,6 +77,12 @@ case "${1:-} ${2:-}" in
   "api repos/"*/compare/*) cat "$FM_TEST_CASE/behind" ;;
   api\ *)
     case " $* " in
+      *"pulls/"*"/files"*)
+        case " $* " in
+          *"&page=1 "*) cat "$FM_TEST_CASE/files.json" 2>/dev/null || printf '[]\n' ;;
+          *) printf '[]\n' ;;
+        esac
+        ;;
       *" repos/"*"/rules/branches/"*) printf '[]\n' ;;
       *" repos/"*"/branches/"*) printf '{"name":"main","protected":false}\n' ;;
       *) printf '[]\n' ;;
@@ -278,6 +285,43 @@ test_boundary_diffs_stay_open() {
   pass "a diff touching credential paths or workflow permissions stays open"
 }
 
+test_security_refusal_holds_once_and_never_retries() {
+  local c
+  c=$(make_case security-refused)
+  printf '[{"filename":".env"}]\n' > "$c/files.json"
+  run_in "$c" "$ROOT/bin/fm-tasks-axi.sh" add task-x1 "fixture change" --kind ship --repo fixture >/dev/null \
+    || fail "security-refused: could not file the backlog item"
+  sweep "$c"
+  [ "$(grep -c ' merge-refused ' "$c/state/merge-on-green.log")" -eq 1 ] \
+    || fail "security-refused: the first green sweep never attempted the merge"
+  if grep -q -- "--match-head-commit $HEAD_A" "$c/gh.log"; then
+    fail "security-refused: a refused head reached the forge merge"
+  fi
+  run_in "$c" "$ROOT/bin/fm-captain-hold.sh" open task-x1 --distinguish-absent >/dev/null \
+    || fail "security-refused: the first refusal held nothing for the captain"
+  grep -qxF "refused_head=$HEAD_A" "$c/state/task-x1.merge-on-green" \
+    || fail "security-refused: the refused head was not recorded"
+  expect_verdict "$c" skip "held for the captain" security-refused-held
+  FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS=0 sweep "$c"
+  FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS=0 sweep "$c"
+  [ "$(grep -c ' merge-refused ' "$c/state/merge-on-green.log")" -eq 1 ] \
+    || fail "security-refused: a held pull request was attempted again"
+  printf 'merge it by hand\n' > "$c/decision.txt"
+  run_in "$c" "$ROOT/bin/fm-captain-hold.sh" answer task-x1 --decision-file "$c/decision.txt" --release >/dev/null \
+    || fail "security-refused: the captain could not release the hold"
+  FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS=0 sweep "$c"
+  [ "$(grep -c ' merge-refused ' "$c/state/merge-on-green.log")" -eq 1 ] \
+    || fail "security-refused: answering the hold retried the refused head"
+  expect_verdict "$c" skip "security-sensitive" security-refused-answered
+  printf '[]\n' > "$c/files.json"
+  write_view "$c" "$HEAD_B" "$green_rollup"
+  FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS=0 sweep "$c"
+  FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS=0 sweep "$c"
+  grep -qxF "pr merge 9 --repo example/repo --match-head-commit $HEAD_B --squash" "$c/gh.log" \
+    || fail "security-refused: a new head did not reopen the merge: $(cat "$c/gh.log")"
+  pass "a security-sensitive refusal holds the task once, never retries that head, and reopens on a new head"
+}
+
 test_behind_head_is_updated_by_merge_then_merges_when_green_again() {
   local c
   c=$(make_case behind)
@@ -455,6 +499,7 @@ test_merge_hold_keeps_a_green_pull_request_open
 test_merge_waits_for_the_workers_done_report
 test_done_line_boundary_flag_stays_open
 test_boundary_diffs_stay_open
+test_security_refusal_holds_once_and_never_retries
 test_behind_head_is_updated_by_merge_then_merges_when_green_again
 test_secondmate_home_wakes_itself_after_its_own_merge
 test_adapter_polls_silently_while_work_remains

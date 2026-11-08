@@ -758,6 +758,7 @@ A pull request merges only when every one of these holds, each read by the progr
 - The worker's latest `done:` line does not flag a credential, token, secret, auth, permission, sandbox, or isolation change.
   A mention counts as a flag unless its clause negates it.
 - The diff touches no path naming a credential, auth, token, secret, sandbox, runner isolation, key, or `.env` file, and changes no `permissions:` line or scope inside a workflow.
+- The pull request head was not already refused for changing security-sensitive paths.
 - The branch does not conflict with its base.
 - The green is settled, so a check that registers late cannot be raced.
   It is settled when the last check finished at least `FM_MERGE_ON_GREEN_SETTLE_SECS` ago, or when the same head read green on two sweeps that far apart.
@@ -766,6 +767,7 @@ A pull request merges only when every one of these holds, each read by the progr
 Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the per-pull-request merge hold, the away record, and every check before the forge call.
 A head that is behind its base is first brought up to date with `gh pr update-branch`, which merges the base into the branch and never rebases, and merges once its new head is green.
 A refused merge or a failed update is retried at the same head only after `FM_MERGE_ON_GREEN_RETRY_SECS`, 300 seconds by default.
+A merge refused for security-sensitive paths instead holds the task for the captain once, and that head is never retried.
 A pull request skipped for what the forge reported, such as a red check, is read again only every `FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS`, 60 seconds by default, so a standing red pull request does not spend a forge read on every sweep.
 Every other pull request, including a red, pending, draft, conflicting, held, or boundary-touching one, stays open on the supervised path.
 
