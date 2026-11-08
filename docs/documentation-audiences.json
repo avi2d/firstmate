@@ -454,6 +454,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0017-pr-health-attempt-aware-wakes.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

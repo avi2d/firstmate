@@ -183,7 +183,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-PR_TIER_JOBS='lint invariants secrets'
+PR_TIER_JOBS='lint static'
 FAST_TIER_JOBS='test-coverage tests-timing-aggregate'
 NORMAL_TIER_JOBS='tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr tests-hc'
@@ -257,8 +257,9 @@ end
   pass "every ci.yml job carries a finite timeout"
 }
 
-# Every job sits in exactly one tier, and the workflow carries exactly four
-# distinct job-level timeouts: one per tier, no one-off numbers.
+# Every job sits in exactly one tier, and the workflow carries exactly five
+# distinct job-level timeouts: the lint cap, the static cap, and one per
+# dispatch tier, no one-off numbers.
 test_every_job_belongs_to_exactly_one_timeout_tier() {
   local expected actual distinct
   expected=$(printf '%s\n' "$PR_TIER_JOBS $FAST_TIER_JOBS $NORMAL_TIER_JOBS $HEAVY_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
@@ -268,9 +269,9 @@ test_every_job_belongs_to_exactly_one_timeout_tier() {
   [ "$actual" = "$expected" ] \
     || fail "ci.yml jobs and the timeout tiers disagree; every job must join one tier"$'\n'"workflow: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"tiers: $(printf '%s' "$expected" | tr '\n' ' ')"
   distinct=$(printf '%s\n' "$expected" | while read -r job; do job_timeout "$job"; done | LC_ALL=C sort -u | wc -l | tr -d ' ')
-  [ "$distinct" = 4 ] \
-    || fail "ci.yml must carry exactly four distinct job timeouts (pr, fast, normal, heavy), got $distinct"
-  pass "every ci.yml job belongs to one of the four timeout tiers"
+  [ "$distinct" = 5 ] \
+    || fail "ci.yml must carry exactly five distinct job timeouts (lint, static, fast, normal, heavy), got $distinct"
+  pass "every ci.yml job belongs to one of the timeout tiers"
 }
 
 # Fast tier: seconds-long checks share one short tripwire in the 5-10 minute band.
@@ -345,8 +346,9 @@ test_fork_skip_variables_are_opt_in() {
   local all pr push_gate dispatch event skip_push skip_macos expected want actual
   all=$(workflow_jobs | LC_ALL=C sort) || fail "could not list ci.yml jobs"
   pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
-  # Push runs the PR gate without the pull-request-only secrets scan.
-  push_gate=$(printf '%s\n' "$pr" | grep -vx secrets)
+  # Push runs the same job set as a pull request: the secrets steps inside the
+  # static gate skip there, but the job itself still runs its invariants.
+  push_gate=$pr
   dispatch=$(comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$pr"))
   printf '%s\n' "$all" | grep -qx macos-stock-bash \
     || fail "the macOS job is missing from ci.yml, so the table below would prove nothing"
@@ -381,19 +383,21 @@ TABLE
 # Pull request runs carry the capped static gate, and push runs carry it
 # without the pull-request-only secrets scan.
 test_pull_request_and_push_runs_carry_only_their_capped_gates() {
-  local pr push_gate event actual want job
+  local pr event actual job cap
   pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
-  # Push runs the PR gate without the pull-request-only secrets scan.
-  push_gate=$(printf '%s\n' "$pr" | grep -vx secrets)
+  # Push runs the same job set: the static gate's secrets steps skip there,
+  # but the job itself still runs its invariants.
   for event in pull_request push; do
     actual=$(jobs_running_under "$event" '' '' | LC_ALL=C sort) || fail "could not resolve the jobs $event runs"
-    case $event in pull_request) want=$pr ;; push) want=$push_gate ;; esac
-    [ "$actual" = "$want" ] || fail "$event must run only its capped gate ($(printf '%s' "$want" | tr '\n' ' ')), ran: $(printf '%s' "$actual" | tr '\n' ' '))"
+    [ "$actual" = "$pr" ] || fail "$event must run only its capped gate ($(printf '%s' "$pr" | tr '\n' ' ')), ran: $(printf '%s' "$actual" | tr '\n' ' '))"
   done
-  while read -r job; do
-    [ "$(job_timeout "$job")" = 10 ] \
-      || fail "$job must cap at 10 minutes on a pull request or push run, got $(job_timeout "$job")"
-  done <<<"$pr"
+  while read -r job cap; do
+    [ "$(job_timeout "$job")" = "$cap" ] \
+      || fail "$job must cap at $cap minutes on a pull request or push run, got $(job_timeout "$job")"
+  done <<'TABLE'
+lint 15
+static 10
+TABLE
   pass "pull request and push runs carry only their capped gates"
 }
 
@@ -454,11 +458,12 @@ expected = shards.map { |s| "portable-serial-#{s}of#{shards.length}" }
 raise "CI matrix and runner disagree" unless actual.sort == expected.sort
 lint = jobs.fetch("lint").fetch("strategy")
 raise "lint failures must not cancel another partition" unless lint.fetch("fail-fast") == false
-matrix = lint.fetch("matrix")
-raise "unexpected lint dimensions" unless matrix.keys == ["partition"]
-parts = matrix.fetch("partition")
+shards = lint.fetch("matrix").fetch("include")
+raise "unexpected lint dimensions" unless shards.all? { |entry| entry.keys.sort == ["part_a", "part_b", "shard"] }
+parts = shards.flat_map { |entry| [entry.fetch("part_a"), entry.fetch("part_b")] }
+raise "lint shards must pair the twelve canonical partitions" unless parts.map(&:to_i).sort == (1..12).to_a
 roots = parts.flat_map do |p|
-  output, result = Open3.capture2(File.join(root, "bin/fm-lint.sh"), "--partition", "#{p}of#{parts.length}", "--list-files")
+  output, result = Open3.capture2(File.join(root, "bin/fm-lint.sh"), "--partition", "#{p}of12", "--list-files")
   raise "unsupported lint partition" unless result.success?
   output.lines.map(&:strip)
 end
