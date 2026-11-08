@@ -1818,7 +1818,7 @@ It also needs `claude`, `gh`, and `script` on PATH, and the Claude GitHub App mu
 
 The account is never inferred, so a home that leaves the file absent cannot spend its default login's cloud usage by accident.
 A spawn's `--claude-account` overrides the file for that task only.
-A cloud-claude spawn skips the Mac and Linux load gates, the heavy-worker cap, and the core budget, because its session runs on Anthropic's hosts, and it holds no heavy worker place, so local starts do not count it.
+A cloud-claude spawn skips the Mac and Linux load gates, the heavy-worker cap, the core budget, and the [browser-suite](#browser-suites) stagger, because its session runs on Anthropic's hosts, and it holds no heavy worker place, so local starts do not count it.
 [Project capacity](#project-capacity-configproject-capacity) still applies to it.
 The relay reports a ready pull request on the task branch as the task's result, and a missing one past the deadline as a blocker that links the session.
 Each forwarded steer restarts the deadline.
@@ -1963,6 +1963,28 @@ When every place is held, `bin/fm-spawn.sh` launches nothing, creates no record,
 A malformed or unreadable file refuses every fresh ship or scout spawn until it is fixed, rather than guessing the intended limit, and so does a local home's state directory or task record that cannot be read while counting a capped project's holders.
 Firstmate cannot see which part of a worker's life uses the resource, so the number bounds whole workers from launch to handoff, and the tightest resource every worker needs should decide it.
 [`bin/fm-project-capacity-lib.sh`](../bin/fm-project-capacity-lib.sh) owns the file format, what holds a place, and why concurrent spawns cannot both take the last one.
+
+## Browser suites
+
+The optional local, gitignored `config/browser-suites` names the projects whose workers run a browser suite, and how far apart their starts must be, so several suites do not start together and spike the machine's load.
+Without it, no worker is a browser-suite worker unless its brief marks one, and no start is staggered.
+Like `config/project-capacity`, the file lives in the machine's root Firstmate home, so every local secondmate home reads the same declaration:
+
+```text
+# browser suites in these projects
+@stagger-minutes 10
+my-web-app
+```
+
+Each other line names one project by its registered name, which is its clone directory name and may contain spaces, while blank lines and lines that are `#` or begin with `#` and whitespace are comments.
+`@stagger-minutes` is the minimum gap, in whole minutes, between two browser-suite starts on this machine, and it may appear at most once.
+A brief also marks its own task as a browser-suite worker with a line that is exactly `Browser suite: yes`, for a browser suite in a project the file does not list.
+A browser-suite worker always starts heavy: a `--weight light` spawn is raised to heavy with a note, so it waits on the core budget like any heavy start, and it holds a heavy worker place under the machine-wide settings of [project capacity](#project-capacity-configproject-capacity) as every ship or scout does.
+A fresh browser-suite ship or scout that starts inside the gap after the previous browser-suite start launches nothing, prints one `deferred:` line naming how many minutes remain, leaves its backlog item queued, and exits 75, so Firstmate dispatches it again once the gap passes.
+The start time is recorded only once a browser-suite start passes every other admission gate and brief check, and a start that fails after that point still holds the gap until it passes.
+Every other worker, a relaunch, a secondmate, and a cloud-claude worker are never delayed by the stagger.
+A malformed or unreadable file refuses every fresh ship or scout spawn until it is fixed, rather than guessing which projects or gap were meant.
+[`bin/fm-browser-suite-lib.sh`](../bin/fm-browser-suite-lib.sh) owns the file format, the brief marker, and the machine-shared start record.
 
 ## Project tiers
 
