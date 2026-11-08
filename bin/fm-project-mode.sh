@@ -140,18 +140,21 @@ RAW=0
 BRANCH_PREFIX_QUERY=0
 WANT_FORGE=0
 WANT_PR=0
+PLACEMENT_QUERY=0
 case "${1:-}" in
   --raw) RAW=1; shift ;;
   --branch-prefix) BRANCH_PREFIX_QUERY=1; shift ;;
   --forge) WANT_FORGE=1; shift ;;
   --pr) WANT_PR=1; shift ;;
+  --placement) PLACEMENT_QUERY=1; shift ;;
 esac
-NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge|--pr] <project-name>}
+NAME=${1:?usage: fm-project-mode.sh [--raw|--branch-prefix|--forge|--pr|--placement] <project-name>}
 
 if [ ! -f "$REG" ]; then
   echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
+  elif [ "$PLACEMENT_QUERY" -eq 1 ]; then echo ""
   elif [ "$WANT_FORGE" -eq 1 ]; then echo none
   elif [ "$WANT_PR" -eq 1 ]; then echo auto; else echo "no-mistakes off"; fi
   exit 0
@@ -188,7 +191,7 @@ parsed=$(awk -v n="$NAME" '
     if (substr($0, 1, plen) != prefix) next
     after = substr($0, plen + 1);
     if (after != "" && substr(after, 1, 2) != " [" && substr(after, 1, 3) != " - ") next
-    mode="no-mistakes"; yolo="off"; branch="fm/"; forge="none"; pr="auto";
+    mode="no-mistakes"; yolo="off"; branch="fm/"; forge="none"; pr="auto"; host="";
     if (substr(after, 1, 2) == " [") {
       s="";
       nk = split(after, rest, " ");
@@ -205,6 +208,7 @@ parsed=$(awk -v n="$NAME" '
         if (a[j] ~ /^branch=/) { branch = substr(a[j], 8); continue }
         if (a[j] ~ /^forge=/) { forge = a[j]; continue }
         if (a[j] ~ /^pr=/) { pr = a[j]; continue }
+        if (a[j] ~ /^host=/) { host = substr(a[j], 6); continue }
         if (a[j] ~ /^[^=]+=/) {
           key = substr(a[j], 1, index(a[j], "=") - 1);
           e = dist(key, "forge");
@@ -217,6 +221,7 @@ parsed=$(awk -v n="$NAME" '
     }
     # branch is printed LAST: an empty branch= override must survive as an
     # empty final field, which only holds when nothing follows it.
+    print "host", host
     print "posture", mode, yolo, forge, pr, branch; exit
   }
 ' "$REG")
@@ -225,16 +230,19 @@ if [ -z "$parsed" ]; then
   echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2
   if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
     echo "fm/"
+  elif [ "$PLACEMENT_QUERY" -eq 1 ]; then echo ""
   elif [ "$WANT_FORGE" -eq 1 ]; then echo none
   elif [ "$WANT_PR" -eq 1 ]; then echo auto; else echo "no-mistakes off"; fi
   exit 0
 fi
 
 posture=
+hostval=
 while IFS=' ' read -r kind rest; do
   case "$kind" in
     near) echo "warn: ignoring \"$rest\" registered for $NAME in $REG; it is not a forge binding, and the forge binding is spelled forge=gerrit, forge=forgejo, or forge=external" >&2 ;;
     posture) posture=$rest ;;
+    host) hostval=$rest ;;
   esac
 done <<EOF
 $parsed
@@ -253,6 +261,16 @@ esac
 case "$yolo" in on|off) ;; *) yolo=off ;; esac
 if [ "$BRANCH_PREFIX_QUERY" -eq 1 ]; then
   echo "$branch"
+  exit 0
+fi
+if [ "$PLACEMENT_QUERY" -eq 1 ]; then
+  case "$hostval" in
+    '' ) ;;
+    -*|*[!A-Za-z0-9._-]* )
+      echo "error: malformed host= placement \"$hostval\" for $NAME in $REG" >&2
+      exit 3 ;;
+  esac
+  echo "$hostval"
   exit 0
 fi
 

@@ -1258,6 +1258,15 @@ A remote route adds `host:` and `root:` before the existing fields and places th
 Use `fm-home-seed.sh validate` to check the complete operational registry contract documented by the command itself.
 The main first mate routes by reading those scopes with judgment; the project list is provisioning data, not exclusive ownership.
 
+### Execution home routes
+
+Agentless remote execution homes live locally in `data/remote-homes.md`.
+Each record uses the remote second mate line grammar with an optional `session:` field that defaults to `fm-remote`.
+The same identifier cannot appear in both route files.
+Seed a route with `fm-remote-home-seed.sh --exec`, which writes an `.fm-exec-home` marker and `config/backlog-backend=manual`, records the session in `config/herdr-session` on the remote home, clones the listed project origins, and gates on the remote doctor.
+`fm-on.sh` reads both route files.
+`fm-project-mode.sh --placement` reads the `host=` project annotation.
+
 ### Provision a local home
 
 Use `fm-home-seed.sh <id> - {<project>...|--no-projects}` to lease a fresh local firstmate worktree for the secondmate home.
