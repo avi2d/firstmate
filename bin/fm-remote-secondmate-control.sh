@@ -13,6 +13,14 @@ REMOTE_HERDR_SESSION=fm-remote
 export FM_BACKEND_REX_NO_AUTOSTART=1
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+if [ -f "$TARGET_HOME/config/herdr-session" ] && [ ! -L "$TARGET_HOME/config/herdr-session" ]; then
+  REMOTE_SESSION_NAME=$(tr -d '[:space:]' < "$TARGET_HOME/config/herdr-session" 2>/dev/null || true)
+  case "$REMOTE_SESSION_NAME" in
+    '') ;;
+    *[!A-Za-z0-9._-]*) die "remote Herdr session record is not a safe session name: $TARGET_HOME/config/herdr-session" ;;
+    *) REMOTE_HERDR_SESSION=$REMOTE_SESSION_NAME ;;
+  esac
+fi
 usage() {
   cat <<'USAGE'
 Host-local lifecycle control for the remote secondmate home selected by fm-on.

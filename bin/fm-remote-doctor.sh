@@ -1146,12 +1146,18 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
   printf 'fix: install each one where it resolves on the path reported above, or put a wrapper script for it in %s/.local/bin, which is always on that PATH.\n' "${HOME:-~}" >&2
   printf 'fix: tools in an unselected nvm version or outside the discovered asdf or mise paths need an absolute wrapper; see docs/remote-secondmates.md for the wrapper recipe.\n' >&2
 fi
+DOCTOR_HOME_KIND="second mate"
+DOCTOR_HOME_WORD="second-mate"
+if [ -n "${FM_HOME:-}" ] && [ -f "$FM_HOME/.fm-exec-home" ] && [ ! -e "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ]; then
+  DOCTOR_HOME_KIND="execution home"
+  DOCTOR_HOME_WORD="execution-home"
+fi
 if [ "${#MISSING[@]}" -gt 0 ] || [ "${#GAPS[@]}" -gt 0 ]; then
   NAMES=
   for i in ${GAPS[@]+"${GAPS[@]}"}; do
     NAMES="${NAMES:+$NAMES }${CHECK_NAMES[$i]}"
   done
-  printf 'error: this host is not ready for a remote second mate%s\n' "${NAMES:+; unresolved: $NAMES}" >&2
+  printf 'error: this host is not ready for a remote %s%s\n' "$DOCTOR_HOME_KIND" "${NAMES:+; unresolved: $NAMES}" >&2
   exit 1
 fi
-printf 'ok: remote second-mate readiness confirmed on this host\n'
+printf 'ok: remote %s readiness confirmed on this host\n' "$DOCTOR_HOME_WORD"

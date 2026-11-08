@@ -47,6 +47,7 @@ manifest_value() { # <file> <key>
 safe_id() { case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-provision.XXXXXX") || die "cannot create provisioning state"
+EXEC_HOME=0
 CREATED_HOME=0
 CREATED_BACKLOG=0
 EXISTING_HOME=0
@@ -82,9 +83,15 @@ rollback() {
       while IFS= read -r project; do
         [ -n "$project" ] && rm -rf -- "$FM_HOME/projects/$project"
       done < "$CREATED_PROJECTS"
-      restore_owned_file data/charter.md || true
+      if [ "$EXEC_HOME" -eq 1 ]; then
+        restore_owned_file .fm-exec-home || true
+        restore_owned_file config/backlog-backend || true
+        restore_owned_file config/herdr-session || true
+      else
+        restore_owned_file data/charter.md || true
+        restore_owned_file .fm-secondmate-home || true
+      fi
       restore_owned_file data/projects.md || true
-      restore_owned_file .fm-secondmate-home || true
       restore_owned_file .fm-secondmate-parent || true
       [ "$CREATED_BACKLOG" -eq 0 ] || rm -f -- "$FM_HOME/data/backlog.md"
     fi
@@ -99,16 +106,32 @@ head -c "$((MAX_MANIFEST_BYTES + 1))" > "$TMP/manifest" || die "cannot read prov
 MANIFEST_BYTES=$(LC_ALL=C wc -c < "$TMP/manifest" | tr -d ' ')
 [ "$MANIFEST_BYTES" -le "$MAX_MANIFEST_BYTES" ] || die "provisioning manifest exceeds its byte bound"
 SCHEMA=$(manifest_value "$TMP/manifest" schema || true)
-[ "$SCHEMA" = fm-remote-home-provision.v1 ] || die "incompatible provisioning manifest"
+case "$SCHEMA" in
+  fm-remote-home-provision.v1) EXEC_HOME=0 ;;
+  fm-remote-exec-home-provision.v1) EXEC_HOME=1 ;;
+  *) die "incompatible provisioning manifest" ;;
+esac
+if [ "$EXEC_HOME" -eq 1 ]; then MARKER=.fm-exec-home; else MARKER=.fm-secondmate-home; fi
 ID_B64=$(manifest_value "$TMP/manifest" id_b64 || true)
 CHARTER_B64=$(manifest_value "$TMP/manifest" charter_b64 || true)
+SESSION_B64=$(manifest_value "$TMP/manifest" session_b64 || true)
 # Optional so a manifest sent by a not-yet-updated parent (predating this
 # field) still provisions; the durable parent record below simply omits the
 # host in that case rather than refusing the whole seed.
 PARENT_HOST_B64=$(manifest_value "$TMP/manifest" parent_host_b64 || true)
 COUNT=$(manifest_value "$TMP/manifest" project_count || true)
 base64_decode_to "$ID_B64" "$TMP/id" || die "manifest id is not valid base64"
-base64_decode_to "$CHARTER_B64" "$TMP/charter" || die "manifest charter is not valid base64"
+if [ "$EXEC_HOME" -eq 1 ]; then
+  [ -z "$CHARTER_B64" ] || die "execution-home manifest must not carry a charter"
+else
+  base64_decode_to "$CHARTER_B64" "$TMP/charter" || die "manifest charter is not valid base64"
+fi
+SESSION=fm-remote
+if [ -n "$SESSION_B64" ]; then
+  base64_decode_to "$SESSION_B64" "$TMP/session" || die "manifest session is not valid base64"
+  SESSION=$(cat "$TMP/session")
+  case "$SESSION" in ''|*[!A-Za-z0-9._-]*) die "manifest carries an unsafe Herdr session name" ;; esac
+fi
 PARENT_HOST=
 if [ -n "$PARENT_HOST_B64" ]; then
   base64_decode_to "$PARENT_HOST_B64" "$TMP/parent-host" || die "manifest parent host is not valid base64"
@@ -117,8 +140,10 @@ fi
 ID=$(cat "$TMP/id")
 safe_id "$ID" || die "manifest carries an unsafe secondmate id"
 case "$COUNT" in ''|*[!0-9]*) die "manifest project count is invalid" ;; esac
-[ -s "$TMP/charter" ] || die "manifest charter is empty"
-[ -z "$(LC_ALL=C tr -cd '\000' < "$TMP/charter")" ] || die "manifest charter contains NUL bytes"
+if [ "$EXEC_HOME" -eq 0 ]; then
+  [ -s "$TMP/charter" ] || die "manifest charter is empty"
+  [ -z "$(LC_ALL=C tr -cd '\000' < "$TMP/charter")" ] || die "manifest charter contains NUL bytes"
+fi
 RECORDS=$(grep -c '^project=' "$TMP/manifest" 2>/dev/null || true)
 [ "$RECORDS" -eq "$COUNT" ] || die "manifest project count does not match its records"
 
@@ -161,7 +186,13 @@ if [ -e "$FM_HOME" ] || [ -L "$FM_HOME" ]; then
     fi
   done
   mkdir -p "$TMP/before/data"
-  for rel in data/charter.md data/projects.md .fm-secondmate-home .fm-secondmate-parent; do
+  mkdir -p "$TMP/before/config"
+  if [ "$EXEC_HOME" -eq 1 ]; then
+    owned_files=(data/projects.md .fm-exec-home .fm-secondmate-parent config/backlog-backend config/herdr-session)
+  else
+    owned_files=(data/charter.md data/projects.md .fm-secondmate-home .fm-secondmate-parent)
+  fi
+  for rel in "${owned_files[@]}"; do
     existing="$FM_HOME/$rel"
     if [ -e "$existing" ] || [ -L "$existing" ]; then
       [ -f "$existing" ] && [ ! -L "$existing" ] || die "existing remote home has unsafe owned file: $rel"
@@ -171,8 +202,20 @@ if [ -e "$FM_HOME" ] || [ -L "$FM_HOME" ]; then
     fi
   done
   EXISTING_HOME=1
-  if [ -f "$FM_HOME/.fm-secondmate-home" ]; then
-    [ "$(cat "$FM_HOME/.fm-secondmate-home")" = "$ID" ] || die "existing remote home belongs to another secondmate"
+  if [ "$EXEC_HOME" -eq 1 ]; then
+    [ ! -e "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ] \
+      || die "existing remote home belongs to a secondmate home"
+  else
+    [ ! -e "$FM_HOME/.fm-exec-home" ] && [ ! -L "$FM_HOME/.fm-exec-home" ] \
+      || die "existing remote home belongs to an execution home"
+  fi
+  if [ "$EXEC_HOME" -eq 1 ]; then
+    KIND_MISMATCH="existing remote home belongs to another execution home"
+  else
+    KIND_MISMATCH="existing remote home belongs to another secondmate"
+  fi
+  if [ -f "$FM_HOME/$MARKER" ]; then
+    [ "$(cat "$FM_HOME/$MARKER")" = "$ID" ] || die "$KIND_MISMATCH"
   elif find "$FM_HOME/data" "$FM_HOME/state" "$FM_HOME/projects" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
     die "unmarked existing remote home contains operational data"
   fi
@@ -263,9 +306,16 @@ EOF
   printf '%s\n' "$REGISTRY_LINE" >> "$PROJECT_REG"
 done < <(grep '^project=' "$TMP/manifest")
 
-cp "$TMP/charter" "$FM_HOME/data/charter.md.tmp.$$"
-chmod 600 "$FM_HOME/data/charter.md.tmp.$$"
-mv -f -- "$FM_HOME/data/charter.md.tmp.$$" "$FM_HOME/data/charter.md"
+if [ "$EXEC_HOME" -eq 1 ]; then
+  printf 'manual\n' > "$FM_HOME/config/backlog-backend.tmp.$$"
+  mv -f -- "$FM_HOME/config/backlog-backend.tmp.$$" "$FM_HOME/config/backlog-backend"
+  printf '%s\n' "$SESSION" > "$FM_HOME/config/herdr-session.tmp.$$"
+  mv -f -- "$FM_HOME/config/herdr-session.tmp.$$" "$FM_HOME/config/herdr-session"
+else
+  cp "$TMP/charter" "$FM_HOME/data/charter.md.tmp.$$"
+  chmod 600 "$FM_HOME/data/charter.md.tmp.$$"
+  mv -f -- "$FM_HOME/data/charter.md.tmp.$$" "$FM_HOME/data/charter.md"
+fi
 cp "$PROJECT_REG" "$FM_HOME/data/projects.md.tmp.$$"
 mv -f -- "$FM_HOME/data/projects.md.tmp.$$" "$FM_HOME/data/projects.md"
 {
@@ -274,8 +324,8 @@ mv -f -- "$FM_HOME/data/projects.md.tmp.$$" "$FM_HOME/data/projects.md"
   [ -z "$PARENT_HOST" ] || printf 'parent_host=%s\n' "$PARENT_HOST"
 } > "$FM_HOME/.fm-secondmate-parent.tmp.$$"
 mv -f -- "$FM_HOME/.fm-secondmate-parent.tmp.$$" "$FM_HOME/.fm-secondmate-parent"
-printf '%s\n' "$ID" > "$FM_HOME/.fm-secondmate-home.tmp.$$"
-mv -f -- "$FM_HOME/.fm-secondmate-home.tmp.$$" "$FM_HOME/.fm-secondmate-home"
+printf '%s\n' "$ID" > "$FM_HOME/$MARKER.tmp.$$"
+mv -f -- "$FM_HOME/$MARKER.tmp.$$" "$FM_HOME/$MARKER"
 PUBLISHED=1
 release_provision_lock
 trap - EXIT
