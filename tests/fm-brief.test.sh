@@ -484,6 +484,34 @@ test_pr_based_dod_requires_non_draft() {
   pass "fm-brief.sh: PR-based done requires a non-draft PR; a deliberate draft declares a wait"
 }
 
+# A worker that writes its own PR title must hold it to the repository's
+# commitlint rules first; the pipeline's own pr step does that for its title.
+test_hand_written_pr_title_brief_without_commitlint_step_is_refused() {
+  local home id brief lint_step
+  home="$TMP_ROOT/title-lint-home"
+  mkdir -p "$home/data"
+  lint_step="check the title against the repository's own commitlint rules when it has them - a commitlint config, or a CI step that lints the pull request title"
+  for id in direct-PR no-mistakes-manual no-mistakes local-only; do
+    case "$id" in
+      no-mistakes-manual) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "brief-title-$id" some-proj --mode no-mistakes --pr manual >/dev/null 2>&1 ;;
+      *) FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "brief-title-$id" some-proj --mode "$id" >/dev/null 2>&1 ;;
+    esac
+    brief="$home/data/brief-title-$id/brief.md"
+    assert_present "$brief" "$id: brief was not scaffolded"
+    case "$id" in
+      direct-PR|no-mistakes-manual)
+        assert_grep "Before you open the PR or change its title, $lint_step" "$brief" \
+          "$id: a hand-written PR title must be linted with the repository's commitlint rules first"
+        ;;
+      *)
+        assert_no_grep "$lint_step" "$brief" \
+          "$id: a brief whose worker writes no PR title must not carry the title-lint step"
+        ;;
+    esac
+  done
+  pass "fm-brief.sh: direct-PR and pr=manual briefs lint the hand-written PR title with the repository's commitlint rules"
+}
+
 # Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
 # reference must render as plain prose with no dangling apostrophe artifact.
 test_no_mistakes_dod_wording() {
@@ -1839,6 +1867,7 @@ test_no_mistakes_dod_wording
 test_captain_examples_are_verbatim_oracle
 test_no_mistakes_dod_green_detection
 test_pr_based_dod_requires_non_draft
+test_hand_written_pr_title_brief_without_commitlint_step_is_refused
 test_ask_user_escalation_format
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
