@@ -973,6 +973,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-mac-load-lib.sh"
 # shellcheck source=bin/fm-core-budget-lib.sh
 . "$SCRIPT_DIR/fm-core-budget-lib.sh"
+# shellcheck source=bin/fm-browser-suite-lib.sh
+. "$SCRIPT_DIR/fm-browser-suite-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # shellcheck source=bin/fm-quota-axi-lib.sh
@@ -4456,6 +4458,18 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
     exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
   fi
 fi
+SPAWN_BROWSER_SUITE=0
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$HARNESS" != cloud-claude ]; then
+  if ! fm_browser_suite_config "$SPAWN_CAPACITY_CONFIG"; then
+    echo "error: spawn refused: the browser-suite declaration is unreadable ($FM_BROWSER_SUITE_ERROR); fix it so browser-suite starts stay staggered (docs/configuration.md \"Browser suites\")" >&2
+    exit 1
+  fi
+  if fm_browser_suite_task "$(basename "$PROJ_ABS")" "$BRIEF"; then
+    SPAWN_BROWSER_SUITE=1
+    [ "$WEIGHT" != light ] || echo "note: task $ID runs a browser suite, so it starts heavy despite --weight light" >&2
+    WEIGHT=heavy
+  fi
+fi
 # The Mac load gate extends the capacity path above: a heavy start waits while
 # the five-minute average is high or the standing heavy cap for the hour is full.
 # A relaunch replaces a worker that already holds a heavy place, so it skips the gate rather than stranding the task with no agent running.
@@ -4622,6 +4636,24 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   elif fm_brief_base_branches "$BRIEF" >/dev/null; then
     echo "error: $BRIEF records a Base branch line but the spawn has no --base-branch; pass the brief's base with --base-branch or re-scaffold the brief without one" >&2
     exit 1
+  fi
+  # Runs after the admission gates and brief checks, because an admitted start
+  # claims the stagger gap and a later deferral or refusal would leave it
+  # claimed by a worker that never started.
+  if [ "$SPAWN_BROWSER_SUITE" = 1 ]; then
+    SPAWN_BROWSER_STAMP=$(fm_browser_suite_stamp_file "$FM_HOME") || {
+      echo "error: spawn refused: the machine-shared browser-suite start record cannot be resolved" >&2
+      exit 1
+    }
+    SPAWN_BROWSER_RC=0
+    fm_browser_suite_stagger_admit "$SPAWN_BROWSER_STAMP" "$FM_BROWSER_SUITE_STAGGER_SECS" || SPAWN_BROWSER_RC=$?
+    if [ "$SPAWN_BROWSER_RC" = 1 ]; then
+      echo "deferred: another browser-suite worker started inside the $((FM_BROWSER_SUITE_STAGGER_SECS / 60))-minute stagger gap ($FM_BROWSER_SUITE_FILE); task $ID was not launched and its backlog item stays queued - dispatch it again in $(((FM_BROWSER_SUITE_WAIT_SECS + 59) / 60)) minute(s)" >&2
+      exit "$FM_BROWSER_SUITE_DEFER_EXIT"
+    elif [ "$SPAWN_BROWSER_RC" != 0 ]; then
+      echo "error: spawn refused: the browser-suite stagger cannot be checked ($FM_BROWSER_SUITE_ERROR)" >&2
+      exit 1
+    fi
   fi
   # Use the existing launch-brief overlay for every worker kind, including
   # pre-scope briefs and relaunches. Charters never enter this worker path.
