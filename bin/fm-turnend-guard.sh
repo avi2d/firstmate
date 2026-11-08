@@ -101,6 +101,7 @@ WATCH="$SCRIPT_DIR/fm-watch.sh"
 CLAUDE_MODE=0
 CURSOR_MODE=0
 AGY_MODE=0
+AWAY_OFFER=0
 SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
@@ -113,13 +114,44 @@ for arg in "$@"; do
     --claude) CLAUDE_MODE=1 ;;
     --cursor) CURSOR_MODE=1 ;;
     --agy) AGY_MODE=1 ;;
-    *) echo "usage: $(basename "$0") [--claude|--cursor|--agy]" >&2; exit 2 ;;
+    --away-offer) AWAY_OFFER=1 ;;
+    *) echo "usage: $(basename "$0") [--claude|--cursor|--agy|--away-offer]" >&2; exit 2 ;;
   esac
 done
 
 allow_exit() {
   [ "$AGY_MODE" -eq 1 ] && printf '{}\n'
   exit 0
+}
+
+# One /afk offer per window: without the stamp every turn end with work in
+# flight would nag an attended captain again.
+away_offer_check() {
+  local need now last repeat
+  fm_primary_scope_matches "$FM_ROOT" "$STATE" || return 1
+  fm_supervision_status "$STATE" "$GRACE"
+  [ "$FM_SUP_NEEDED" = true ] || return 1
+  [ ! -e "$STATE/.afk" ] && [ ! -e "$STATE/.afk-contract" ] || return 1
+  repeat=${FM_AWAY_OFFER_REPEAT_SECS:-14400}
+  case "$repeat" in ''|*[!0-9]*) repeat=14400 ;; esac
+  if [ -f "$STATE/.turnend-away-offered" ]; then
+    last=$(cat "$STATE/.turnend-away-offered" 2>/dev/null || printf '0')
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    now=$(date +%s)
+    [ $((now - last)) -ge "$repeat" ] || return 1
+  fi
+  if [ "$FM_SUP_IN_FLIGHT" -gt 0 ]; then
+    need="$FM_SUP_IN_FLIGHT task(s) in flight"
+  elif [ "$FM_SUP_SOURCES" -gt 0 ]; then
+    need="$FM_SUP_SOURCES process-event source(s) registered"
+  elif [ "$FM_SUP_CHECKS" -gt 0 ]; then
+    need="$FM_SUP_CHECKS registered custom check(s)"
+  else
+    need="X-mode relay polling active"
+  fi
+  printf '%s\n' "$need with supervision running. If you are stepping away from the keyboard, say /afk (optionally with instructions, e.g. /afk keep watching the PRs) and the away session keeps watch until you return. Nothing changes unless you say so."
+  date +%s > "$STATE/.turnend-away-offered" 2>/dev/null || true
+  return 0
 }
 
 # A Claude secondmate's home carries .fm-busy-stop (bin/fm-spawn.sh), and this
@@ -155,6 +187,16 @@ trap record_parent_stop_state EXIT
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-hook-host-lib.sh
 . "$SCRIPT_DIR/fm-hook-host-lib.sh"
+
+# A passive-harness query: exit 0 printing a one-paragraph /afk offer when a
+# turn ends with work in flight and away mode off, exit 1 silent otherwise. An
+# offer only: this path never blocks a turn and never enables away mode.
+if [ "$AWAY_OFFER" -eq 1 ]; then
+  if away_offer_check; then
+    exit 0
+  fi
+  exit 1
+fi
 
 # Read the whole turn-end hook payload once; never block on unreadable/absent
 # stdin.
