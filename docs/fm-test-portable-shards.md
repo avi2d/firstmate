@@ -98,6 +98,10 @@ The estimates use per-file maxima from different runs, not measured rebalanced j
 Even so, maxima from five runs do not establish a P95 or guarantee future headroom.
 Job timeouts remain hang tripwires under the policy in [Timeouts](#timeouts) below; they are not the desired healthy duration.
 `tests/fm-ci-workflow.test.sh` compares the parsed CI matrix to the executable runner lanes, and the runner rejects parallel `--jobs` on a serial lane even when that shard has only one member.
+The captain-hold suite is ten serial members so no one file occupies a whole CI shard: `tests/fm-captain-hold-migration.test.sh` carries legacy migration with 9 tests, local 27814 ms, and hint 24000 ms, `tests/fm-captain-hold-core.test.sh` carries hold, answer, release, deferral, and the completion gate with 15 tests, local 112902 ms, and hint 99000 ms, `tests/fm-captain-hold-secondmate.test.sh` carries secondmate routing and parent-channel publication with 3 tests, local 43419 ms, and hint 38000 ms, `tests/fm-captain-hold-reconcile.test.sh` carries answer channels, keyed intake, and reconcile with 6 tests, local 128101 ms, and hint 113000 ms, `tests/fm-captain-hold-answers.test.sh` carries the board, answer recording, divergence, chat, and slug validation with 8 tests, local 96212 ms, and hint 85000 ms, `tests/fm-captain-hold-retention.test.sh` carries teardown, retention, and archived calls with 11 tests, local 245693 ms, and hint 216000 ms, `tests/fm-captain-hold-merge.test.sh` carries merge, cleanup, relabel, and verify with 12 tests, local 123256 ms, and hint 108000 ms, `tests/fm-captain-hold-bodies.test.sh` carries body decoding and reason text with 3 tests, local 63234 ms, and hint 56000 ms, `tests/fm-captain-hold-origins.test.sh` carries origin publication and identity rules with 3 tests, local 186764 ms, and hint 164000 ms, and `tests/fm-captain-hold-origin-moves.test.sh` carries interrupted moves, repair, and identity comparison with 3 tests, local 253571 ms, and hint 223000 ms.
+Those hints are the 2026-11-08 macOS local `duration_ms` samples scaled by 0.88.
+The unscaled samples sum to about 1281 seconds, which would pack the twelve serial shards past the 1200000 ms modeled budget, so the scale keeps the packing under budget rather than claiming CI runs faster than the local samples.
+Refresh these ten from Ubuntu timing artifacts on the next green run, and let that refresh restore unscaled maxima wherever the budget then allows.
 
 Refresh the CI-derived hints by downloading the per-shard timing artifacts from several green CI runs and replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the slowest measured `duration_ms` per `path`:
 
@@ -136,9 +140,9 @@ Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.s
 The workflow uploads each partition's quiet telemetry plus its per-root lifecycle sidecar to distinguish analysis cost, memory use, and host contention.
 No fast mode, path skips, or paid runner provisioning is part of this layout.
 
-The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the three watch-triage members still sum to about 26 minutes of CI test time.
+The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the three watch-triage members still sum to about 26 minutes of CI test time and the ten captain-hold members sum to about 21 minutes of macOS local test time.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-Pull requests and pushes run the twelve lint partitions and the repo invariants, each capped at 10 minutes.
+Pull requests and pushes run six paired lint shards of two canonical partitions each, capped at 15 minutes, and one static gate holding the repo invariants plus the pull request secrets scan, capped at 10 minutes.
 A manual dispatch run adds the coverage guard, twelve portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
 Insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
@@ -151,17 +155,17 @@ The workflow retains per-PR supersession without cancelling main pushes or chang
 
 ## Timeouts
 
-CI job timeouts follow one policy: every job on a pull request or push run shares a 10-minute cap, and manual dispatch jobs use three tiers, so the workflow reads as a policy rather than as a collection of per-job numbers.
+CI job timeouts follow one policy: pull request and push runs cap lint at 15 minutes and the static gate at 10 minutes, and manual dispatch jobs use three tiers, so the workflow reads as a policy rather than as a collection of per-job numbers.
 Every tier is a hang tripwire with headroom above the healthy duration, never a packing estimate or a runtime target.
 A lane that reaches its tier bound needs investigation and a distribution or runtime fix, not a larger timeout to fit the same work.
 
 | Tier | Jobs | Bound | Rationale |
 |---|---|---|---|
-| Pull request and push | lint partitions, repo invariants | 10 minutes | The only jobs that gate a merge. Lint splits into twelve partitions so each one stays under the cap. |
+| Pull request and push | paired lint shards, static gate | 15 minutes for lint, 10 minutes for the static gate | The jobs that gate a merge. Lint pairs its twelve partitions heaviest with lightest so each shard stays under its cap. |
 | Dispatch fast | coverage guard, timing aggregate | 5 minutes | Seconds-long local work, so the tripwire only catches a hung runner. |
 | Dispatch normal | portable parallel shards, portable serial shards, macOS stock Bash | 30 minutes, one value shared by every job in the tier | One shared hang tripwire keeps every ordinary test and lint lane on the same policy instead of allowing per-lane packing estimates or one-off caps to set the bound. |
 | Heavy | Herdr | family-run step 20 minutes under a 75-minute job-level last-resort backstop | Healthy runs finish in about 7-10 minutes, so the step tripwire fails a wedged suite while the `always()` cleanup and timing upload still run, and the job cap only catches a hang outside that step. |
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) holds the executable values and names each job's tier beside its `timeout-minutes`.
-[`tests/fm-ci-workflow.test.sh`](../tests/fm-ci-workflow.test.sh) holds the policy against the parsed workflow: every job belongs to exactly one tier, the workflow carries exactly four distinct job-level values, the pull request tier is 10 minutes, the fast tier stays within 5-10 minutes, the normal jobs share one 30-minute budget, and the Herdr family-run step is the 20-minute tripwire below its job backstop with an `always()` teardown after it.
+[`tests/fm-ci-workflow.test.sh`](../tests/fm-ci-workflow.test.sh) holds the policy against the parsed workflow: every job belongs to exactly one tier, the workflow carries exactly five distinct job-level values, pull request lint is 15 minutes and the static gate is 10 minutes, the fast tier stays within 5-10 minutes, the normal jobs share one 30-minute budget, and the Herdr family-run step is the 20-minute tripwire below its job backstop with an `always()` teardown after it.
 A passing coverage guard does not establish a healthy job duration; refresh the healthy figures above from the lanes' uploaded timing artifacts.

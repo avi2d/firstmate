@@ -53,7 +53,7 @@ FM_LANDED_JQ_DEFS='
   # they keep an explicit scout that recorded no report out of Recently Landed.
   # Without them such a row has none of the three artifacts, satisfies the
   # compatibility fallback and renders as shipped work with an empty artifact.
-  # Pinned by tests/fm-captain-hold-lifecycle.test.sh on "released, retained, or
+  # Pinned by tests/fm-captain-hold-retention.test.sh on "released, retained, or
   # rejected deliveries were misclassified".
   def landed_delivery:
     scout_report
