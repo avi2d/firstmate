@@ -292,6 +292,51 @@ test_changed_runner_surfaces_select_their_family() {
   pass "runner and its documentation surfaces select their curated family, not just their contract owners"
 }
 
+test_changed_workflow_selects_readers_not_invoked_families() {
+  local tmp repo listed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-workflow.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+  printf '#!/usr/bin/env bash\n# tests/lib.sh\n' >"$repo/tests/fm-ci-workflow.test.sh"
+  chmod +x "$repo/tests/fm-ci-workflow.test.sh"
+
+  # A workflow change selects the suites that read the workflow file. The
+  # suites the workflow invokes never read it back, so selecting them would
+  # re-run the whole gate the pull-request job budget cannot hold.
+  mkdir -p "$repo/.github/workflows"
+  : >"$repo/.github/workflows/ci.yml"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD | LC_ALL=C sort)
+  case "$listed" in
+    *tests/fm-ci-workflow.test.sh*) ;;
+    *) fail "workflow change did not select the workflow contract: $listed" ;;
+  esac
+  case "$listed" in
+    *tests/fm-test-run.test.sh*) ;;
+    *) fail "workflow change did not select the runner timeout pins: $listed" ;;
+  esac
+  case "$listed" in
+    *tests/fm-brief.test.sh*)
+      fail "workflow change selected the invoked family: $listed" ;;
+  esac
+
+  # Contributor prose and the shard procedure doc reach only the audience
+  # check that covers their classified surfaces.
+  printf '\n' >>"$repo/CONTRIBUTING.md"
+  : >"$repo/docs/fm-test-portable-shards.md"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD | LC_ALL=C sort)
+  case "$listed" in
+    *tests/fm-documentation-audiences.test.sh*) ;;
+    *) fail "prose change did not select audience coverage: $listed" ;;
+  esac
+  case "$listed" in
+    *tests/fm-brief.test.sh*)
+      fail "prose change selected the contract family: $listed" ;;
+  esac
+
+  rm -rf "$tmp"
+  pass "workflow and prose changes select their readers, not the invoked families"
+}
+
 test_shell_line_ending_policy_selects_runner_contract() {
   local tmp repo listed
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-attributes.XXXXXX")
@@ -2003,6 +2048,7 @@ test_single_script_selection
 test_changed_file_selection_is_conservative
 test_task_marker_refuses_the_primary_checkout
 test_changed_runner_surfaces_select_their_family
+test_changed_workflow_selects_readers_not_invoked_families
 test_shell_line_ending_policy_selects_runner_contract
 test_changed_remote_inheritance_selects_generation_contract
 test_changed_dependency_selection_and_unmapped_failure
