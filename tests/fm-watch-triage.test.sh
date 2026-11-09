@@ -2855,7 +2855,7 @@ test_provider_limit_wait_suppresses_an_existing_wedge_timer() {
   "$ROOT/bin/fm-busy-event.sh" apply "$state" quota idle --gen "$gen" \
     --source pi-ext --event provider-limit --reset-epoch "$future" \
     || fail "provider-limit fixture could not be written"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   hash=$(hash_text "$(cat "$capture")")
   watch_bg "$state" "$fakebin" "$out" env \
     FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \

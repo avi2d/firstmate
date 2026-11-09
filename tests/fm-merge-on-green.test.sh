@@ -476,6 +476,15 @@ test_ready_line_naming_a_bare_pull_request_is_followed() {
   pass "a ready line naming a bare pull request number resolves through the task copy instead of waiting for a done report"
 }
 
+test_bare_epoch_done_report_merges_once_green() {
+  local c
+  c=$(make_case epoch-done)
+  printf '1794179005 done: PR %s checks green\n' "$URL" > "$c/state/task-x1.status"
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "epoch-done: a done line with a leading bare epoch did not merge: $(cat "$c/gh.log")"
+  pass "a done line stamped with a leading bare epoch merges once green instead of waiting for a done report"
+}
+
 test_unrecorded_pull_request_merges_through_the_sweep() {
   local c
   c=$(make_case unrecorded-merge)
@@ -508,6 +517,7 @@ test_pr_check_arms_the_source_for_a_yolo_pull_request
 test_unrecorded_direct_pr_done_line_is_adopted_once_green
 test_done_line_pull_request_from_another_branch_is_never_adopted
 test_unrecorded_pull_request_merges_through_the_sweep
+test_bare_epoch_done_report_merges_once_green
 test_follow_up_pull_request_merges_after_the_recorded_one_landed
 test_bare_pull_request_number_resolves_from_the_task_branch
 test_ready_line_naming_a_bare_pull_request_is_followed

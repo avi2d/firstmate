@@ -686,6 +686,19 @@ status_line_verb() {  # <status-line> [<out-var>] -> leading verb word
       ;;
     *) out=$v ;;
   esac
+  # A leading bare epoch is a stamp spelling, not part of the verb.
+  case "$out" in
+    [0-9]*[[:space:]]*)
+      word=${out%%[[:space:]]*}
+      case "$word" in *[!0-9]*) ;; *)
+        v=${out#"$word"}
+        v=${v#"${v%%[![:space:]]*}"}
+        word=${v%%[[:space:]]*}
+        _fm_status_verb_recognized "$word" && out=$v
+        ;;
+      esac
+      ;;
+  esac
   if [ "$#" -gt 1 ]; then printf -v "$2" '%s' "$out"; else printf '%s' "$out"; fi
 }
 # 0 when a complete "[key=...]" token sits in the documented position before
