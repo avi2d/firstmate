@@ -260,9 +260,9 @@ end
   pass "every ci.yml job carries a finite timeout"
 }
 
-# Every job sits in exactly one tier, and the workflow carries exactly five
-# distinct job-level timeouts: the lint cap, the static cap, and one per
-# dispatch tier, no one-off numbers.
+# Every job sits in exactly one tier, and the workflow carries exactly six
+# distinct job-level timeouts: the lint cap, the static cap, the
+# changed-tests shards cap, and one per dispatch tier.
 test_every_job_belongs_to_exactly_one_timeout_tier() {
   local expected actual distinct
   expected=$(printf '%s\n' "$PR_TIER_JOBS $FAST_TIER_JOBS $NORMAL_TIER_JOBS $HEAVY_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
@@ -273,7 +273,7 @@ test_every_job_belongs_to_exactly_one_timeout_tier() {
     || fail "ci.yml jobs and the timeout tiers disagree; every job must join one tier"$'\n'"workflow: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"tiers: $(printf '%s' "$expected" | tr '\n' ' ')"
   distinct=$(printf '%s\n' "$expected" | while read -r job; do job_timeout "$job"; done | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$distinct" = 5 ] \
-    || fail "ci.yml must carry exactly five distinct job timeouts (lint, static, fast, normal, heavy), got $distinct"
+    || fail "ci.yml must carry exactly six distinct job timeouts (lint, static, changed-shards, fast, normal, heavy), got $distinct"
   pass "every ci.yml job belongs to one of the timeout tiers"
 }
 
@@ -401,7 +401,7 @@ test_pull_request_and_push_runs_carry_only_their_capped_gates() {
 lint 15
 static 10
 tests-changed 10
-tests-changed-shards 15
+tests-changed-shards 27
 TABLE
   pass "pull request and push runs carry only their capped gates"
 }
@@ -468,7 +468,7 @@ raise "slice output must never expand into a runner command line" if run.include
 raise "shard must read slice paths line-wise" unless run.include?('IFS= read -r')
 raise "empty slice must skip instead of running the whole suite" unless run.include?("has no scripts; skipping")
 job_cap = shards.fetch("timeout-minutes").to_i
-raise "shards must take the full pull request cap" unless job_cap == 15
+raise "shards must cap at 27 minutes" unless job_cap == 27
 steps = shards.fetch("steps")
 run_step = steps.find { |s| s["name"].to_s == "Run changed shard" }
 step_cap = run_step.fetch("timeout-minutes").to_i
