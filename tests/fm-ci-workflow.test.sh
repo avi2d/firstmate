@@ -272,7 +272,7 @@ test_every_job_belongs_to_exactly_one_timeout_tier() {
   [ "$actual" = "$expected" ] \
     || fail "ci.yml jobs and the timeout tiers disagree; every job must join one tier"$'\n'"workflow: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"tiers: $(printf '%s' "$expected" | tr '\n' ' ')"
   distinct=$(printf '%s\n' "$expected" | while read -r job; do job_timeout "$job"; done | LC_ALL=C sort -u | wc -l | tr -d ' ')
-  [ "$distinct" = 5 ] \
+  [ "$distinct" = 6 ] \
     || fail "ci.yml must carry exactly six distinct job timeouts (lint, static, changed-shards, fast, normal, heavy), got $distinct"
   pass "every ci.yml job belongs to one of the timeout tiers"
 }
