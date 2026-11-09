@@ -438,10 +438,10 @@ TABLE
   pass "a shared test helper change fans the portable matrix out on the pull request only"
 }
 
-# The changed-tests selection never fits one capped job, so four shards split
-# the sorted selection round-robin. The workflow pins the shard count and the
-# modulo; the slice math below proves that shape covers any list exactly once.
-test_changed_shards_split_the_selection_round_robin() {
+# The changed-tests selection never fits one capped job, so six shards split
+# it by measured per-script duration. The workflow pins the shard count and
+# delegates the composition to the runner.
+test_changed_shards_split_by_measured_weight() {
   ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "changed shard contract"
 jobs = YAML.load_file(ARGV[0]).fetch("jobs")
 coordinator = jobs.fetch("tests-changed")
@@ -455,13 +455,15 @@ raise "shard failures must not cancel another shard" unless shards.fetch("strate
 matrix = shards.fetch("strategy").fetch("matrix")
 raise "unexpected shard dimensions" unless matrix.keys == ["shard"]
 ids = matrix.fetch("shard").map(&:to_i)
-raise "changed-tests shards must run 1..n without gaps" unless ids == (1..ids.length).to_a
+raise "changed-tests shards must run 1..6 without gaps" unless ids == (1..6).to_a
 n = ids.length
-run = shards.fetch("steps").map { |s| s["run"].to_s }.join("\n")
-raise "shard slice must list the changed selection" unless run.include?("--list --changed")
-raise "shard slice must sort the selection for determinism" unless run.include?("LC_ALL=C sort")
-pattern = /\(NR\s*-\s*1\)\s*%\s*#{n}\s*==\s*k\s*-\s*1/
-raise "shard slice must round-robin modulo #{n}" unless run.match?(pattern)
+steps = shards.fetch("steps")
+slice_run = steps.find { |s| s["id"].to_s == "slice" }.fetch("run").to_s
+raise "shard slice must list one duration-balanced shard" unless slice_run.include?("--list --changed-shard")
+spec = slice_run.match(/\$\{\{\s*matrix\.shard\s*\}\}of(\d+)/)
+raise "shard slice must name its shard with the matrix count" unless spec && spec[1].to_i == n
+raise "shard slice must not implement its own split" if slice_run.include?("awk")
+run = steps.map { |s| s["run"].to_s }.join("\n")
 raise "shard runs must bound each script" unless run.include?("--per-script-timeout-secs 1500")
 raise "shard timing artifacts must stay per-shard" unless run.include?("fm-test-timing-changed-")
 raise "slice output must never expand into a runner command line" if run.include?('fm-test-run.sh ${{')
@@ -469,14 +471,13 @@ raise "shard must read slice paths line-wise" unless run.include?('IFS= read -r'
 raise "empty slice must skip instead of running the whole suite" unless run.include?("has no scripts; skipping")
 job_cap = shards.fetch("timeout-minutes").to_i
 raise "shards must cap at 27 minutes" unless job_cap == 27
-steps = shards.fetch("steps")
 run_step = steps.find { |s| s["name"].to_s == "Run changed shard" }
 step_cap = run_step.fetch("timeout-minutes").to_i
 raise "shard run step must trip under the job cap" unless step_cap < job_cap
 upload_step = steps.find { |s| s["name"].to_s.include?("timing artifact") }
 raise "shard timing must upload even when the run step trips" unless upload_step.fetch("if").to_s.include?("always()")
 RUBY
-  pass "changed-tests shards split the sorted selection round-robin with per-script bounds"
+  pass "changed-tests shards split by measured weight with per-script bounds"
 }
 
 test_no_ci_job_lists_a_dependency_twice() {
@@ -489,24 +490,6 @@ jobs.each do |name, job|
 end
 RUBY
   pass "no ci job lists a dependency twice in needs"
-}
-
-test_changed_shard_slices_cover_any_selection_exactly_once() {
-  local fixture one two three four all
-  fixture=$(printf '%s\n' tests/fm-brief.test.sh tests/fm-ci-workflow.test.sh tests/fm-crew-state.test.sh tests/fm-lint.test.sh tests/fm-test-run.test.sh tests/fm-captain-hold-core.test.sh tests/fm-captain-hold-merge.test.sh | LC_ALL=C sort)
-  one=$(printf '%s\n' "$fixture" | awk -v k=1 '(NR - 1) % 4 == k - 1')
-  two=$(printf '%s\n' "$fixture" | awk -v k=2 '(NR - 1) % 4 == k - 1')
-  three=$(printf '%s\n' "$fixture" | awk -v k=3 '(NR - 1) % 4 == k - 1')
-  four=$(printf '%s\n' "$fixture" | awk -v k=4 '(NR - 1) % 4 == k - 1')
-  for slice in "$one" "$two" "$three" "$four"; do
-    [ -n "$slice" ] || fail "every slice must hold a script on a seven-file selection"
-  done
-  all=$(printf '%s\n%s\n%s\n%s\n' "$one" "$two" "$three" "$four" | LC_ALL=C sort)
-  [ "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" = 7 ] \
-    || fail "four slices must hold seven scripts with no duplicate or miss: $all"
-  [ "$all" = "$fixture" ] \
-    || fail "four slices must cover the selection exactly once"
-  pass "changed-tests shard slices cover any selection exactly once"
 }
 
 # No CI job may write issues: the scheduled failure reporter is gone, so a red
@@ -589,9 +572,8 @@ test_main_pushes_are_never_cancelled
 test_fork_skip_variables_are_opt_in
 test_pull_request_and_push_runs_carry_only_their_capped_gates
 test_shared_helper_pr_runs_matrix_and_ordinary_pr_does_not
-test_changed_shards_split_the_selection_round_robin
+test_changed_shards_split_by_measured_weight
 test_no_ci_job_lists_a_dependency_twice
-test_changed_shard_slices_cover_any_selection_exactly_once
 test_no_ci_job_writes_issues
 test_timing_aggregate_still_runs_after_a_failed_lane
 test_every_job_has_a_finite_timeout

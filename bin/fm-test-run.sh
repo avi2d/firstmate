@@ -176,6 +176,7 @@ CHECK_COVERAGE=0
 AGGREGATE_OUT=
 FAMILY=
 LANE=
+SHARD_SPEC=
 BASE_REF=origin/main
 JSON_PATH=
 SCRIPTS=()
@@ -201,6 +202,10 @@ CHANGED_DEFAULT_TIMEOUT_SECS=1500
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
 PORTABLE_SERIAL_SHARDS=14
+
+# How many duration-balanced shards the changed-tests CI job splits into.
+# One owner: CI passes "<k>of<n>" and a spec whose <n> disagrees is refused.
+CHANGED_SHARDS=6
 
 # Conservative balance hint for a portable-serial script with no measurement.
 # Rounded above the current CI mean, including the capability-skipped scripts.
@@ -1081,7 +1086,7 @@ portable_serial_lane_weight() {
   ' <(portable_serial_weight_hints) -
 }
 
-portable_parallel_weight_for() {
+measured_weight_for() {
   local want=$1 ms
   ms=$(portable_parallel_weight_hints | awk -v want="$want" '$1 == want { print $2; exit }')
   if [ -n "$ms" ]; then
@@ -1102,15 +1107,15 @@ portable_serial_weight_for() {
   printf '%s\n' "$PORTABLE_SERIAL_DEFAULT_WEIGHT_MS"
 }
 
-# Longest-processing-time assignment of the serial remainder to
-# PORTABLE_SERIAL_SHARDS bins, printing "<shard>\t<script>" for every script.
-# Deterministic: candidates are ordered by hint descending then path, and ties
-# between equally loaded bins always take the lowest bin index.
-portable_serial_assignments() {
-  local ms script i best best_load
+# Longest-processing-time assignment of "<ms>\t<script>" lines on stdin to
+# <bins> bins, printing "<shard>\t<script>" for every line. Callers order
+# candidates heaviest-first; ties between equally loaded bins always take the
+# lowest bin index, so the result is deterministic.
+lpt_assign() {
+  local bins=$1 ms script i best best_load
   local -a loads=()
   i=1
-  while [ "$i" -le "$PORTABLE_SERIAL_SHARDS" ]; do
+  while [ "$i" -le "$bins" ]; do
     loads[i]=0
     i=$((i + 1))
   done
@@ -1119,7 +1124,7 @@ portable_serial_assignments() {
     best=1
     best_load=${loads[1]}
     i=2
-    while [ "$i" -le "$PORTABLE_SERIAL_SHARDS" ]; do
+    while [ "$i" -le "$bins" ]; do
       if [ "${loads[i]}" -lt "$best_load" ]; then
         best_load=${loads[i]}
         best=$i
@@ -1128,7 +1133,11 @@ portable_serial_assignments() {
     done
     loads[best]=$((best_load + ms))
     printf '%s\t%s\n' "$best" "$script"
-  done < <(
+  done
+}
+
+portable_serial_assignments() {
+  lpt_assign "$PORTABLE_SERIAL_SHARDS" < <(
     while IFS= read -r script; do
       [ -n "$script" ] || continue
       printf '%s\t%s\n' "$(portable_serial_weight_for "$script")" "$script"
@@ -1161,6 +1170,50 @@ portable_serial_shard_index() {
     die "lane '$lane' shard index is outside 1..$PORTABLE_SERIAL_SHARDS (see --list-lanes)"
   fi
   printf '%s\n' "$index"
+}
+
+# Parse "<k>of<n>" for a changed-tests shard, echoing <k>. A spec whose <n>
+# disagrees with this script's configured count is refused, so a CI matrix
+# built for a different shard count fails loudly instead of dropping tests.
+changed_shard_index() {
+  local spec=$1 index count
+  case "$spec" in
+    *of*) ;;
+    *) die "unknown changed shard '$spec' (want <k>of$CHANGED_SHARDS)" ;;
+  esac
+  index=${spec%%of*}
+  count=${spec#*of}
+  case "$index" in
+    ''|*[!0-9]*) die "unknown changed shard '$spec' (want <k>of$CHANGED_SHARDS)" ;;
+  esac
+  case "$count" in
+    ''|*[!0-9]*) die "unknown changed shard '$spec' (want <k>of$CHANGED_SHARDS)" ;;
+  esac
+  if [ "$count" -ne "$CHANGED_SHARDS" ]; then
+    die "changed shard '$spec' asks for $count shards but this runner is configured for $CHANGED_SHARDS"
+  fi
+  if [ "$index" -lt 1 ] || [ "$index" -gt "$CHANGED_SHARDS" ]; then
+    die "changed shard index is outside 1..$CHANGED_SHARDS (got '$spec')"
+  fi
+  printf '%s\n' "$index"
+}
+
+# Keep one duration-balanced bin of the --changed selection: the whole
+# selection is longest-processing-time assigned over the best measured hint
+# per script, and only this bin is kept.
+select_changed_shard() {
+  local spec=$1 base=$2 index s shard
+  local -a sharded=()
+  index=$(changed_shard_index "$spec")
+  select_changed "$base"
+  while IFS=$'\t' read -r shard s; do
+    [ "$shard" = "$index" ] && [ -n "$s" ] && sharded+=("$s")
+  done < <(
+    for s in "${SCRIPTS[@]+"${SCRIPTS[@]}"}"; do
+      printf '%s\t%s\n' "$(measured_weight_for "$s")" "$s"
+    done | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2 | lpt_assign "$CHANGED_SHARDS"
+  )
+  SCRIPTS=("${sharded[@]+"${sharded[@]}"}")
 }
 
 select_proven_isolated() {
@@ -2252,6 +2305,19 @@ while [ "$#" -gt 0 ]; do
       MODE=changed
       shift
       ;;
+    --changed-shard)
+      [ -z "$MODE" ] || die "only one selection mode is allowed"
+      [ "$#" -gt 1 ] || die "--changed-shard requires a shard (want <k>of$CHANGED_SHARDS)"
+      MODE=changed-shard
+      SHARD_SPEC=$2
+      shift 2
+      ;;
+    --changed-shard=*)
+      [ -z "$MODE" ] || die "only one selection mode is allowed"
+      MODE=changed-shard
+      SHARD_SPEC=${1#--changed-shard=}
+      shift
+      ;;
     --base)
       [ "$#" -gt 1 ] || die "--base requires a git ref"
       BASE_REF=$2
@@ -2464,6 +2530,10 @@ case "${MODE:-}" in
     select_changed "$BASE_REF"
     SELECTION_DESC="changed:base=$BASE_REF"
     ;;
+  changed-shard)
+    select_changed_shard "$SHARD_SPEC" "$BASE_REF"
+    SELECTION_DESC="changed-shard=$SHARD_SPEC:base=$BASE_REF"
+    ;;
   scripts)
     # Normalize and re-add through add_script for consistent paths.
     raw=("${SCRIPTS[@]+"${SCRIPTS[@]}"}")
@@ -2474,7 +2544,7 @@ case "${MODE:-}" in
     SELECTION_DESC="scripts"
     ;;
   *)
-    die "select with --all, --family <name>, --lane <name>, --proven-isolated, --changed, or one or more script paths (see --help)"
+    die "select with --all, --family <name>, --lane <name>, --proven-isolated, --changed, --changed-shard <k>of<n>, or one or more script paths (see --help)"
     ;;
 esac
 
@@ -2490,7 +2560,7 @@ if [ "$LIST_ONLY" -eq 1 ] || [ "$LIST_SCHEDULED" -eq 1 ]; then
     for s in "${SCRIPTS[@]+"${SCRIPTS[@]}"}"; do
       case "$MODE:$LANE" in
         lane:portable-parallel-1|lane:portable-parallel-2)
-          printf '%s\t%s\n' "$(portable_parallel_weight_for "$s")" "$s"
+          printf '%s\t%s\n' "$(measured_weight_for "$s")" "$s"
           ;;
         *)
           printf '%s\t%s\n' "$(portable_serial_weight_for "$s")" "$s"
@@ -2548,7 +2618,7 @@ for s in "${SCRIPTS[@]}"; do
   [ -x "$s" ] || [ -r "$s" ] || die "test script not readable: $s"
 done
 
-# Plain --changed and a plain list of script paths both use the bounded
+# Plain --changed, one changed shard, and a plain list of script paths all use the bounded
 # representative-suite scheduler; numeric --jobs retains the strict all-script
 # admission rule below. Naming scripts is how a local verification round asks
 # for exactly those subjects, so it gets bounded concurrency rather than a
@@ -2557,8 +2627,8 @@ done
 # lane must stay strictly serial, --family is what the required Herdr lane runs,
 # and --all is a deliberate complete regression.
 AUTO_CONCURRENCY=0
-if { [ "$MODE" = changed ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq 0 ]; then
-  if [ "$MODE" = changed ] && [ "${#SCRIPTS[@]}" -gt 0 ] && [ "$PER_SCRIPT_TIMEOUT_SECS" -eq 0 ]; then
+if { [ "$MODE" = changed ] || [ "$MODE" = changed-shard ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq 0 ]; then
+  if { [ "$MODE" = changed ] || [ "$MODE" = changed-shard ]; } && [ "${#SCRIPTS[@]}" -gt 0 ] && [ "$PER_SCRIPT_TIMEOUT_SECS" -eq 0 ]; then
     PER_SCRIPT_TIMEOUT_SECS=$CHANGED_DEFAULT_TIMEOUT_SECS
   fi
   auto_admissible=0
@@ -2572,7 +2642,7 @@ if { [ "$MODE" = changed ] || [ "$MODE" = scripts ]; } && [ "$JOBS_EXPLICIT" -eq
     [ "$JOBS" -eq 1 ] || AUTO_CONCURRENCY=1
   fi
 fi
-if [ "$JOBS" -gt 1 ] || [ "$MODE" = changed ] || [ "$MODE" = scripts ]; then
+if [ "$JOBS" -gt 1 ] || [ "$MODE" = changed ] || [ "$MODE" = changed-shard ] || [ "$MODE" = scripts ]; then
   SELECTION_DESC="${SELECTION_DESC};jobs=$JOBS"
 fi
 
