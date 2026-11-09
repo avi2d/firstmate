@@ -41,7 +41,7 @@ age_of() {
   [ "$m" -le "$now" ] || { echo 999999; return; }
   echo $(( now - m ))
 }
-fm_run_timed() { local budget=$1; shift; "$@"; }
+fm_run_timed() { shift; "$@"; }
 wake() { printf 'wake:%s\n' "$1" >> "$TMP_ROOT/wakes"; }
 fm_wake_append() { printf 'queue:%s:%s:%s\n' "$1" "$2" "$3" >> "$TMP_ROOT/wake-queue"; }
 fm_pending_reply_dir() { printf '%s/pending-replies' "$1"; }

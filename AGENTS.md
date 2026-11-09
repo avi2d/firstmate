@@ -119,6 +119,8 @@ Do not add model-specific versions of that policy.
 `secondmate-provisioning` owns secondmate harness pins and inherited local material, while `harness-adapters` owns the harness consequences.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
+A project whose registry entry carries `host=<route>` launches its ships and scouts on that execution home while this home supervises them, and [`docs/remote-workers.md`](docs/remote-workers.md) owns that lifecycle.
+Across that transport, exit 75 keeps the item queued, and exit 255 or a timeout means completion unknown, so rerun the same command to reconcile, never a different one.
 
 ## 5. Recovery
 
@@ -256,6 +258,8 @@ After an autonomous merge, give the captain a one-line full-URL or local-main ou
 Load `validation-supervision` when a ship starts or already has an active no-mistakes validation run, including a mid-run requirement change or finding.
 
 ### PR ready, landing, and teardown
+
+A remote worker's cleanup is the same `bin/fm-teardown.sh <task>`, which runs the landed-work test on its host first, and retiring a remote second mate reclaims its Queued items with `bin/fm-backlog-reclaim.sh` before teardown, as [`docs/remote-workers.md`](docs/remote-workers.md) describes.
 
 Load `ship-landing` when a ship reports a PR or ready branch, when deciding or monitoring landing, and before task cleanup.
 

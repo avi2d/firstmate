@@ -1252,7 +1252,8 @@ The concise single-line route contract is owned by the [`secondmate-provisioning
 
 ### Remote routes and validation
 
-A remote route adds `host:` and `root:` before the existing fields and places the whole secondmate home on that SSH host; it does not make ordinary workers remotely placeable.
+A remote route adds `host:` and `root:` before the existing fields and places the whole secondmate home on that SSH host.
+Ordinary workers are placed through an execution home route instead, described below.
 [`remote-secondmates.md`](remote-secondmates.md) owns current remote setup, operation, and safety behavior.
 
 Use `fm-home-seed.sh validate` to check the complete operational registry contract documented by the command itself.
@@ -1266,6 +1267,7 @@ The same identifier cannot appear in both route files.
 Seed a route with `fm-remote-home-seed.sh --exec`, which writes an `.fm-exec-home` marker and `config/backlog-backend=manual`, records the session in `config/herdr-session` on the remote home, clones the listed project origins, and gates on the remote doctor.
 `fm-on.sh` reads both route files.
 `fm-project-mode.sh --placement` reads the `host=` project annotation.
+[Remote workers](remote-workers.md) owns the remote worker lifecycle, cleanup, and backlog reclaim.
 
 ### Provision a local home
 

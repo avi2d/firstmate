@@ -796,6 +796,18 @@
     {
       "path": ".agents/skills/validation-supervision/SKILL.md",
       "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/remote-workers.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/fleet-sync.md",
+      "audience": "operator-current"
+    },
+    {
+      "path": "docs/adr/0019-remote-worker-cleanup-and-reclaim.md",
+      "audience": "maintainer-architecture"
     }
   ]
 }

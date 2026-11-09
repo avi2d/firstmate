@@ -1,19 +1,4 @@
 #!/usr/bin/env bash
-# Receive one delivered remote-secondmate outbox into this home's backlog.
-#
-# Usage:
-#   fm-backlog-receive.sh state/handoff/<secondmate-id>.outbox.md <bytes> <sha256> <generation>
-#
-# The delivered file must be a non-symlink backlog-format scratch file confined
-# to FM_HOME/state/handoff. Every item must be Queued. Keys already present in
-# data/backlog.md are skipped; every remaining key moves in one dependency-closed
-# `tasks-axi mv` transaction under tasks-axi's own locks. On an ambiguous caller
-# retry, destination-present classification makes this operation idempotent.
-#
-# If tasks-axi reports a lock failure, this host may remove and retry once only
-# for its own backlog or delivered lock whose pid is dead and whose mtime is at
-# least 30 seconds old. No live or uncertain lock is touched. On confirmed
-# receipt the delivered scratch file is removed; no other path is deletable.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +13,19 @@ LOCK_STALE_SECS=30
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() {
+  cat >&2 <<'EOF'
+Receive a delivered remote-secondmate outbox into this home's backlog, or run
+this home's side of a reclaim back to its parent (docs/remote-secondmates.md).
+
+Usage:
+  fm-backlog-receive.sh state/handoff/<secondmate-id>.outbox.md <bytes> <sha256> <generation>
+  fm-backlog-receive.sh reclaim-status
+  fm-backlog-receive.sh reclaim-stage <item-key>...
+  fm-backlog-receive.sh reclaim-release <bytes> <sha256>
+EOF
+  exit 2
+}
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
 }
@@ -82,6 +79,103 @@ run_move() { # <keys...>
   # Pin the markdown backend so a .tasks.toml in the caller's directory cannot redirect the move.
   tasks-axi mv "$@" --file "$DELIVERED" --to "$DEST" --backend markdown
 }
+
+reclaim_home_require() {
+  [ -f "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ] \
+    || die "FM_HOME is not a seeded secondmate home"
+  [ -f "$FM_HOME/AGENTS.md" ] && [ -d "$FM_HOME/bin" ] || die "FM_HOME is not a Firstmate home"
+  HOME_REAL=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) || die "FM_HOME cannot be resolved"
+  [ ! -L "$HOME_REAL/state" ] && [ ! -L "$HOME_REAL/state/handoff" ] || die "reclaim scratch directory is unsafe"
+  mkdir -p "$HOME_REAL/state/handoff" || die "cannot create the reclaim scratch directory"
+  SOURCE="$HOME_REAL/data/backlog.md"
+  RECLAIM_OUTBOX="$HOME_REAL/state/handoff/reclaim.outbox.md"
+  [ ! -L "$SOURCE" ] || die "this home's backlog must not be a symlink"
+  [ ! -L "$RECLAIM_OUTBOX" ] || die "reclaim outbox must not be a symlink"
+  RECLAIM_LOCK="$HOME_REAL/state/handoff/.reclaim.lock"
+  fm_lock_acquire_wait "$RECLAIM_LOCK" || die "cannot lock the reclaim outbox"
+  trap 'fm_lock_release "$RECLAIM_LOCK" || true' EXIT
+  # An interrupted stage can leave the scaffold without the transaction.
+  if [ -f "$RECLAIM_OUTBOX" ] && [ -z "$(list_keys "$RECLAIM_OUTBOX")" ]; then
+    rm -f -- "$RECLAIM_OUTBOX" || die "cannot clear an empty reclaim outbox"
+  fi
+}
+
+reclaim_commitment() {
+  printf 'staged bytes=%s sha256=%s keys=%s\n' \
+    "$(LC_ALL=C wc -c < "$RECLAIM_OUTBOX" | tr -d ' ')" "$(sha256_file "$RECLAIM_OUTBOX")" \
+    "$(list_keys "$RECLAIM_OUTBOX" | paste -sd, -)"
+}
+
+sorted_key_set() { # <keys...>
+  printf '%s\n' "$@" | LC_ALL=C sort -u | paste -sd, -
+}
+
+reclaim_stage() { # <keys...>
+  local key section staged move_out
+  local -a refused=()
+  [ "$#" -gt 0 ] || die "reclaim-stage requires at least one item key"
+  for key in "$@"; do
+    case "$key" in ''|-*|*[!A-Za-z0-9._-]*) die "invalid item key: $key" ;; esac
+  done
+  reclaim_home_require
+  if [ -f "$RECLAIM_OUTBOX" ]; then
+    staged=$(list_keys "$RECLAIM_OUTBOX" | LC_ALL=C sort -u | paste -sd, -)
+    [ "$staged" = "$(sorted_key_set "$@")" ] \
+      || die "a reclaim of $staged is already staged; finish it with exactly those keys before staging another"
+    reclaim_commitment
+    return 0
+  fi
+  [ -f "$SOURCE" ] || die "this home has no backlog at data/backlog.md"
+  for key in "$@"; do
+    section=$(backlog_key_section "$SOURCE" "$key" 2>/dev/null) || { refused+=("$key (missing)"); continue; }
+    [ "$section" = '## Queued' ] || refused+=("$key (${section#'## '})")
+  done
+  [ "${#refused[@]}" -eq 0 ] || die "reclaim moves only Queued items; refusing: ${refused[*]}"
+  fm_tasks_axi_compatible || die "a compatible tasks-axi is required for an atomic reclaim; run bin/fm-bootstrap.sh for the required version"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$RECLAIM_OUTBOX" || die "cannot create the reclaim outbox"
+  if ! move_out=$(tasks-axi mv "$@" --file "$SOURCE" --to "$RECLAIM_OUTBOX" --backend markdown 2>&1); then
+    if ! remove_dead_stale_lock "$SOURCE.lock" \
+        || ! move_out=$(tasks-axi mv "$@" --file "$SOURCE" --to "$RECLAIM_OUTBOX" --backend markdown 2>&1); then
+      rm -f -- "$RECLAIM_OUTBOX"
+      [ -z "$move_out" ] || printf '%s\n' "$move_out" >&2
+      die "atomic reclaim staging failed; nothing left this home's backlog"
+    fi
+  fi
+  for key in "$@"; do
+    [ "$(backlog_key_section "$RECLAIM_OUTBOX" "$key" 2>/dev/null)" = '## Queued' ] \
+      || die "staging verification failed for $key; the reclaim outbox is preserved"
+  done
+  reclaim_commitment
+}
+
+reclaim_release() { # <bytes> <sha256>
+  local bytes=$1 hash=$2
+  case "$bytes" in ''|*[!0-9]*) die "expected bytes must be a nonnegative integer" ;; esac
+  case "$hash" in ''|*[!A-Fa-f0-9]*) die "expected SHA-256 is invalid" ;; esac
+  [ "${#hash}" -eq 64 ] || die "expected SHA-256 has the wrong length"
+  hash=$(printf '%s' "$hash" | tr 'A-F' 'a-f')
+  reclaim_home_require
+  if [ ! -f "$RECLAIM_OUTBOX" ]; then
+    printf 'released: none staged\n'
+    return 0
+  fi
+  [ "$(LC_ALL=C wc -c < "$RECLAIM_OUTBOX" | tr -d ' ')" = "$bytes" ] \
+    && [ "$(sha256_file "$RECLAIM_OUTBOX")" = "$hash" ] \
+    || die "the staged reclaim outbox does not match what the parent received; it is preserved"
+  rm -f -- "$RECLAIM_OUTBOX" || die "cannot remove the released reclaim outbox"
+  printf 'released: %s bytes\n' "$bytes"
+}
+
+case "${1:-}" in
+  reclaim-status)
+    [ "$#" -eq 1 ] || usage
+    reclaim_home_require
+    if [ -f "$RECLAIM_OUTBOX" ]; then reclaim_commitment; else printf 'none\n'; fi
+    exit 0
+    ;;
+  reclaim-stage) shift; reclaim_stage "$@"; exit 0 ;;
+  reclaim-release) [ "$#" -eq 3 ] || usage; reclaim_release "$2" "$3"; exit 0 ;;
+esac
 
 [ "$#" -eq 4 ] || usage
 REL=$1

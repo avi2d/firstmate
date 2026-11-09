@@ -1835,8 +1835,9 @@ spawn_remote_worker() {
   fi
   out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh capabilities </dev/null) || return $?
   [ "$out" = fm-remote-worker-control.v2 ] || { echo "error: remote worker protocol v2 is unavailable (the remote code root is older than this home; update that host before dispatching workers to it)" >&2; return 1; }
-  if ! out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh admit "$ID" "$project" </dev/null 2>&1); then
-    rc=$?
+  rc=0
+  out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh admit "$ID" "$project" </dev/null 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out" >&2
     case "$out" in
       *'unknown remote worker command'*) echo "error: remote worker protocol v2 is unavailable (the remote code root is older than this home; update that host before dispatching workers to it)" >&2; return 1 ;;

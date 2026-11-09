@@ -25,7 +25,9 @@ cat > "$FAKE_ROOT/bin/fm-on.sh" <<'SH'
 set -eu
 case "$*" in
   *' capabilities') printf 'fm-remote-worker-control.v2\n' ;;
-  *' admit '*) printf 'admit project=alpha holders=0\n' ;;
+  *' admit '*)
+    if [ "${FM_TEST_ADMIT_DEFER:-0}" = 1 ]; then printf 'defer: host already holds 6 alpha worker(s) at its declared limit 6\n'; exit 75; fi
+    printf 'admit project=alpha holders=0\n' ;;
   *' launch '*)
     cat >/dev/null
     target=fm-lab-test:w1:pane1
@@ -60,6 +62,15 @@ assert_grep 'mode=direct-PR' "$HOME_DIR/state/ship-one.meta" "remote ship mode w
 assert_grep 'branch=fm/ship-one' "$HOME_DIR/state/ship-one.meta" "remote ship branch was lost"
 assert_no_grep 'mode=-' "$HOME_DIR/state/test-task.meta" "scout metadata invented a delivery mode"
 pass "remote ship accepts its selected forge contract"
+FM_HOME="$HOME_DIR" "$ROOT/bin/fm-tasks-axi.sh" add full-host 'Research alpha' --kind scout >/dev/null
+mkdir -p "$HOME_DIR/data/full-host"
+printf '# Task\n## Captain\x27s intent\nResearch.\n\n## Firstmate spec\nReport evidence.\n' > "$HOME_DIR/data/full-host/brief.md"
+rc=0
+out=$(FM_TEST_ADMIT_DEFER=1 FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" FM_SPAWN_NO_GUARD=1 bash "$FAKE_ROOT/bin/fm-spawn.sh" full-host "$HOME_DIR/projects/alpha" --scout --harness pi 2>&1) || rc=$?
+[ "$rc" -eq 75 ] || fail "a full host did not defer with exit 75 (rc=$rc): $out"
+[ ! -e "$HOME_DIR/state/full-host.meta" ] || fail "a deferred launch published task metadata"
+FM_HOME="$HOME_DIR" "$ROOT/bin/fm-tasks-axi.sh" list --state queued | grep -F 'full-host' >/dev/null || fail "a deferred launch moved its item out of Queued"
+pass "a full host defers with exit 75 and keeps the item queued instead of reporting a launch"
 FM_HOME="$HOME_DIR" "$ROOT/bin/fm-tasks-axi.sh" add bad-route 'Research alpha' --kind scout >/dev/null
 mkdir -p "$HOME_DIR/data/bad-route"
 printf '# Task\n## Captain\x27s intent\nResearch.\n\n## Firstmate spec\nReport evidence.\n' > "$HOME_DIR/data/bad-route/brief.md"
