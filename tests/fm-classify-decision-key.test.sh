@@ -186,6 +186,17 @@ test_status_line_verb_strips_every_bracket_tag_before_colon() {
   pass "status_line_verb strips every bracket tag before the colon, in any order, and recovers the bare verb"
 }
 
+test_leading_bare_epoch_word_does_not_hide_the_verb() {
+  local v
+  v=$(status_line_verb '1794179005 done: PR x')
+  [ "$v" = "done" ] || fail "leading bare epoch hid done: got '$v'"
+  v=$(status_line_verb 'done [at=1794179005]: PR x')
+  [ "$v" = "done" ] || fail "bracketed stamp regressed: got '$v'"
+  v=$(status_line_verb '1794179005 bottles of beer: prose')
+  [ "$v" = "1794179005 bottles of beer" ] || fail "number-led prose changed reading: got '$v'"
+  pass "a leading bare epoch reads as the stamp, so done stays done in either stamp shape"
+}
+
 test_corr_and_key_tags_open_and_close_under_the_stated_key() {
   local dir expected
   dir=$(case_dir corr-and-key)
@@ -272,6 +283,7 @@ test_two_colon_form_decisions_stay_distinct
 test_mid_note_prose_mention_is_not_a_stated_key
 test_malformed_stated_key_never_collapses_to_default
 test_status_line_verb_strips_every_bracket_tag_before_colon
+test_leading_bare_epoch_word_does_not_hide_the_verb
 test_corr_and_key_tags_open_and_close_under_the_stated_key
 test_corr_only_tag_opens_as_default_like_a_bare_line
 test_key_only_before_colon_still_opens_no_regression
