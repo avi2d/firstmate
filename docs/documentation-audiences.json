@@ -458,6 +458,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/adr/0018-remote-worker-status-feed.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/captain-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },

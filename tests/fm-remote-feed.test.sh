@@ -218,9 +218,14 @@ test_runner_applies_one_window() {
   STARTER=$!
   printf 'working [at=300]: round trip line\n' >> "$REMOTE/state/w1.status"
   handled=''
-  for i in $(seq 1 600); do
-    handled=$(ls "$PARENT/state/procevent-inbox/$SID".*.handled 2>/dev/null | head -1 || true)
-    [ -n "$handled" ] && break
+  attempt=0
+  while [ -z "$handled" ] && [ "$attempt" -lt 600 ]; do
+    attempt=$((attempt + 1))
+    for candidate in "$PARENT/state/procevent-inbox/$SID".*.handled; do
+      [ -e "$candidate" ] || continue
+      handled=$candidate
+      break
+    done
     sleep 0.05
   done
   kill "$STARTER" 2>/dev/null || true
