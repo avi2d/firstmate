@@ -7,7 +7,7 @@ HOME_DIR="$TMP_ROOT/home"
 mkdir -p "$HOME_DIR"
 printf 'exec-route\n' > "$HOME_DIR/.fm-exec-home"
 out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" capabilities)
-[ "$out" = 'fm-remote-worker-control.v1' ] || fail "capability handshake differs from protocol"
+[ "$out" = 'fm-remote-worker-control.v2' ] || fail "capability handshake differs from protocol"
 pass "remote worker advertises launch protocol"
 mkdir -p "$HOME_DIR/state"
 printf 'window=lab:fm-scout-a\nworktree=/tmp/worktree\nproject=/tmp/project\nkind=scout\nharness=pi\n' > "$HOME_DIR/state/scout-a.meta"
@@ -86,3 +86,39 @@ chmod +x "$FAKE_ROOT/bin/fm-dispatch-resolve.sh"
 FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" bash "$FAKE_ROOT/bin/fm-remote-worker-control.sh" launch scout-f alpha scout - - fm/ - pi - - herdr < "$TMP_ROOT/brief" >/dev/null || fail "remote launch skipped execution-home dispatch resolution"
 [ -f "$HOME_DIR/data/scout-f/dispatch-resolution.json" ] || fail "execution-home dispatch record was not created"
 pass "remote launch resolves the execution-home dispatch record before spawning"
+out=$(printf 'inspect the session\n' | PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" send-stdin scout-a) || fail "remote send-stdin refused a valid steer: $out"
+assert_grep 'inspect the session' "$HOME_DIR/state/scout-a.inbox/001.msg" "host inbox record lost the steer text"
+pass "remote send-stdin records the steer in the host inbox before ringing"
+if printf '   \n' | PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" send-stdin scout-a >/dev/null 2>&1; then fail "remote send-stdin accepted a blank steer"; fi
+pass "remote send-stdin refuses a blank steer without touching the inbox"
+if PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" send-stdin ghost < "$TMP_ROOT/brief" >/dev/null 2>&1; then fail "remote send-stdin accepted a task the execution home does not know"; fi
+pass "remote send-stdin refuses a task the execution home does not know"
+out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" fleet) || fail "remote fleet refused: $out"
+printf '%s\n' "$out" | grep -Fx $'scout-a\tunreadable\tunknown\t-' >/dev/null || fail "fleet misreported the probe contract: $out"
+pass "remote fleet reports agent, busy, and hash for every host task"
+out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" done-gate scout-a 'done: all green') || fail "remote done gate refused a scout: $out"
+[ "$out" = ok ] || fail "remote done gate misreported its verdict: $out"
+pass "remote done gate answers from the execution home"
+out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" done-gate ghost 'done: x' 2>&1) && fail "remote done gate accepted a task the execution home does not know"
+printf '%s\n' "$out" | grep -F 'no worker ghost' >/dev/null || fail "remote done gate did not identify the task it refused: $out"
+pass "remote done gate refuses a task the execution home does not know"
+rm -f "$HOME_DIR/state/holder.meta"
+printf 'alpha 1\n' > "$HOME_DIR/config/project-capacity"
+printf 'window=lab:fm-holder\nworktree=/tmp\nproject=/tmp/alpha\nkind=ship\nharness=pi\n' > "$HOME_DIR/state/holder.meta"
+out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" admit new-task alpha 2>&1) && fail "remote admit accepted a worker past the declared host capacity"
+printf '%s\n' "$out" | grep -F 'defer: ' >/dev/null || fail "remote admit refusal did not say defer: $out"
+pass "remote admit defers past the declared host capacity instead of launching blind"
+rm "$HOME_DIR/state/holder.meta"
+printf 'alpha 5\n' > "$HOME_DIR/config/project-capacity"
+out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" admit new-task alpha) || fail "remote admit refused room the host has: $out"
+case "$out" in 'admit project=alpha holders=0/5 load='*) ;;
+  *) fail "remote admit misreported its admission: $out" ;;
+esac
+pass "remote admit reports its host-scoped admission"
+if PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" admit new-task 'bad name' >/dev/null 2>&1; then fail "remote admit accepted an invalid project name"; fi
+pass "remote admit refuses an invalid project name"
+out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" crew-state scout-a) || fail "remote crew-state refused: $out"
+case "$out" in 'state: '*) ;;
+  *) fail "remote crew-state did not relay a state line: $out" ;;
+esac
+pass "remote crew-state relays the execution-home state line"

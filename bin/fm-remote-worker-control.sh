@@ -8,6 +8,17 @@ TARGET_HOME=${FM_HOME:?FM_HOME is required}
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-busy-lib.sh
+. "$SCRIPT_DIR/fm-busy-lib.sh"
+# shellcheck source=bin/fm-pane-hash-lib.sh
+. "$SCRIPT_DIR/fm-pane-hash-lib.sh"
+# shellcheck source=bin/fm-mac-load-lib.sh
+. "$SCRIPT_DIR/fm-mac-load-lib.sh"
+# shellcheck source=bin/fm-project-capacity-lib.sh
+. "$SCRIPT_DIR/fm-project-capacity-lib.sh"
+# bin/fm-task-inbox-lib.sh creates $FM_HOME/state when sourced, so the two
+# verbs that write steering records source it lazily only after the worker
+# record they write beside is proven to exist.
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 validate_home() {
@@ -32,6 +43,194 @@ endpoint() {
     session=$(execution_session)
     case "$FM_BACKEND_VALIDATED_TARGET" in "$session":?*) ;; *) die "worker endpoint is outside the execution home session" ;; esac
   fi
+}
+
+worker_endpoint_require() {  # <id>; sets WORKER_BACKEND/WORKER_TARGET
+  local id=$1
+  case "$id" in ''|*[!A-Za-z0-9._-]*|*..*) die "invalid task id" ;; esac
+  validate_home
+  [ -f "$TARGET_HOME/state/$id.meta" ] && [ ! -L "$TARGET_HOME/state/$id.meta" ] || die "no worker $id in execution home"
+  [ -z "$(fm_meta_get "$TARGET_HOME/state/$id.meta" remote_host)" ] && [ -z "$(fm_meta_get "$TARGET_HOME/state/$id.meta" remote_route)" ] \
+    || die "worker $id is itself remotely placed; refusing a nested hop"
+  endpoint "$id"
+  WORKER_BACKEND=$FM_BACKEND_VALIDATED_BACKEND
+  WORKER_TARGET=$FM_BACKEND_VALIDATED_TARGET
+}
+
+worker_send_stdin() {  # <id> [fire-and-forget]; message on stdin
+  local id=$1 delivery_mode=${2:-} message rec ring_rc=0 meta meta_lock
+  [ -z "$delivery_mode" ] || [ "$delivery_mode" = fire-and-forget ] || die "invalid send delivery mode"
+  meta="$TARGET_HOME/state/$id.meta"
+  worker_endpoint_require "$id"
+  IFS= read -r -d '' message < /dev/stdin || :
+  [ -n "${message//[[:space:]]/}" ] || die "remote steer message must be nonempty"
+  # shellcheck source=bin/fm-task-inbox-lib.sh
+  . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+  meta_lock=$(fm_meta_lock_path "$meta") || die "worker metadata lock path is invalid"
+  fm_task_inbox_lock_acquire "$meta_lock" \
+    || die "worker endpoint metadata could not be locked for final delivery validation"
+  if ! endpoint "$id"; then
+    fm_lock_release "$meta_lock"
+    die "invalid worker endpoint"
+  fi
+  if ! rec=$(fm_task_inbox_write_idempotent "$TARGET_HOME/state" "$id" "$message" "$delivery_mode"); then
+    fm_lock_release "$meta_lock"
+    die "steering-inbox record could not be written under $TARGET_HOME/state/$id.inbox"
+  fi
+  fm_lock_release "$meta_lock"
+  case "$rec" in
+    */handled/*)
+      printf 'notice: this steer was already delivered and acknowledged at %s; nothing re-rung\n' "$rec" >&2
+      return 0
+      ;;
+  esac
+  fm_task_inbox_ring "$WORKER_BACKEND" "$WORKER_TARGET" "$rec" "fm-$id" || ring_rc=$?
+  case "$ring_rc" in
+    1) printf 'notice: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at %s\n' "$rec" >&2 ;;
+    2) printf 'notice: doorbell did not reach %s; the steer is durably recorded at %s\n' "$WORKER_TARGET" "$rec" >&2 ;;
+    3) printf 'notice: doorbell not typed because the agent in %s has exited; the steer is durably recorded at %s for recovery\n' "$WORKER_TARGET" "$rec" >&2 ;;
+  esac
+}
+
+worker_key() {  # <id> <key>
+  worker_endpoint_require "$1"
+  FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-send.sh" "$1" --key "$2"
+}
+
+worker_ring() {  # <id> [expected-label]; doorbell line on stdin; prints ring=<rc>
+  local id=$1 label=${2:-} line ring_rc=0
+  meta="$TARGET_HOME/state/$id.meta"
+  worker_endpoint_require "$id"
+  IFS= read -r -d '' line < /dev/stdin || :
+  [ -n "${line//[[:space:]]/}" ] || die "ring doorbell line must be nonempty"
+  # shellcheck source=bin/fm-task-inbox-lib.sh
+  . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+  fm_task_inbox_ring_line "$WORKER_BACKEND" "$WORKER_TARGET" "$line" "$label" || ring_rc=$?
+  printf 'ring=%s\n' "$ring_rc"
+}
+
+worker_control_hop() {  # <id> <verb> [control args]
+  local id=$1 verb=$2 session
+  shift 2
+  worker_endpoint_require "$id"
+  if [ "$WORKER_BACKEND" = herdr ]; then
+    session=$(execution_session)
+    HERDR_SESSION="$session" FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-control.sh" "$id" "$verb" "$@"
+  else
+    FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-control.sh" "$id" "$verb" "$@"
+  fi
+  route "$id"
+}
+
+worker_crew_state() {  # <id>
+  worker_endpoint_require "$1"
+  FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-crew-state.sh" "$1"
+}
+
+worker_fleet() {
+  local meta id backend target harness tail busy hash agent_state
+  validate_home
+  for meta in "$TARGET_HOME/state/"*.meta; do
+    [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+    id=$(basename "$meta" .meta)
+    case "$id" in ''|*[!A-Za-z0-9._-]*|*..*) continue ;; esac
+    if ! fm_backend_validate_task_endpoint "$meta" "$id" 2>/dev/null; then
+      printf '%s\tunknown\tunknown\t-\n' "$id"
+      continue
+    fi
+    backend=$FM_BACKEND_VALIDATED_BACKEND
+    target=$FM_BACKEND_VALIDATED_TARGET
+    harness=$(fm_meta_get "$meta" harness)
+    agent_state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)
+    case "$agent_state" in alive|dead|missing|ambiguous|unreadable|unverified) ;; *) agent_state=unknown ;; esac
+    if tail=$(fm_backend_capture "$backend" "$target" 40 "fm-$id" 2>/dev/null | head -c 65536); then
+      [ "${PIPESTATUS[0]}" -eq 0 ] || tail=
+    else
+      tail=
+    fi
+    busy=$(fm_busy_classify_meta "$meta" "$id" "$TARGET_HOME/state" "$tail" 2>/dev/null || true)
+    busy=${busy%% *}
+    case "$busy" in busy|idle) ;; *) busy=unknown ;; esac
+    if [ -n "$tail" ]; then
+      hash=$(fm_pane_stale_hash "$backend" "$harness" "$target" "fm-$id" "$tail" 2>/dev/null || true)
+      case "$hash" in ''|*[!0-9a-f]*) hash=- ;; esac
+    else
+      hash=-
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$id" "$agent_state" "$busy" "$hash"
+  done
+}
+
+worker_done_gate() {  # <id> <done line>
+  local id=$1 line=$2 meta state wt project kind mode
+  [ -n "${line//[[:space:]]/}" ] || die "done line must be nonempty"
+  worker_endpoint_require "$id"
+  state="$TARGET_HOME/state"
+  meta="$state/$id.meta"
+  wt=$(fm_meta_get "$meta" worktree)
+  project=$(fm_meta_get "$meta" project)
+  kind=$(fm_meta_get "$meta" kind)
+  mode=$(fm_meta_get "$meta" mode)
+  if refusal=$(fm_dod_accept_ship_done "$kind" "$mode" "$wt" "$project" "$line" "$state" "$id" "$meta"); then
+    printf 'ok\n'
+  else
+    [ -n "$refusal" ] || refusal='ship done gates did not pass'
+    printf 'refused: %s\n' "$refusal"
+    return 1
+  fi
+}
+
+worker_admit() {  # <id> <project>
+  local id=$1 project=$2 config holders limit loadavg state meta kind pname sib
+  local -a states
+  case "$id" in ''|*[!A-Za-z0-9._-]*|*..*) die "invalid task id" ;; esac
+  case "$project" in ''|.|-*|*[!A-Za-z0-9._-]*|*..*) die "invalid project name" ;; esac
+  validate_home
+  config="$TARGET_HOME/config"
+  if fm_project_capacity_lookup "$config" "$project"; then
+    limit=$FM_PROJECT_CAPACITY
+  else
+    [ -z "${FM_PROJECT_CAPACITY_ERROR:-}" ] || die "host capacity declaration is unreadable ($FM_PROJECT_CAPACITY_ERROR)"
+    limit=
+  fi
+  states=("$TARGET_HOME/state")
+  if ! fm_linux_sibling_homes "$config"; then
+    die "host sibling declaration is unreadable ($FM_LINUX_SIBLING_ERROR)"
+  fi
+  for sib in ${FM_LINUX_SIBLINGS[@]+"${FM_LINUX_SIBLINGS[@]}"}; do
+    states+=("$sib/state")
+  done
+  holders=0
+  for state in "${states[@]}"; do
+    [ -d "$state" ] || [ ! -e "$state" ] || die "host sibling state is unavailable: $state"
+    [ -d "$state" ] || continue
+    for meta in "$state/"*.meta; do
+      [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+      [ "$meta" != "$state/$id.meta" ] || continue
+      kind=$(fm_meta_get "$meta" kind 2>/dev/null || true)
+      [ "$kind" != secondmate ] || continue
+      [ -z "$(fm_meta_get "$meta" pr 2>/dev/null || true)" ] || continue
+      pname=$(fm_meta_get "$meta" project 2>/dev/null || true)
+      pname=${pname##*/}
+      [ "$pname" = "$project" ] || continue
+      holders=$((holders + 1))
+    done
+  done
+  if [ -n "$limit" ] && [ "$holders" -ge "$limit" ]; then
+    printf 'defer: host already holds %s %s worker(s) at its declared limit %s\n' "$holders" "$project" "$limit"
+    return "$FM_PROJECT_CAPACITY_DEFER_EXIT"
+  fi
+  if ! fm_mac_load_config "$config"; then
+    die "host load declaration is unreadable ($FM_MAC_LOAD_ERROR)"
+  fi
+  if ! loadavg=$(fm_mac_loadavg_5min); then
+    die "host five-minute load average cannot be read; refusing a heavy start rather than guessing it"
+  fi
+  if fm_mac_load_high "$loadavg"; then
+    printf 'defer: host five-minute load average is %s (limit %s)\n' "$loadavg" "$FM_MAC_LOAD_LIMIT"
+    return "$FM_MAC_LOAD_DEFER_EXIT"
+  fi
+  printf 'admit project=%s holders=%s load=%s\n' "$project" "${holders}${limit:+/$limit}" "$loadavg"
 }
 
 route() {
@@ -111,7 +310,7 @@ case "${1:-}" in
   capabilities)
     [ "$#" -eq 1 ] || die "capabilities takes no arguments"
     validate_home
-    printf '%s\n' 'fm-remote-worker-control.v1'
+    printf '%s\n' 'fm-remote-worker-control.v2'
     ;;
   route)
     [ "$#" -eq 2 ] || die "route requires a task id"
@@ -139,6 +338,42 @@ case "${1:-}" in
     [ "$#" -eq 12 ] || die "launch requires task, project, delivery and runtime arguments"
     shift
     launch "$@"
+    ;;
+  send-stdin)
+    [ "$#" -ge 2 ] && [ "$#" -le 3 ] || die "send-stdin requires a task id and optional delivery mode"
+    worker_send_stdin "$2" "${3:-}"
+    ;;
+  key)
+    [ "$#" -eq 3 ] || die "key requires a task id and key"
+    worker_key "$2" "$3"
+    ;;
+  ring)
+    [ "$#" -ge 2 ] && [ "$#" -le 3 ] || die "ring requires a task id and optional label"
+    worker_ring "$2" "${3:-}"
+    ;;
+  interrupt|exit)
+    [ "$#" -eq 2 ] || die "$1 requires a task id"
+    worker_control_hop "$2" "$1"
+    ;;
+  relaunch)
+    [ "$#" -ge 2 ] || die "relaunch requires a task id"
+    worker_control_hop "$2" relaunch "${@:3}"
+    ;;
+  crew-state)
+    [ "$#" -eq 2 ] || die "crew-state requires a task id"
+    worker_crew_state "$2"
+    ;;
+  fleet)
+    [ "$#" -eq 1 ] || die "fleet takes no arguments"
+    worker_fleet
+    ;;
+  done-gate)
+    [ "$#" -eq 3 ] || die "done-gate requires a task id and done line"
+    worker_done_gate "$2" "$3"
+    ;;
+  admit)
+    [ "$#" -eq 3 ] || die "admit requires a task id and project"
+    worker_admit "$2" "$3"
     ;;
   *) die "unknown remote worker command" ;;
 esac

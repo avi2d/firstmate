@@ -394,6 +394,9 @@ fm_send_resolve_target() { # <raw-target>
   TARGET_SELECTOR=""
   TARGET_REMOTE_ID=""
   TARGET_REMOTE_HOST=""
+  TARGET_REMOTE_ROUTE=""
+  TARGET_REMOTE_NOUN=""
+  TARGET_REMOTE_CONTROL=""
   RESOLUTION_TRIED=""
 
   meta=$(fm_backend_meta_for_selector "$raw" "$STATE" 2>/dev/null || true)
@@ -408,6 +411,20 @@ fm_send_resolve_target() { # <raw-target>
       TARGET_SELECTOR=1
       TARGET_REMOTE_ID=$id
       TARGET_REMOTE_HOST=$(fm_meta_get "$meta" remote_host)
+      TARGET_REMOTE_FM_ON_ROUTE=$id
+      if [ "$(fm_meta_get "$meta" kind)" = secondmate ]; then
+        TARGET_REMOTE_NOUN=secondmate
+        TARGET_REMOTE_CONTROL=fm-remote-secondmate-control.sh
+      else
+        TARGET_REMOTE_ROUTE=$(fm_meta_get "$meta" remote_route)
+        [ -n "$TARGET_REMOTE_ROUTE" ] || {
+          echo "error: task $id records a remote host but neither a secondmate placement nor a worker route (tried meta=$meta); refusing a steer with no delivery plane" >&2
+          return 1
+        }
+        TARGET_REMOTE_FM_ON_ROUTE=$TARGET_REMOTE_ROUTE
+        TARGET_REMOTE_NOUN=worker
+        TARGET_REMOTE_CONTROL=fm-remote-worker-control.sh
+      fi
       RESOLUTION_TRIED="meta=$meta; placement=remote"
       return 0
     fi
@@ -913,9 +930,9 @@ if [ "${1:-}" = "--key" ]; then
       exit 1
       ;;
     esac
-    if ! fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "$TARGET_REMOTE_ID" \
-      fm-remote-secondmate-control.sh key "$TARGET_REMOTE_ID" "$key" </dev/null; then
-      echo "error: key '$key' not sent to remote secondmate $TARGET_REMOTE_ID; completion may be unknown" >&2
+    if ! fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "$TARGET_REMOTE_FM_ON_ROUTE" \
+      "$TARGET_REMOTE_CONTROL" key "$TARGET_REMOTE_ID" "$key" </dev/null; then
+      echo "error: key '$key' not sent to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID; completion may be unknown" >&2
       exit 1
     fi
   elif ! fm_backend_send_key "$TARGET_BACKEND" "$T" "$key" "$EXPECTED_LABEL"; then
@@ -1000,7 +1017,7 @@ else
   # resolved through this home's metadata rides the inbox plane, unless it is
   # a LOCAL harness-native invocation that must reach the harness's own parser
   # - a leading "/" (slash command), or a leading "$" to a codex target (skill
-  # invocation). A remote secondmate selector always rides the inbox: its
+  # invocation). A remote secondmate or remote worker selector always rides the inbox: its
   # requests are marked, and a marked request reaches the harness as
   # marker-prefixed chat rather than a parser command anyway, so no remote
   # text has a typed plane to lose. An explicit backend target stays typed
@@ -1038,15 +1055,17 @@ else
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
       fi
-      echo "error: steer not sent to remote secondmate $TARGET_REMOTE_ID: its parent task metadata could not be locked for final delivery validation" >&2
+      echo "error: steer not sent to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID: its parent task metadata could not be locked for final delivery validation" >&2
       exit 1
     fi
     CURRENT_REMOTE_ID=
     CURRENT_REMOTE_HOST=
+    CURRENT_REMOTE_ROUTE=
     CURRENT_REMOTE_SPAWN_GEN=
     if [ -f "$TARGET_META" ]; then
       CURRENT_REMOTE_ID=$(fm_send_id_from_meta "$TARGET_META")
       CURRENT_REMOTE_HOST=$(fm_meta_get "$TARGET_META" remote_host)
+      CURRENT_REMOTE_ROUTE=$(fm_meta_get "$TARGET_META" remote_route)
       CURRENT_REMOTE_SPAWN_GEN=$(fm_meta_get "$TARGET_META" spawn_gen)
     fi
     if [ "$CURRENT_REMOTE_ID" != "$TARGET_REMOTE_ID" ] ||
@@ -1055,12 +1074,13 @@ else
       { [ -n "${FM_SEND_EXPECTED_REMOTE_HOST:-}" ] &&
         [ "$CURRENT_REMOTE_HOST" != "$FM_SEND_EXPECTED_REMOTE_HOST" ]; } ||
       [ -z "$CURRENT_REMOTE_HOST" ] ||
-      [ "$CURRENT_REMOTE_HOST" != "$TARGET_REMOTE_HOST" ]; then
+      [ "$CURRENT_REMOTE_HOST" != "$TARGET_REMOTE_HOST" ] ||
+      [ "$CURRENT_REMOTE_ROUTE" != "$TARGET_REMOTE_ROUTE" ]; then
       fm_lock_release "$REMOTE_META_LOCK"
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
       fi
-      echo "error: steer not sent to remote secondmate $TARGET_REMOTE_ID: its parent task retired or changed route during target resolution" >&2
+      echo "error: steer not sent to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID: its parent task retired or changed route during target resolution" >&2
       exit 1
     fi
     remote_rc=0
@@ -1075,30 +1095,30 @@ else
     # remote job's own timeout also relays as 124; treating it as unconfirmed
     # stays safe because the remote enqueue deduplicates.)
     printf '%s' "$MESSAGE" | fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" --stdin \
-      "$TARGET_REMOTE_ID" fm-remote-secondmate-control.sh send-stdin "${REMOTE_SEND_ARGS[@]}" || remote_rc=$?
+      "$TARGET_REMOTE_FM_ON_ROUTE" "$TARGET_REMOTE_CONTROL" send-stdin "${REMOTE_SEND_ARGS[@]}" || remote_rc=$?
     if [ "$remote_rc" -eq 124 ]; then
       remote_completion_unknown=1
     elif [ "$remote_rc" -eq 255 ]; then
       remote_completion_unknown=1
       remote_rc=0
       printf '%s' "$MESSAGE" | fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" --stdin \
-        "$TARGET_REMOTE_ID" fm-remote-secondmate-control.sh send-stdin "${REMOTE_SEND_ARGS[@]}" || remote_rc=$?
+        "$TARGET_REMOTE_FM_ON_ROUTE" "$TARGET_REMOTE_CONTROL" send-stdin "${REMOTE_SEND_ARGS[@]}" || remote_rc=$?
     fi
     fm_lock_release "$REMOTE_META_LOCK"
     if [ "$remote_rc" -ne 0 ] && [ "$remote_completion_unknown" -eq 1 ]; then
       if [ -n "$FIRE_AND_FORGET_ID" ]; then
-        echo "error: fire-and-forget steer to remote secondmate $TARGET_REMOTE_ID is unconfirmed (delivery-id=$FIRE_AND_FORGET_ID); retry only with the same delivery id" >&2
+        echo "error: fire-and-forget steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (delivery-id=$FIRE_AND_FORGET_ID); retry only with the same delivery id" >&2
         exit 3
       fi
       if [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_mark_delivery_unknown "$STATE" "$PENDING_REPLY_CORR" || true
       fi
       if [ "$remote_rc" -eq 255 ]; then
-        echo "error: steer to remote secondmate $TARGET_REMOTE_ID is unconfirmed (transport lost twice; remote completion unknown). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
+        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (transport lost twice; remote completion unknown). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
       elif [ "$remote_rc" -eq 124 ]; then
-        echo "error: steer to remote secondmate $TARGET_REMOTE_ID is unconfirmed (the remote transport did not complete within its ${FM_SEND_REMOTE_BUDGET}s budget; remote completion unknown). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
+        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (the remote transport did not complete within its ${FM_SEND_REMOTE_BUDGET}s budget; remote completion unknown). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
       else
-        echo "error: steer to remote secondmate $TARGET_REMOTE_ID is unconfirmed (the first transport attempt had unknown completion and the retry failed). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
+        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (the first transport attempt had unknown completion and the retry failed). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
       fi
       printf '%s' "$(fm_send_resend_env)" >&2
       printf 'FM_PENDING_REPLY_EXISTING_CORR=%q %s' \
@@ -1112,7 +1132,7 @@ else
     if [ "$remote_rc" -ne 0 ]; then
       fm_send_known_undelivered_cleanup ||
         echo "error: known-undelivered pending-reply state could not be reset for $TARGET_TASK_ID" >&2
-      echo "error: steer not sent to remote secondmate $TARGET_REMOTE_ID (the remote steering-inbox record could not be written; the remote leg's stderr above has the reason)" >&2
+      echo "error: steer not sent to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID (the remote steering-inbox record could not be written; the remote leg's stderr above has the reason)" >&2
       exit 1
     fi
     # The remote record is durable delivery, exactly as a local enqueue is.
