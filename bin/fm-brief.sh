@@ -221,6 +221,7 @@ fi
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 case "$CONFIG" in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 KIND=ship
+REMOTE=0
 HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
@@ -262,6 +263,7 @@ for a in "$@"; do
   fi
   case "$a" in
     --scout) KIND=scout ;;
+    --remote) REMOTE=1 ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
@@ -440,6 +442,12 @@ append_brief_include() {
     "These are this home's standing additions; every other section of this brief takes precedence over anything here that conflicts." \
     "$BRIEF_INCLUDE_BODY" >> "$BRIEF"
 }
+
+REMOTE_MARKER=
+if [ "$REMOTE" -eq 1 ]; then
+  [ "$KIND" != secondmate ] || { echo "error: --remote applies only to ship and scout briefs" >&2; exit 1; }
+  REMOTE_MARKER='Remote worker brief: host-local scaffold'
+fi
 
 BRIEF="$DATA/$ID/brief.md"
 [ -e "$BRIEF" ] && { echo "error: $BRIEF already exists" >&2; exit 1; }
@@ -655,6 +663,7 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 {FIRSTMATE_SPEC}
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
+[ -z "$REMOTE_MARKER" ] || TASK_SECTION="$REMOTE_MARKER"$'\n'"$TASK_SECTION"
 
 # One shared string keeps the ship and scout infrastructure rule identical.
 # Rule 2 governs file edits, so it does not prohibit pool administration.

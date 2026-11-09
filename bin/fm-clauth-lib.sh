@@ -28,8 +28,13 @@ fm_clauth_status() {
 }
 
 # clauth_row($status; $account) is a quota-axi-shaped provider row, or
-# {unusable: <reason>} whenever the reading cannot vouch for the account.
-# clauth projects no runway or spendPriority, so a row carries no selection.
+# {unusable: <reason>} when no profile, a bad auth, a failed fetch, or a
+# stale reading keeps it from vouching at all. A missing 5h or 7d window
+# only narrows the all_models scope to the window left, carried as
+# uncertainty, and no window at all leaves the row unknown; both stay
+# eligible because absence of a measurement is not evidence against the
+# account. clauth projects no runway or spendPriority, so a row carries
+# no selection.
 # shellcheck disable=SC2016,SC2034  # jq program text, read by the sourcing consumers
 FM_CLAUTH_ROW_JQ='
   def clauth_row($status; $account):
@@ -43,14 +48,20 @@ FM_CLAUTH_ROW_JQ='
     elif $p.auth_status != "ok" then {unusable: "clauth reports auth \($p.auth_status // "unknown") for account \($account)"}
     elif $p.fetch_status == "Failed" then {unusable: "clauth could not read usage for account \($account)"}
     elif $p.stale != false then {unusable: "clauth reading for account \($account) is stale (fetched \($p.fetched_at // "never"))"}
-    elif (util("5h") | type) != "number" or (util("7d") | type) != "number" then
-      {unusable: "clauth reading for account \($account) lacks its 5h and 7d windows"}
-    else
-      (remaining([util("5h"), util("7d")] | max)) as $all |
+    elif ((util("5h") | type) != "number") and ((util("7d") | type) != "number") then
       {provider: "claude", accountKey: $account, clauth: true,
-       quotaSemantics: {status: "known", effectiveAvailability:
-         ([row("all_models"; $all)]
-          + [$p.windows[] | select((.label | startswith("7d ")) and (.utilization_pct | type) == "number")
-             | row("model:" + (.label | ltrimstr("7d ")); ([$all, remaining(.utilization_pct)] | min))])}}
+       uncertainty: "clauth reading for account \($account) has neither a 5h nor a 7d window",
+       quotaSemantics: {status: "unknown", effectiveAvailability: []}}
+    else
+      ([util("5h"), util("7d")] | map(select(type == "number"))) as $present |
+      ([$present[] | remaining(.)] | min) as $all |
+      ({provider: "claude", accountKey: $account, clauth: true,
+        quotaSemantics: {status: "known", effectiveAvailability:
+          ([row("all_models"; $all)]
+           + [$p.windows[] | select((.label | startswith("7d ")) and (.utilization_pct | type) == "number")
+              | row("model:" + (.label | ltrimstr("7d ")); ([$all, remaining(.utilization_pct)] | min))])}}
+       | if ($present | length) < 2 then
+           . + {uncertainty: "clauth reading for account \($account) lacks its \(if (util("5h") | type) != "number" then "5h" else "7d" end) window"}
+         else . end)
     end;
 '
