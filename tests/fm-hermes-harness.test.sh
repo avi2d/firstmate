@@ -202,8 +202,12 @@ chmod +x "$fakebin/tmux"
 home="$case_dir/home"
 proj="$case_dir/project"
 wt="$case_dir/wt"
+wt_stalled="$case_dir/wt-stalled"
+wt_unclosed="$case_dir/wt-unclosed"
 fm_test_spawn_home "$home" hermes
 fm_git_worktree "$proj" "$wt" hermes-test
+fm_git_worktree "$proj" "$wt_stalled" hermes-test-stalled
+fm_git_worktree "$proj" "$wt_unclosed" hermes-test-unclosed
 fm_test_spawn_brief "$home" hermes-worker
 if ! out=$(FM_FAKE_LAUNCH_LOG="$case_dir/launch" fm_test_run_spawn "$home" "$wt" "$fakebin" hermes-worker "$proj" --scout --harness hermes --hermes-profile example --effort high 2>&1); then fail "spawn: $out"; fi
 launch=$(cat "$case_dir/launch")
@@ -219,22 +223,24 @@ pass 'scout spawn carries native profile, interactive brief, hook overlay and me
 fm_test_spawn_brief "$home" hermes-stalled
 if out=$(FM_FAKE_HERMES_STALL_META="$home/state/hermes-stalled.meta" FM_FAKE_HERMES_KILL_LOG="$case_dir/kill" \
   FM_HERMES_READY_POLLS=2 FM_HERMES_POLL_INTERVAL=0 \
-  fm_test_run_spawn "$home" "$wt" "$fakebin" hermes-stalled "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
+  fm_test_run_spawn "$home" "$wt_stalled" "$fakebin" hermes-stalled "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
   fail 'stalled Hermes launch accepted'
 fi
 assert_contains "$out" 'Hermes did not reach its TUI' 'stalled launch diagnostic'
+assert_not_contains "$out" 'still records as its' 'stalled spawn shared the worker copy'
 assert_contains "$(cat "$case_dir/kill" 2>/dev/null)" 'kill-window record=present' 'stalled worker not stopped before its record was removed'
 [ ! -e "$home/state/hermes-stalled.meta" ] || fail 'stalled fresh spawn kept its task record'
-pass 'stalled Hermes launch stops its pane before the task record is removed'
+pass 'stalled Hermes launch on a copy of its own stops its pane before the task record is removed'
 
 fm_test_spawn_brief "$home" hermes-unclosed
 if out=$(FM_FAKE_HERMES_STALL_META="$home/state/hermes-unclosed.meta" FM_FAKE_HERMES_KILL_LOG="$case_dir/kill-unclosed" \
   FM_FAKE_HERMES_KILL_FAIL=1 FM_HERMES_READY_POLLS=2 FM_HERMES_POLL_INTERVAL=0 \
-  fm_test_run_spawn "$home" "$wt" "$fakebin" hermes-unclosed "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
+  fm_test_run_spawn "$home" "$wt_unclosed" "$fakebin" hermes-unclosed "$proj" --scout --harness hermes --hermes-profile example 2>&1); then
   fail 'unclosed stalled Hermes launch accepted'
 fi
 assert_contains "$out" 'Hermes did not reach its TUI' 'unclosed stalled launch diagnostic'
+assert_not_contains "$out" 'still records as its' 'unclosed spawn shared the worker copy'
 assert_contains "$(cat "$case_dir/kill-unclosed" 2>/dev/null)" 'kill-window record=present' 'unclosed stalled worker close not attempted'
 assert_contains "$out" 'task record is kept' 'unclosed stalled launch warning'
 assert_grep 'hermes_profile=example' "$home/state/hermes-unclosed.meta" 'unclosed stalled worker lost its task record'
-pass 'stalled Hermes launch whose pane cannot be closed keeps its task record'
+pass 'stalled Hermes launch on a copy of its own whose pane cannot be closed keeps its task record'

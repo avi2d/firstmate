@@ -200,7 +200,7 @@ CHANGED_DEFAULT_TIMEOUT_SECS=1500
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
-PORTABLE_SERIAL_SHARDS=12
+PORTABLE_SERIAL_SHARDS=13
 
 # Conservative balance hint for a portable-serial script with no measurement.
 # Rounded above the current CI mean, including the capability-skipped scripts.
@@ -1928,15 +1928,33 @@ families_for_changed_path() {
     .agents/skills/*/SKILL.md)
       printf '%s\n' pure-contract-unit
       ;;
-    .github/workflows/ci.yml|.no-mistakes.yaml)
+    .github/workflows/ci.yml)
+      # Only two suites read this file: the workflow contract and the runner
+      # test pinning the Herdr lane timeouts. Suites the workflow invokes
+      # never read it back, and re-running them exceeds the pull-request
+      # job budget.
+      printf '%s\n' "__script__:fm-ci-workflow.test.sh"
+      printf '%s\n' "__script__:fm-test-run.test.sh"
+      ;;
+    .no-mistakes.yaml)
       printf '%s\n' pure-contract-unit
       printf '%s\n' real-herdr-gated
       ;;
-    docs/fm-test-portable-shards.md|docs/fm-test-isolation-proof.md|\
+    docs/fm-test-portable-shards.md)
+      # Nothing executes this procedure doc; its classified surface is covered
+      # by the documentation audience check.
+      printf '%s\n' "__script__:fm-documentation-audiences.test.sh"
+      ;;
+    docs/fm-test-isolation-proof.md|\
     docs/fm-test-isolation-proof.json)
       printf '%s\n' pure-contract-unit
       ;;
-    .github/*|.gitattributes|.tasks.toml|AGENTS.md|CLAUDE.md|CONTRIBUTING.md|\
+    CONTRIBUTING.md)
+      # Contributor prose no suite executes; the audience check covers its
+      # classified surface and links.
+      printf '%s\n' "__script__:fm-documentation-audiences.test.sh"
+      ;;
+    .github/*|.gitattributes|.tasks.toml|AGENTS.md|CLAUDE.md|\
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;

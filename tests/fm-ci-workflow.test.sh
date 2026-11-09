@@ -159,19 +159,22 @@ puts [interpolate.call(concurrency.fetch("group")),
 }
 
 # Print, one per line in workflow order, the jobs whose job-level `if`
-# resolves true under one simulated event and fork variable setting; an unset
-# repository variable reads as the empty string, as GitHub documents.
-jobs_running_under() {  # <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS>
+# resolves true under one simulated event, fork variable setting, and the
+# tests-changed shared-helper output; an unset repository variable reads as
+# the empty string, as GitHub documents, and an absent shared-helper output
+# reads as the empty string, which never equals 'true'.
+jobs_running_under() {  # <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS> [shared]
   ruby -ryaml -e "$EXPRESSION_RUBY" -e '
 context = {
   "github.event_name" => ARGV[1],
   "vars.FM_CI_SKIP_PUSH" => ARGV[2],
   "vars.FM_CI_SKIP_MACOS" => ARGV[3],
+  "needs.tests-changed.outputs.shared-helpers" => ARGV[4].to_s,
 }
 YAML.load_file(ARGV[0]).fetch("jobs").each do |name, job|
   puts name if Expression.condition(job["if"], context)
 end
-' "$CI_WORKFLOW" "$1" "$2" "$3"
+' "$CI_WORKFLOW" "$1" "$2" "$3" "${4:-}"
 }
 
 job_timeout() {
@@ -183,7 +186,7 @@ puts YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1]).fetch("timeout-minutes
 # Tier membership is the executable inventory of the timeout policy: a new job
 # must join a tier, and a job-level value outside these tiers is exactly the
 # one-off number the policy removed.
-PR_TIER_JOBS='lint static'
+PR_TIER_JOBS='lint static tests-changed tests-changed-shards'
 FAST_TIER_JOBS='test-coverage tests-timing-aggregate'
 NORMAL_TIER_JOBS='tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial macos-stock-bash'
 HEAVY_TIER_JOBS='tests-herdr tests-hc'
@@ -257,9 +260,9 @@ end
   pass "every ci.yml job carries a finite timeout"
 }
 
-# Every job sits in exactly one tier, and the workflow carries exactly five
-# distinct job-level timeouts: the lint cap, the static cap, and one per
-# dispatch tier, no one-off numbers.
+# Every job sits in exactly one tier, and the workflow carries exactly six
+# distinct job-level timeouts: the lint cap, the static cap, the
+# changed-tests shards cap, and one per dispatch tier.
 test_every_job_belongs_to_exactly_one_timeout_tier() {
   local expected actual distinct
   expected=$(printf '%s\n' "$PR_TIER_JOBS $FAST_TIER_JOBS $NORMAL_TIER_JOBS $HEAVY_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
@@ -269,8 +272,8 @@ test_every_job_belongs_to_exactly_one_timeout_tier() {
   [ "$actual" = "$expected" ] \
     || fail "ci.yml jobs and the timeout tiers disagree; every job must join one tier"$'\n'"workflow: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"tiers: $(printf '%s' "$expected" | tr '\n' ' ')"
   distinct=$(printf '%s\n' "$expected" | while read -r job; do job_timeout "$job"; done | LC_ALL=C sort -u | wc -l | tr -d ' ')
-  [ "$distinct" = 5 ] \
-    || fail "ci.yml must carry exactly five distinct job timeouts (lint, static, fast, normal, heavy), got $distinct"
+  [ "$distinct" = 6 ] \
+    || fail "ci.yml must carry exactly six distinct job timeouts (lint, static, changed-shards, fast, normal, heavy), got $distinct"
   pass "every ci.yml job belongs to one of the timeout tiers"
 }
 
@@ -397,8 +400,113 @@ test_pull_request_and_push_runs_carry_only_their_capped_gates() {
   done <<'TABLE'
 lint 15
 static 10
+tests-changed 10
+tests-changed-shards 27
 TABLE
   pass "pull request and push runs carry only their capped gates"
+}
+
+# A shared test helper change fans the portable lanes and their timing
+# aggregate out on the pull request. Any other pull request, any push, and
+# manual dispatch keep their existing sets.
+test_shared_helper_pr_runs_matrix_and_ordinary_pr_does_not() {
+  local all pr push_gate dispatch event shared expected want actual
+  all=$(workflow_jobs | LC_ALL=C sort) || fail "could not list ci.yml jobs"
+  pr=$(printf '%s\n' "$PR_TIER_JOBS" | tr ' ' '\n' | LC_ALL=C sort)
+  push_gate=$(printf '%s\n' "$pr" | grep -vx secrets)
+  dispatch=$(comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$pr"))
+  while read -r event shared expected; do
+    case $expected in
+      pr) want=$pr ;;
+      escalated) want=$(printf '%s\n%s\n' "$pr" "$(printf '%s\n' tests-portable-parallel-1 tests-portable-parallel-2 tests-portable-serial tests-timing-aggregate)" | LC_ALL=C sort) ;;
+      pushgate) want=$push_gate ;;
+      dispatch) want=$dispatch ;;
+      *) fail "unknown expectation $expected" ;;
+    esac
+    actual=$(jobs_running_under "$event" '' '' "$shared" | LC_ALL=C sort) \
+      || fail "could not resolve the jobs $event runs with shared-helpers=$shared"
+    [ "$actual" = "$want" ] \
+      || fail "$event with shared-helpers=$shared must run $expected jobs"$'\n'"ran: $(printf '%s' "$actual" | tr '\n' ' ')"$'\n'"wanted: $(printf '%s' "$want" | tr '\n' ' ')"
+  done <<'TABLE'
+pull_request    false   pr
+pull_request    true    escalated
+push            false   pushgate
+push            true    pushgate
+workflow_dispatch false dispatch
+workflow_dispatch true  dispatch
+TABLE
+  pass "a shared test helper change fans the portable matrix out on the pull request only"
+}
+
+# The changed-tests selection never fits one capped job, so four shards split
+# the sorted selection round-robin. The workflow pins the shard count and the
+# modulo; the slice math below proves that shape covers any list exactly once.
+test_changed_shards_split_the_selection_round_robin() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "changed shard contract"
+jobs = YAML.load_file(ARGV[0]).fetch("jobs")
+coordinator = jobs.fetch("tests-changed")
+raise "coordinator must publish the shared-helper output" unless coordinator.fetch("outputs").fetch("shared-helpers").to_s.include?("steps.detect.outputs.shared-helpers")
+coordinator.fetch("steps").each do |step|
+  run = step["run"].to_s
+  raise "the coordinator runs no tests; the shards run them" if run.include?("fm-test-run.sh")
+end
+shards = jobs.fetch("tests-changed-shards")
+raise "shard failures must not cancel another shard" unless shards.fetch("strategy").fetch("fail-fast") == false
+matrix = shards.fetch("strategy").fetch("matrix")
+raise "unexpected shard dimensions" unless matrix.keys == ["shard"]
+ids = matrix.fetch("shard").map(&:to_i)
+raise "changed-tests shards must run 1..n without gaps" unless ids == (1..ids.length).to_a
+n = ids.length
+run = shards.fetch("steps").map { |s| s["run"].to_s }.join("\n")
+raise "shard slice must list the changed selection" unless run.include?("--list --changed")
+raise "shard slice must sort the selection for determinism" unless run.include?("LC_ALL=C sort")
+pattern = /\(NR\s*-\s*1\)\s*%\s*#{n}\s*==\s*k\s*-\s*1/
+raise "shard slice must round-robin modulo #{n}" unless run.match?(pattern)
+raise "shard runs must bound each script" unless run.include?("--per-script-timeout-secs 1500")
+raise "shard timing artifacts must stay per-shard" unless run.include?("fm-test-timing-changed-")
+raise "slice output must never expand into a runner command line" if run.include?('fm-test-run.sh ${{')
+raise "shard must read slice paths line-wise" unless run.include?('IFS= read -r')
+raise "empty slice must skip instead of running the whole suite" unless run.include?("has no scripts; skipping")
+job_cap = shards.fetch("timeout-minutes").to_i
+raise "shards must cap at 27 minutes" unless job_cap == 27
+steps = shards.fetch("steps")
+run_step = steps.find { |s| s["name"].to_s == "Run changed shard" }
+step_cap = run_step.fetch("timeout-minutes").to_i
+raise "shard run step must trip under the job cap" unless step_cap < job_cap
+upload_step = steps.find { |s| s["name"].to_s.include?("timing artifact") }
+raise "shard timing must upload even when the run step trips" unless upload_step.fetch("if").to_s.include?("always()")
+RUBY
+  pass "changed-tests shards split the sorted selection round-robin with per-script bounds"
+}
+
+test_no_ci_job_lists_a_dependency_twice() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "unique job dependencies"
+jobs = YAML.load_file(ARGV[0]).fetch("jobs")
+jobs.each do |name, job|
+  needs = Array(job["needs"])
+  dupes = needs.group_by { |n| n }.select { |_, v| v.length > 1 }.keys
+  raise "#{name} lists #{dupes.join(", ")} twice in needs" unless dupes.empty?
+end
+RUBY
+  pass "no ci job lists a dependency twice in needs"
+}
+
+test_changed_shard_slices_cover_any_selection_exactly_once() {
+  local fixture one two three four all
+  fixture=$(printf '%s\n' tests/fm-brief.test.sh tests/fm-ci-workflow.test.sh tests/fm-crew-state.test.sh tests/fm-lint.test.sh tests/fm-test-run.test.sh tests/fm-captain-hold-core.test.sh tests/fm-captain-hold-merge.test.sh | LC_ALL=C sort)
+  one=$(printf '%s\n' "$fixture" | awk -v k=1 '(NR - 1) % 4 == k - 1')
+  two=$(printf '%s\n' "$fixture" | awk -v k=2 '(NR - 1) % 4 == k - 1')
+  three=$(printf '%s\n' "$fixture" | awk -v k=3 '(NR - 1) % 4 == k - 1')
+  four=$(printf '%s\n' "$fixture" | awk -v k=4 '(NR - 1) % 4 == k - 1')
+  for slice in "$one" "$two" "$three" "$four"; do
+    [ -n "$slice" ] || fail "every slice must hold a script on a seven-file selection"
+  done
+  all=$(printf '%s\n%s\n%s\n%s\n' "$one" "$two" "$three" "$four" | LC_ALL=C sort)
+  [ "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" = 7 ] \
+    || fail "four slices must hold seven scripts with no duplicate or miss: $all"
+  [ "$all" = "$fixture" ] \
+    || fail "four slices must cover the selection exactly once"
+  pass "changed-tests shard slices cover any selection exactly once"
 }
 
 # No CI job may write issues: the scheduled failure reporter is gone, so a red
@@ -413,13 +521,14 @@ raise "no CI job may write issues, got #{writers.inspect}" unless writers.empty?
 
 # Print true or false: whether one job's job-level `if` resolves true under
 # one simulated event, fork variable setting, and outcome of its needed jobs.
-job_runs_under() {  # <job> <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS> <needs status>
+job_runs_under() {  # <job> <event> <FM_CI_SKIP_PUSH> <FM_CI_SKIP_MACOS> <needs status> [shared]
   ruby -ryaml -e "$EXPRESSION_RUBY" -e '
 context = {
   "github.event_name" => ARGV[2],
   "vars.FM_CI_SKIP_PUSH" => ARGV[3],
   "vars.FM_CI_SKIP_MACOS" => ARGV[4],
   "needs.status" => ARGV[5],
+  "needs.tests-changed.outputs.shared-helpers" => ARGV[6].to_s,
 }
 puts Expression.condition(YAML.load_file(ARGV[0]).fetch("jobs").fetch(ARGV[1])["if"], context)
 ' "$CI_WORKFLOW" "$@"
@@ -479,6 +588,10 @@ test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
 test_fork_skip_variables_are_opt_in
 test_pull_request_and_push_runs_carry_only_their_capped_gates
+test_shared_helper_pr_runs_matrix_and_ordinary_pr_does_not
+test_changed_shards_split_the_selection_round_robin
+test_no_ci_job_lists_a_dependency_twice
+test_changed_shard_slices_cover_any_selection_exactly_once
 test_no_ci_job_writes_issues
 test_timing_aggregate_still_runs_after_a_failed_lane
 test_every_job_has_a_finite_timeout
