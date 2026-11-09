@@ -26,17 +26,19 @@ mkdir -p "$PARENT/data" "$PARENT/state" "$REMOTE_ROOT/bin" \
 # So wait for the worker to actually exit and drain the shell's background jobs
 # before removing the tree, then retry rm -rf until the now-quiesced tree is gone.
 fm_remote_handoff_teardown() {
-  local worker_pid i
+  local worker_pid i pids
+  # shellcheck disable=SC2046 # one argument per job pid
+  kill $(jobs -p) 2>/dev/null || true
+  [ -z "${HANDOFF_WORKER_PID:-}" ] || kill -KILL "$HANDOFF_WORKER_PID" 2>/dev/null || true
+  pids=$(ps -ww -eo pid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" 'index($0, root) { print $1 }')
+  # shellcheck disable=SC2086 # one argument per reaped pid
+  [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
   touch "$TMP_ROOT/put.release" "$TMP_ROOT/route.release" 2>/dev/null || true
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
     worker_pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid" 2>/dev/null || true)
     if [ -n "$worker_pid" ]; then
-      kill "$worker_pid" 2>/dev/null || true
-      i=0
-      while [ "$i" -lt 500 ] && kill -0 "$worker_pid" 2>/dev/null; do
-        sleep 0.01
-        i=$((i + 1))
-      done
+      . "$ROOT/bin/fm-remote-job-lib.sh"
+      fm_remote_job_stop_worker_tree "$worker_pid" || true
     fi
   fi
   wait 2>/dev/null || true
@@ -62,6 +64,23 @@ git -C "$REMOTE_ROOT" config user.email test@example.com
 git -C "$REMOTE_ROOT" config user.name Test
 git -C "$REMOTE_ROOT" add AGENTS.md bin
 git -C "$REMOTE_ROOT" commit -qm 'tracked remote fixture'
+# Serve the handoff queue from a worker this shell owns. A worker the
+# entrypoint starts instead would detach its supervisor past this shell's
+# process group, past any timeout that kills it. No HOME is set here: the
+# worker derives its account home, and every lane its HOME, from this
+# process's HOME, and the entrypoint-started worker this replaces inherits
+# that same one.
+FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$TMP_ROOT/remote-jobs" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
+HANDOFF_WORKER_PID=$!
+for _ in $(seq 1 100); do
+  [ -f "$TMP_ROOT/remote-jobs/worker.ready" ] && break
+  sleep 0.05
+done
+[ -f "$TMP_ROOT/remote-jobs/worker.ready" ] || fail "the handoff worker did not become ready"
 printf 'fixture\n' > "$REMOTE/AGENTS.md"
 printf 'ios\n' > "$REMOTE/.fm-secondmate-home"
 cat > "$PARENT/data/secondmates.md" <<EOF

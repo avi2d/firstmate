@@ -31,6 +31,12 @@ WORKER_PID=
 command -v python3 >/dev/null || fail "test needs python3 to seed a large claim directory quickly"
 
 cleanup_claim_reap_fixture() {
+  local reap_pids='' reap_i=0
+  # shellcheck disable=SC2046 # one argument per job pid
+  kill $(jobs -p) 2>/dev/null || true
+  reap_pids=$(ps -ww -eo pid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" 'index($0, root) { print $1 }')
+  # shellcheck disable=SC2086 # one argument per reaped pid
+  [ -z "$reap_pids" ] || kill -KILL $reap_pids 2>/dev/null || true
   if [ -n "$WORKER_PID" ]; then
     kill -TERM "$WORKER_PID" 2>/dev/null || true
     wait "$WORKER_PID" 2>/dev/null || true
@@ -40,7 +46,13 @@ cleanup_claim_reap_fixture() {
     . "$ROOT/bin/fm-remote-job-lib.sh"
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
   fi
-  rm -rf -- "$TMP_ROOT"
+  wait 2>/dev/null || true
+  while [ "$reap_i" -lt 50 ] && [ -e "$TMP_ROOT" ]; do
+    rm -rf -- "$TMP_ROOT" 2>/dev/null || true
+    reap_i=$((reap_i + 1))
+    sleep 0.1
+  done
+  fm_test_cleanup
 }
 trap cleanup_claim_reap_fixture EXIT
 

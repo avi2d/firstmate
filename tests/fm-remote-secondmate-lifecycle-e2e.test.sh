@@ -34,7 +34,17 @@ PARENT_ROUTE_INBOX="$REMOTE_HOME/state/parent-route/ios.inbox"
 CLAIMS="$TMP_ROOT/claims"
 mkdir -p "$PARENT/data" "$PARENT/state" "$PARENT/config" "$PARENT/projects" "$REMOTE_ROOT" "$CLAIMS"
 cleanup() {
-  local worker_pid=''
+  local worker_pid='' i=0 pids=''
+  # Land every KILL first: a runner timeout gives this trap 0.2s before the
+  # whole group is KILLed, so nothing before the kill storm below may wait.
+  # shellcheck disable=SC2046 # one argument per job pid
+  kill $(jobs -p) 2>/dev/null || true
+  [ -z "${WORKER_PID:-}" ] || kill -KILL "$WORKER_PID" 2>/dev/null || true
+  # Detached supervisor, serving, lane, poller, and fake-ssh processes name
+  # the root on their command line but live outside this shell's group.
+  pids=$(ps -ww -eo pid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" 'index($0, root) { print $1 }')
+  # shellcheck disable=SC2086 # one argument per reaped pid
+  [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
   touch "$TMP_ROOT/provision.release" "$TMP_ROOT/seed.release" "$TMP_ROOT/handoff.release" \
     "$TMP_ROOT/inherit.release" "$TMP_ROOT/launch.release" "$TMP_ROOT/race-clone.release" 2>/dev/null || true
   # A watcher leg cut short by a failed assertion is still polling the root.
@@ -51,7 +61,13 @@ cleanup() {
     . "$ROOT/bin/fm-remote-job-lib.sh"
     fm_remote_job_stop_worker_tree "$worker_pid" || true
   fi
-  fm_test_remove_tree "$TMP_ROOT"
+  wait 2>/dev/null || true
+  while [ "$i" -lt 50 ] && [ -e "$TMP_ROOT" ]; do
+    fm_test_remove_tree "$TMP_ROOT" 2>/dev/null || true
+    i=$((i + 1))
+    sleep 0.1
+  done
+  fm_test_remove_tree "$TMP_ROOT" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -118,6 +134,25 @@ git init -q --bare "$REMOTE_ORIGIN"
 git -C "$REMOTE_ROOT" remote add origin "file://$REMOTE_ORIGIN"
 git -C "$REMOTE_ROOT" push -q -u origin main
 git --git-dir="$REMOTE_ORIGIN" symbolic-ref HEAD refs/heads/main
+
+# Serve the fixture's job queue from a worker this shell owns. A worker the
+# entrypoint starts instead would detach its supervisor past this shell's
+# process group, past any timeout that kills it. No HOME is set here: the
+# worker derives its account home, and every lane its HOME, from this
+# process's HOME, and the entrypoint-started worker this replaces inherits
+# that same one.
+WORKER_PID=''
+FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+  FM_REMOTE_JOB_STATE_ROOT="$TMP_ROOT/remote-jobs" \
+  FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
+  "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" --serve \
+  > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
+WORKER_PID=$!
+for _ in $(seq 1 100); do
+  [ -f "$TMP_ROOT/remote-jobs/worker.ready" ] && break
+  sleep 0.05
+done
+[ -f "$TMP_ROOT/remote-jobs/worker.ready" ] || fail "the fixture worker did not become ready"
 
 # One remote-backed direct-PR project. The remote home clones its origin, never
 # the primary working tree.
