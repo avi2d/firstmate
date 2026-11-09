@@ -151,9 +151,10 @@ jobs:
           fi
 
   # Changed-parts behavior gate, sharded. One selection never fits a capped
-  # pull request job, so four shards split the sorted selection round-robin
-  # and every selected script runs in exactly one shard. Selection and the
-  # 1500-second per-script bound belong to bin/fm-test-run.sh.
+  # pull request job, so six shards split the selection by measured
+  # per-script duration and every selected script runs in exactly one shard.
+  # Selection, composition, and the 1500-second per-script bound belong to
+  # bin/fm-test-run.sh.
   tests-changed-shards:
     name: Behavior changed tests ${{ matrix.shard }}
     runs-on: ubuntu-24.04
@@ -163,7 +164,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -172,7 +173,7 @@ jobs:
         id: slice
         run: |
           set -eu
-          slice=$(bin/fm-test-run.sh --list --changed --base origin/main | LC_ALL=C sort | awk -v k="${{ matrix.shard }}" '(NR - 1) % 4 == k - 1')
+          slice=$(bin/fm-test-run.sh --list --changed-shard "${{ matrix.shard }}of6" --base origin/main)
           {
             printf 'scripts<<FM_EOF\n'
             printf '%s\n' "$slice"

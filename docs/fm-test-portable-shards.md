@@ -142,7 +142,7 @@ No fast mode, path skips, or paid runner provisioning is part of this layout.
 
 The longer-term performance objective remains a complete green run under fifteen minutes including start delay, but the three watch-triage members still sum to about 26 minutes of CI test time and the ten captain-hold members sum to about 21 minutes of macOS local test time.
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
-Pull requests and pushes run six paired lint shards of two canonical partitions each, capped at 15 minutes, one static gate holding the repo invariants plus the pull request secrets scan, capped at 10 minutes, and four changed-tests shards splitting the selection round-robin, capped at 15 minutes.
+Pull requests and pushes run six paired lint shards of two canonical partitions each, capped at 15 minutes, one static gate holding the repo invariants plus the pull request secrets scan, capped at 10 minutes, and six changed-tests shards splitting the selection by measured per-script duration, capped at 27 minutes with the run step tripping at 25.
 A pull request that touches a shared test helper also runs the portable lanes and the timing aggregate, which keep their dispatch budgets.
 A manual dispatch run adds the coverage guard, thirteen portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
 Insufficient shared account capacity can erase the packing gain.
