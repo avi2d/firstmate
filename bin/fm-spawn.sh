@@ -1891,6 +1891,10 @@ spawn_remote_worker() {
   fi
   fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE" || { echo "error: remote worker launched but its final route could not be published" >&2; return 1; }
   [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" dispatched "$ID" "$KIND" "$project" "$harness" "$MODEL" || true
+  if ! "$SCRIPT_DIR/fm-procevent-remote-feed.sh" ensure-armed "$route" >/dev/null; then
+    echo "error: remote worker $ID launched, but its status feed could not be armed; endpoint metadata is preserved" >&2
+    return 1
+  fi
   printf 'spawned %s kind=%s window=remote:%s remote=%s\n' "$ID" "$KIND" "$ID" "$host"
 }
 

@@ -42,7 +42,7 @@ fm_remote_job_safe_id() {
 }
 
 fm_remote_job_command_preemptible() { # <staged argv command>
-  case "${1:-}" in fm-remote-delta-read.sh) return 0 ;; *) return 1 ;; esac
+  case "${1:-}" in fm-remote-delta-read.sh|fm-remote-status-feed.sh) return 0 ;; *) return 1 ;; esac
 }
 
 fm_remote_job_validate_settings() {

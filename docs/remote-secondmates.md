@@ -131,7 +131,7 @@ Input, argv, stdout, and stderr are each capped at 1048576 bytes.
 The worker serves one lane per staged home.
 Jobs for the same home run strictly FIFO in seq order, while lanes for different homes run concurrently, so one home's long job never delays another home's commands.
 Within a lane, a deliberately long-blocking poll would still serialize that home's short interactive commands behind its wait window.
-`fm_remote_job_command_preemptible` names the read-only long-poll class, which is `fm-remote-delta-read.sh`, the reply-log delta read.
+`fm_remote_job_command_preemptible` names the read-only long-poll class, which is `fm-remote-delta-read.sh`, the reply-log delta read, and `fm-remote-status-feed.sh`, the per-home status-feed multiplex over that read.
 The worker preempts a running preemptible job on its next queue pass after a non-preemptible job is queued for the same home.
 It publishes exit 76 with emptied stdout and stderr, distinct from the poll's exit 75 elapsed-window-with-no-data result.
 The delta read is non-destructive and cursor-anchored, so the caller's normal re-arm re-reads the same data and a preempted poll loses nothing.
@@ -178,7 +178,7 @@ The worker serves one lane per staged home:
 - Jobs for the same home follow the staging-order contract owned by [`bin/fm-remote-job-lib.sh`](../bin/fm-remote-job-lib.sh).
 - Different homes' lanes run concurrently, so one home's long job never delays another home's commands.
 
-Within a home's lane, the worker preempts a running reply long-poll on its next queue check when any command other than another reply long-poll is queued for that home.
+Within a home's lane, the worker preempts a running preemptible long-poll on its next queue check when any command other than another preemptible long-poll is queued for that home.
 As a result, interactive commands and startup checks are never serialized behind a poll window.
 
 `bin/fm-remote-job-lib.sh` owns that preemption contract.
@@ -186,7 +186,10 @@ It distinguishes preemption from a wait window that closes with no data:
 
 - Only a genuinely quiet window proves channel freshness.
 - Either outcome can re-arm without losing data.
-- The parent's reply listener polls again under the same claim after either one, so a same-home command such as the per-cycle liveness probe never tears the listener down; [`bin/fm-procevent-remote-reply.sh`](../bin/fm-procevent-remote-reply.sh) owns that mapping.
+- The parent's reply listener polls again under the same claim after either one, so a same-home command such as the per-cycle liveness probe never tears the listener down.
+[`bin/fm-procevent-remote-reply.sh`](../bin/fm-procevent-remote-reply.sh) owns that mapping.
+The per-route status-feed listener rejoins the same way, with one cursor vector per remote worker task instead of one cursor.
+[`bin/fm-procevent-remote-feed.sh`](../bin/fm-procevent-remote-feed.sh) owns that mapping.
 
 ### Cancelled and orphaned jobs
 
