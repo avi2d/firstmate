@@ -1034,7 +1034,7 @@ test_paused_unchanged_across_polls_skips_its_recheck() {
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-quiet.meta"
   printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-quiet.status"
   sig=$(seen_sig "$state/paused-quiet.status"); printf '%s' "$sig" > "$state/.seen-paused-quiet_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -1094,7 +1094,7 @@ test_paused_live_agent_unchanged_across_polls_skips_its_recheck() {
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-live.meta"
   printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-live.status"
   sig=$(seen_sig "$state/paused-live.status"); printf '%s' "$sig" > "$state/.seen-paused-live_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -1158,7 +1158,7 @@ test_paused_throttled_resurface_keeps_the_old_recheck_clock() {
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-throttle.meta"
   printf 'paused: awaiting the upstream release\n' > "$state/paused-throttle.status"
   sig=$(seen_sig "$state/paused-throttle.status"); printf '%s' "$sig" > "$state/.seen-paused-throttle_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
@@ -1213,7 +1213,7 @@ test_paused_untagged_signature_record_is_a_cache_miss() {
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-untag.meta"
   printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-untag.status"
   sig=$(seen_sig "$state/paused-untag.status"); printf '%s' "$sig" > "$state/.seen-paused-untag_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '%s' "$pane_hash" > "$state/.stale-$key"
@@ -1262,7 +1262,7 @@ test_captain_held_unchanged_across_polls_skips_its_recheck() {
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/held-quiet.meta"
   printf 'captain-held [key=route]: awaiting the routing call\n' > "$state/held-quiet.status"
   sig=$(seen_sig "$state/held-quiet.status"); printf '%s' "$sig" > "$state/.seen-held-quiet_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "idle bare shell after captain-held transfer")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '%s' "$pane_hash" > "$state/.stale-$key"
@@ -1322,7 +1322,7 @@ test_paused_status_change_rechecks_before_the_slow_interval() {
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-shift.meta"
   printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-shift.status"
   sig=$(seen_sig "$state/paused-shift.status"); printf '%s' "$sig" > "$state/.seen-paused-shift_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
