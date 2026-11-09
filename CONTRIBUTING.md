@@ -100,7 +100,7 @@ Check and test the toolbelt before pushing:
 ```sh
 while IFS= read -r script; do /bin/bash -n "$script" || exit; done < <(bin/fm-lint.sh --list-files)   # syntax-check the shell surface fm-lint.sh will cover (changed files locally, full set in CI/on main)
 bin/fm-lint.sh   # lint that shell surface plus GitHub workflows via pinned actionlint; the single owner CI and the no-mistakes gate both run
-git fetch origin main && bunx --package @avi2dg/checks@0.57.0 checks-secrets origin/main HEAD   # the CI Secrets scan over the commits your branch adds, unpushed ones included (needs Bun)
+git fetch origin main && bunx --package @avi2dg/checks@0.89.0 checks-secrets origin/main HEAD   # the CI Secrets scan over the commits your branch adds, unpushed ones included (needs Bun)
 bin/fm-test-run.sh tests/<subject>.test.sh   # one script (primary local focus path, timed)
 bin/fm-test-run.sh tests/<a>.test.sh tests/<b>.test.sh   # several subjects at once: bounded automatic concurrency
 bin/fm-test-run.sh --family pure-contract-unit   # ordinary family-scoped local path (serial, timed)

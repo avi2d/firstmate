@@ -34,7 +34,7 @@ env:
   FM_CI_PI_VERSION: '1.5.0'
   # checks-secrets pins: the @avi2dg/checks package and the Bun version its
   # .bun-version pins. CONTRIBUTING.md's local secrets scan names these too.
-  FM_CI_CHECKS_VERSION: '0.57.0'
+  FM_CI_CHECKS_VERSION: '0.89.0'
   FM_CI_BUN_VERSION: '1.4.3'
 
 # Timeout policy: paired lint shards are capped at 15 minutes and every other

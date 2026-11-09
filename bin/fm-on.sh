@@ -39,6 +39,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/secondmates.md"
+EXEC_REG="$DATA/remote-homes.md"
 PROTOCOL=1
 
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
@@ -74,23 +75,30 @@ LOCAL_COMMAND="$FM_ROOT/bin/$COMMAND"
   || die "remote command is not a genuine tracked executable in this Firstmate checkout: $COMMAND"
 git -C "$FM_ROOT" ls-files --error-unmatch "bin/$COMMAND" >/dev/null 2>&1 \
   || die "remote command is not tracked by this Firstmate checkout: $COMMAND"
-[ -f "$REG" ] && [ ! -L "$REG" ] || die "no safe secondmate registry at $REG"
+HAVE_REG=0
+HAVE_EXEC_REG=0
+if [ -f "$REG" ] && [ ! -L "$REG" ]; then HAVE_REG=1; fi
+if [ -f "$EXEC_REG" ] && [ ! -L "$EXEC_REG" ]; then HAVE_EXEC_REG=1; fi
+[ "$HAVE_REG" -eq 1 ] || [ "$HAVE_EXEC_REG" -eq 1 ] || die "no safe secondmate registry at $REG"
 
 MATCHES=0
 HOST=
 ROOT=
 HOME_PATH=
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in '- '*) ;; *) continue ;; esac
-  secondmate_registry_parse_line "$line" || die "malformed secondmate registry entry: $line"
-  [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] || continue
-  if [ "$SECONDMATE_REGISTRY_ID" = "$ROUTE" ] || [ "$SECONDMATE_REGISTRY_HOST" = "$ROUTE" ]; then
-    MATCHES=$((MATCHES + 1))
-    HOST=$SECONDMATE_REGISTRY_HOST
-    ROOT=$SECONDMATE_REGISTRY_ROOT
-    HOME_PATH=$SECONDMATE_REGISTRY_HOME
-  fi
-done < "$REG"
+for registry_file in "$REG" "$EXEC_REG"; do
+  [ -f "$registry_file" ] && [ ! -L "$registry_file" ] || continue
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '- '*) ;; *) continue ;; esac
+    secondmate_registry_parse_line "$line" || die "malformed secondmate registry entry: $line"
+    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] || continue
+    if [ "$SECONDMATE_REGISTRY_ID" = "$ROUTE" ] || [ "$SECONDMATE_REGISTRY_HOST" = "$ROUTE" ]; then
+      MATCHES=$((MATCHES + 1))
+      HOST=$SECONDMATE_REGISTRY_HOST
+      ROOT=$SECONDMATE_REGISTRY_ROOT
+      HOME_PATH=$SECONDMATE_REGISTRY_HOME
+    fi
+  done < "$registry_file"
+done
 [ "$MATCHES" -gt 0 ] || die "no remote secondmate or SSH alias matches '$ROUTE'"
 [ "$MATCHES" -eq 1 ] || die "remote route '$ROUTE' is ambiguous across $MATCHES configured secondmates; use a secondmate id"
 case "$HOST" in ''|-*|*[!A-Za-z0-9._-]*) die "configured SSH alias is unsafe: $HOST" ;; esac

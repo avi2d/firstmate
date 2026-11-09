@@ -15,6 +15,7 @@ SECONDMATE_REGISTRY_SUMMARY=
 SECONDMATE_REGISTRY_HOST=
 SECONDMATE_REGISTRY_ROOT=
 SECONDMATE_REGISTRY_HOME=
+SECONDMATE_REGISTRY_SESSION=
 SECONDMATE_REGISTRY_SCOPE=
 SECONDMATE_REGISTRY_PROJECTS=
 SECONDMATE_REGISTRY_ADDED=
@@ -34,12 +35,13 @@ secondmate_reply_lifecycle_lock_path() { printf '%s/.remote-reply-lifecycle-%s.l
 secondmate_registry_parse_line() {
   local line=$1
   local local_re='^- ([A-Za-z0-9._-]+) - (.+) \(home:[[:space:]]*([^;)]*);[[:space:]]*scope:[[:space:]]*(.*);[[:space:]]*projects:[[:space:]]*([^;)]*);[[:space:]]*added[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2})\)[[:space:]]*$'
-  local remote_re='^- ([A-Za-z0-9._-]+) - (.+) \(host:[[:space:]]*([^;)]*);[[:space:]]*root:[[:space:]]*([^;)]*);[[:space:]]*home:[[:space:]]*([^;)]*);[[:space:]]*scope:[[:space:]]*(.*);[[:space:]]*projects:[[:space:]]*([^;)]*);[[:space:]]*added[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2})\)[[:space:]]*$'
+  local remote_re='^- ([A-Za-z0-9._-]+) - (.+) \(host:[[:space:]]*([^;)]*);[[:space:]]*root:[[:space:]]*([^;)]*);[[:space:]]*home:[[:space:]]*([^;)]*);[[:space:]]*(session:[[:space:]]*([^;]*);[[:space:]]*)?scope:[[:space:]]*(.*);[[:space:]]*projects:[[:space:]]*([^;)]*);[[:space:]]*added[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2})\)[[:space:]]*$'
   SECONDMATE_REGISTRY_ID=
   SECONDMATE_REGISTRY_SUMMARY=
   SECONDMATE_REGISTRY_HOST=
   SECONDMATE_REGISTRY_ROOT=
   SECONDMATE_REGISTRY_HOME=
+  SECONDMATE_REGISTRY_SESSION=
   SECONDMATE_REGISTRY_SCOPE=
   SECONDMATE_REGISTRY_PROJECTS=
   SECONDMATE_REGISTRY_ADDED=
@@ -59,15 +61,23 @@ secondmate_registry_parse_line() {
     SECONDMATE_REGISTRY_HOST=${BASH_REMATCH[3]}
     SECONDMATE_REGISTRY_ROOT=${BASH_REMATCH[4]}
     SECONDMATE_REGISTRY_HOME=${BASH_REMATCH[5]}
-    SECONDMATE_REGISTRY_SCOPE=${BASH_REMATCH[6]}
-    SECONDMATE_REGISTRY_PROJECTS=${BASH_REMATCH[7]}
-    SECONDMATE_REGISTRY_ADDED=${BASH_REMATCH[8]}
+    SECONDMATE_REGISTRY_SESSION=${BASH_REMATCH[7]:-}
+    SECONDMATE_REGISTRY_SESSION=${SECONDMATE_REGISTRY_SESSION#"${SECONDMATE_REGISTRY_SESSION%%[![:space:]]*}"}
+    SECONDMATE_REGISTRY_SESSION=${SECONDMATE_REGISTRY_SESSION%"${SECONDMATE_REGISTRY_SESSION##*[![:space:]]}"}
+    SECONDMATE_REGISTRY_SCOPE=${BASH_REMATCH[8]}
+    SECONDMATE_REGISTRY_PROJECTS=${BASH_REMATCH[9]}
+    SECONDMATE_REGISTRY_ADDED=${BASH_REMATCH[10]}
     SECONDMATE_REGISTRY_REMOTE=1
   else
     return 1
   fi
   [ -n "$SECONDMATE_REGISTRY_HOME" ] || return 1
   [ -n "$SECONDMATE_REGISTRY_SCOPE" ] || return 1
+  if [ -z "$SECONDMATE_REGISTRY_SESSION" ]; then
+    SECONDMATE_REGISTRY_SESSION=fm-remote
+  else
+    case "$SECONDMATE_REGISTRY_SESSION" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+  fi
   if [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ]; then
     [ -n "$SECONDMATE_REGISTRY_HOST" ] || return 1
     [ -n "$SECONDMATE_REGISTRY_ROOT" ] || return 1
@@ -96,6 +106,7 @@ secondmate_registry_field() {
     host) printf '%s\n' "$SECONDMATE_REGISTRY_HOST" ;;
     root) printf '%s\n' "$SECONDMATE_REGISTRY_ROOT" ;;
     home) printf '%s\n' "$SECONDMATE_REGISTRY_HOME" ;;
+    session) printf '%s\n' "${SECONDMATE_REGISTRY_SESSION:-fm-remote}" ;;
     scope) printf '%s\n' "$SECONDMATE_REGISTRY_SCOPE" ;;
     projects) printf '%s\n' "$SECONDMATE_REGISTRY_PROJECTS" ;;
     remote) printf '%s\n' "$SECONDMATE_REGISTRY_REMOTE" ;;
