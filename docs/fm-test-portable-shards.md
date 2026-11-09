@@ -13,6 +13,12 @@ Both hint tables were refreshed on 2026-09-30 from five Ubuntu CI runs: [3658388
 Use the slowest successful `duration_ms` per script across their uploaded portable timing artifacts and completed `FM_TEST_END` log markers, with the two version/platform exceptions below.
 All artifact records were cross-checked against the corresponding job's markers.
 This covered all 24 parallel and 202 serial members at that refresh.
+
+Both hint tables were refreshed again on 2026-11-09 from the slowest successful FM_TEST_END durations in run [42613893470](https://github.com/avi2d/firstmate/actions/runs/42613893470).
+Every measured script above its hint took the measured value, 89 scripts in all.
+Every script below its hint kept its hint, 15 scripts, and scripts measuring below the 45000 ms default kept no hint, 7 scripts plus one for a file no longer on main.
+The parallel lanes were rebalanced onto the new values to an imbalance of 1 ms.
+The serial shards grew from thirteen to fourteen, packing the new total under the unchanged 1200000 ms modeled budget.
 An existing live-capability skip is a portable-runner measurement, not a timing claim for the unavailable live integration.
 Observed maxima provide conservative packing weights, not an upper bound on future durations.
 
@@ -144,7 +150,7 @@ The longer-term performance objective remains a complete green run under fifteen
 The immediate packing target is the runner's modeled script budget, not a claim that more shards alone can make an indivisible script faster.
 Pull requests and pushes run six paired lint shards of two canonical partitions each, capped at 15 minutes, one static gate holding the repo invariants plus the pull request secrets scan, capped at 10 minutes, and four changed-tests shards splitting the selection round-robin, capped at 15 minutes.
 A pull request that touches a shared test helper also runs the portable lanes and the timing aggregate, which keep their dispatch budgets.
-A manual dispatch run adds the coverage guard, thirteen portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
+A manual dispatch run adds the coverage guard, fourteen portable serial shards, two portable parallel lanes, the Herdr lane, the macOS Bash snapshot, and the timing aggregate.
 Insufficient shared account capacity can erase the packing gain.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
