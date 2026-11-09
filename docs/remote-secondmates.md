@@ -5,7 +5,8 @@ It is for operators who run a remote second mate and for anyone checking its tra
 
 Remote second mates place a whole persistent Firstmate home on another SSH-reachable host.
 The primary still owns routing and supervision, while the remote home owns its own projects, backlog, and workers.
-Firstmate does not support placing an individual worker remotely or failing a remote route over to a local replacement.
+An individual worker placed on another host while this home supervises it is a remote worker, and [Remote workers](remote-workers.md) covers it.
+Firstmate does not fail a remote route over to a local replacement.
 
 ## Find a topic
 

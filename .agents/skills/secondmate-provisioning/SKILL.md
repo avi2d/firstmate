@@ -248,6 +248,9 @@ The safety check is the secondmate's own home.
 Teardown refuses while its `state/*.meta` contains in-flight work.
 Non-forced retirement also refuses while any parent pending-reply for that id is still unresolved.
 A remote route delegates the in-flight guard to its configured host and additionally refuses while the primary has a pending handoff outbox.
+Before retiring a remote second mate whose projects move to an execution home, run `bin/fm-backlog-reclaim.sh <id> --dry-run --all`, then the same command without `--dry-run`, so its Queued items return to this home's backlog with their notes, holds, and blocked-by links.
+Reclaim refuses In-flight and Done items, so let in-flight work land under the second mate first.
+An interrupted reclaim leaves the staged set on the second mate's side, and rerunning the same command finishes it, as [backlog reclaim](../../../docs/remote-workers.md#backlog-reclaim) describes.
 SSH exit 255 preserves the route and local records because remote completion is unknown.
 When retirement proceeds, teardown kills the direct endpoint, removes every parent pending-reply record for that id including resolved leftovers and its delivery confirmation, removes the `data/secondmates.md` route, clears the main home metadata, and removes the retired secondmate home.
 An endpoint close that could not be made stops the retirement before any record naming that endpoint is removed, so a cleanup never reports success for an agent that may still be live with nothing left on disk naming it.
