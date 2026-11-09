@@ -43,9 +43,9 @@ remote_worker_fleet() {  # <route>
 # expectations, or fail when there is none. The host-side acknowledgement move
 # is the only delivery signal, and these records are its observable main-side
 # shadow, so an open delivered expectation is an unacked steer.
-remote_worker_oldest_unacked() {  # <state> <task>
-  local state=$1 task=$2 dir rec tid phase delivered oldest=
-  dir=$(fm_pending_reply_dir "$state") || return 1
+remote_worker_oldest_unacked() {  # <state-dir> <task>
+  local state_dir=$1 task=$2 dir rec tid phase delivered oldest=
+  dir=$(fm_pending_reply_dir "$state_dir") || return 1
   [ -d "$dir" ] || return 1
   for rec in "$dir"/*; do
     [ -f "$rec" ] || continue
