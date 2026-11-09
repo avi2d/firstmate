@@ -1094,7 +1094,7 @@ test_paused_live_agent_unchanged_across_polls_skips_its_recheck() {
   printf 'window=%s\nkind=ship\nbackend=tmux\n' "$window" > "$state/paused-live.meta"
   printf 'paused: awaiting the upstream release | owner=ci | recheck=2099-01-01\n' > "$state/paused-live.status"
   sig=$(seen_sig "$state/paused-live.status"); printf '%s' "$sig" > "$state/.seen-paused-live_status"
-  key=$(printf '%s' "$window" | tr ':/.' '___')
+  key=$(watch_window_key "$window")
   pane_hash=$(hash_text "idle awaiting external")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
