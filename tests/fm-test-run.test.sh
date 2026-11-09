@@ -1446,6 +1446,81 @@ test_portable_serial_shard_lane_refusals() {
   pass "portable serial shard lanes refuse mismatched, out-of-range, and countless names"
 }
 
+test_changed_shards_split_by_measured_weight_not_name_order() {
+  local tmp repo script shard want got union full rc
+  local -a scripts=(
+    tests/fm-remote-secondmate-lifecycle-e2e.test.sh
+    tests/fm-lint.test.sh
+    tests/fm-spawn-dispatch-profile.test.sh
+    tests/fm-test-run.test.sh
+    tests/fm-assertions.test.sh
+    tests/fm-brief.test.sh
+    tests/fm-send-settle.test.sh
+    tests/fm-forge-detect.test.sh
+  )
+  tmp=$(fm_test_tmproot fm-test-run-changed-shards)
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  for script in "${scripts[@]}"; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
+    chmod +x "$repo/$script"
+  done
+  git -C "$repo" init -q
+  git -C "$repo" add .
+  git -C "$repo" -c user.name=test -c user.email=test@example.invalid commit -qm baseline
+  for script in "${scripts[@]}"; do
+    printf '\n' >>"$repo/$script"
+  done
+  shard=1
+  while [ "$shard" -le 6 ]; do
+    "$repo/bin/fm-test-run.sh" --list --changed-shard "${shard}of6" --base HEAD >"$tmp/shard$shard" \
+      || fail "--list --changed-shard ${shard}of6 failed"
+    shard=$((shard + 1))
+  done
+  shard=1
+  while [ "$shard" -le 6 ]; do
+    case "$shard" in
+      1) want=tests/fm-remote-secondmate-lifecycle-e2e.test.sh ;;
+      2) want=tests/fm-spawn-dispatch-profile.test.sh ;;
+      3) want=tests/fm-test-run.test.sh ;;
+      4) want=tests/fm-lint.test.sh ;;
+      5) want=$(printf '%s\n' tests/fm-assertions.test.sh tests/fm-forge-detect.test.sh) ;;
+      6) want=$(printf '%s\n' tests/fm-brief.test.sh tests/fm-send-settle.test.sh) ;;
+    esac
+    got=$(LC_ALL=C sort "$tmp/shard$shard")
+    [ "$got" = "$want" ] \
+      || fail "changed shard ${shard}of6 must hold its measured-weight share, got: $got"
+    shard=$((shard + 1))
+  done
+  union=$(cat "$tmp"/shard1 "$tmp"/shard2 "$tmp"/shard3 "$tmp"/shard4 "$tmp"/shard5 "$tmp"/shard6 | LC_ALL=C sort)
+  [ -z "$(printf '%s\n' "$union" | uniq -d)" ] \
+    || fail "changed shards run the same script twice: $(printf '%s\n' "$union" | uniq -d | tr '\n' ' ')"
+  full=$("$repo/bin/fm-test-run.sh" --list --changed --base HEAD | LC_ALL=C sort) \
+    || fail "--list --changed failed"
+  [ "$union" = "$full" ] \
+    || fail "six changed shards must cover the changed selection exactly once"
+  "$repo/bin/fm-test-run.sh" --list --changed-shard 1of6 --base HEAD >"$tmp/again" \
+    || fail "repeat --list --changed-shard 1of6 failed"
+  cmp -s "$tmp/shard1" "$tmp/again" \
+    || fail "changed shard membership must be deterministic"
+  set +e
+  "$RUNNER" --list --changed-shard 1of5 >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "mismatched changed shard count must refuse (exit 2), got $rc"
+  grep -Fq "configured for 6" "$tmp/err" \
+    || fail "mismatch refusal must name the configured count: $(cat "$tmp/err")"
+  set +e
+  "$RUNNER" --list --changed-shard 7of6 >"$tmp/out2" 2>"$tmp/err2"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "out-of-range changed shard index must refuse (exit 2), got $rc"
+  grep -Fq "outside 1..6" "$tmp/err2" \
+    || fail "range refusal message missing: $(cat "$tmp/err2")"
+  pass "changed shards split by measured weight with six deterministic disjoint covers"
+}
+
 test_jobs_requires_proven_isolated() {
   local tmp rc shard_lane
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-jobs.XXXXXX")
@@ -2075,6 +2150,7 @@ test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
 test_portable_serial_packing_budget_boundary
 test_portable_serial_shard_lane_refusals
+test_changed_shards_split_by_measured_weight_not_name_order
 test_jobs_requires_proven_isolated
 test_jobs_admits_a_concurrent_safe_family
 test_unmapped_new_test_never_inherits_family_concurrency
