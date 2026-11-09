@@ -168,11 +168,23 @@ stop_pid() {
 }
 
 cleanup() {
+  local reap_pids='' reap_i=0
   : > "$SWEEP_GATE.release" 2>/dev/null || true
+  # shellcheck disable=SC2046 # one argument per job pid
+  kill $(jobs -p) 2>/dev/null || true
+  reap_pids=$(ps -ww -eo pid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" 'index($0, root) { print $1 }')
+  # shellcheck disable=SC2086 # one argument per reaped pid
+  [ -z "$reap_pids" ] || kill -KILL $reap_pids 2>/dev/null || true
   stop_pid "$(cat "$FM_TEST_TRACKED" 2>/dev/null)"
   stop_pid "$(cat "$STATE_ROOT/worker.lock/pid" 2>/dev/null)"
   stop_pid "${ORPHAN_PID:-}"
-  rm -rf -- "$TMP_ROOT"
+  wait 2>/dev/null || true
+  while [ "$reap_i" -lt 50 ] && [ -e "$TMP_ROOT" ]; do
+    rm -rf -- "$TMP_ROOT" 2>/dev/null || true
+    reap_i=$((reap_i + 1))
+    sleep 0.1
+  done
+  rm -rf -- "$TMP_ROOT" 2>/dev/null || true
 }
 trap cleanup EXIT
 

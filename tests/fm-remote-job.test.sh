@@ -36,6 +36,12 @@ mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
 # that pid alone leaves the supervisor to respawn - the leak
 # tests/fm-remote-job-orphan-reap.test.sh pins. Stop the whole worker tree.
 cleanup_remote_job_fixture() {
+  local reap_pids='' reap_i=0
+  # shellcheck disable=SC2046 # one argument per job pid
+  kill $(jobs -p) 2>/dev/null || true
+  reap_pids=$(ps -ww -eo pid=,args= 2>/dev/null | awk -v root="$TMP_ROOT/" 'index($0, root) { print $1 }')
+  # shellcheck disable=SC2086 # one argument per reaped pid
+  [ -z "$reap_pids" ] || kill -KILL $reap_pids 2>/dev/null || true
   [ -z "$OTHER_PID" ] || kill "$OTHER_PID" 2>/dev/null || true
   [ -z "$RECOVERY_WORKER_PID" ] || kill "$RECOVERY_WORKER_PID" 2>/dev/null || true
   [ -z "$REPEAT_WORKER_PID" ] || kill "$REPEAT_WORKER_PID" 2>/dev/null || true
@@ -58,7 +64,13 @@ cleanup_remote_job_fixture() {
   if [ -f "$STATE_ROOT/worker.pid" ]; then
     fm_remote_job_stop_worker_tree "$(cat "$STATE_ROOT/worker.pid")" || true
   fi
-  rm -rf -- "$TMP_ROOT"
+  wait 2>/dev/null || true
+  while [ "$reap_i" -lt 50 ] && [ -e "$TMP_ROOT" ]; do
+    rm -rf -- "$TMP_ROOT" 2>/dev/null || true
+    reap_i=$((reap_i + 1))
+    sleep 0.1
+  done
+  rm -rf -- "$TMP_ROOT" 2>/dev/null || true
 }
 trap cleanup_remote_job_fixture EXIT
 
