@@ -1834,7 +1834,20 @@ spawn_remote_worker() {
     [ "$rc" -ne 2 ] || { echo "error: backlog is inaccessible: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
   fi
   out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh capabilities </dev/null) || return $?
-  [ "$out" = fm-remote-worker-control.v1 ] || { echo "error: remote worker protocol is unavailable" >&2; return 1; }
+  [ "$out" = fm-remote-worker-control.v2 ] || { echo "error: remote worker protocol v2 is unavailable (the remote code root is older than this home; update that host before dispatching workers to it)" >&2; return 1; }
+  if ! out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh admit "$ID" "$project" </dev/null 2>&1); then
+    rc=$?
+    printf '%s\n' "$out" >&2
+    case "$out" in
+      *'unknown remote worker command'*) echo "error: remote worker protocol v2 is unavailable (the remote code root is older than this home; update that host before dispatching workers to it)" >&2; return 1 ;;
+    esac
+    if [ "$rc" -eq 75 ]; then
+      echo "error: remote launch deferred for task $ID; its backlog item stays queued - dispatch it again once the host has room" >&2
+      return 75
+    fi
+    echo "error: remote launch refused for task $ID: the host could not admit it, and nothing was published" >&2
+    return "$rc"
+  fi
   SPAWN_META_LOCK=$(fm_meta_lock_path "$meta") || return 1
   fm_lock_acquire_wait "$SPAWN_META_LOCK" || return 1
   SPAWN_META_LOCK_HELD=1

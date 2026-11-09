@@ -341,8 +341,9 @@ EOF
   dd if="$1" bs=1 skip="$body_offset" count="$count" 2>/dev/null
 }
 
-# The constant self-describing doorbell line for the inbox containing a record.
-# It names the inbox by the literal "$FM_TASK_INBOX", which bin/fm-spawn.sh
+# The constant self-describing doorbell line for an inbox, named directly or
+# by a record the inbox contains. The line that reaches the worker is identical
+# either way. It names the inbox by the literal "$FM_TASK_INBOX", which bin/fm-spawn.sh
 # exports into every launch as the inbox's absolute path, so the worker can
 # resolve it from its own environment even after losing its brief context.
 # The short `<task>.inbox` name follows as the fallback for a worker launched
@@ -355,17 +356,22 @@ EOF
 # bare shell) runs nothing; see the dead-pane note in the header. A
 # non-printable inbox name fails without output so terminal controls never
 # reach the pane's line discipline.
-fm_task_inbox_doorbell_line() {  # <record-path>
-  local dir=${1%/*} abs name quoted LC_ALL=C
-  abs=$(cd "$dir" 2>/dev/null && pwd) || abs=$dir
-  abs=${abs%/handled}
-  name=${abs##*/}
+fm_task_inbox_doorbell_for() {  # <inbox-name>
+  local name=${1-} quoted LC_ALL=C
   case "$name" in
     ''|*[![:print:]]*) return 1 ;;
   esac
   quoted=$(printf '%s' "$name" | sed "s/'/'\\\\''/g")
   printf ": Firstmate instruction waiting: list \"\$FM_TASK_INBOX\"/*.msg in your '%s' steering inbox, read and act on each in numeric order, then mv each into its handled/." \
     "$quoted"
+}
+
+fm_task_inbox_doorbell_line() {  # <record-path>
+  local dir=${1%/*} abs name
+  abs=$(cd "$dir" 2>/dev/null && pwd) || abs=$dir
+  abs=${abs%/handled}
+  name=${abs##*/}
+  fm_task_inbox_doorbell_for "$name"
 }
 
 # Ring the doorbell, best-effort: one endpoint-liveness pre-check, one advisory
@@ -387,13 +393,21 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # rather than skipped; skipping it would block every later ring. On both paths
 # a lost first Enter gets one confirmed retry.
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
-  local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
+  local backend=$1 target=$2 rec=$3 label=${4:-} line
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
   if ! line=$(fm_task_inbox_doorbell_line "$rec"); then
     return 2
   fi
+  fm_task_inbox_ring_line "$backend" "$target" "$line" "$label"
+}
+
+fm_task_inbox_ring_line() {  # <backend> <target> <line> [expected-label]
+  local backend=$1 target=$2 line=$3 label=${4:-} cstate verdict
+  case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
+    dead|missing) return 3 ;;
+  esac
   cstate=$(fm_backend_composer_state "$backend" "$target" "$label" 2>/dev/null) || cstate=unknown
   case "$cstate" in
     pending)

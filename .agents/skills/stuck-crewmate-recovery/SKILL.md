@@ -15,7 +15,7 @@ A stale or dead-endpoint report for a worker whose pull request has already land
 Follow the crew-hosted Lavish board contract in [`docs/configuration.md`](../../../docs/configuration.md#crew-hosted-lavish-review-boards) when recovering a worker that hosts a board.
 
 Interrupt, stop, and relaunch a worker through `bin/fm-control.sh <task-id> interrupt|exit|relaunch`, which resolves the recorded runtime itself, verifies each action, and never tears down or discards anything ([`docs/agent-control.md`](../../../docs/agent-control.md)).
-That plane covers workers running in this home; a remotely placed secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
+That plane covers workers running in this home, and remote workers too: a remote worker's interrupt, exit, and relaunch hop through `fm-on.sh` to its host and come back with the host-verified result. A remotely placed secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
 Load `harness-adapters` before a resume command or a harness-specific skill invocation, and whenever the adapter's own quirks matter.
 The target window's harness is recorded as `harness=` in `state/<id>.meta`.
 
@@ -33,6 +33,8 @@ Load `secondmate-provisioning` instead for `kind=secondmate` recovery.
 
 For a REMOTE secondmate, `fm-crew-state` and `fm-peek` read the actual remote endpoint over `fm-on.sh`, and `fm-send` reports a delivered-with-pending-confirmation steer as delivered (their headers own the contracts); an `unknown-remote` read or unreachable-host failure means the remote state could not be read, never that the mate is dead or the send failed.
 Recover a genuinely stuck remote mate only through `bin/fm-spawn.sh <id> --secondmate`, never raw herdr pane close/kill surgery, which strands the endpoint binding.
+
+For a REMOTE worker (a `kind=ship` or `kind=scout` task whose meta carries `remote_host=` and `remote_route=`), drive the lifecycle through `bin/fm-control.sh` exactly like a local worker. `fm-send` steers ride the host inbox with a host-side ring, and the watcher re-rings delivered-but-unacked steers from its fleet probe. `fm-crew-state` relays the host-read state line verbatim. The `unknown-remote` rule still holds: only the host's own dead or missing verdict - surfaced as a `remote endpoint dead/missing` stale wake, never an `unknown-remote` read - says the endpoint is actually gone. A rejected hop names its cause: an older remote code root (update that host before driving worker lifecycle from here), an unproved completion (verify with `bin/fm-crew-state.sh` before retrying), or a refused admit at dispatch (the host has no room, and the backlog item stays queued).
 
 Treat the digest's endpoint result as a presence signal, not proof that the task's work or validation run is gone.
 Read the targeted current state with `bin/fm-crew-state.sh <id>` before deciding to relaunch.

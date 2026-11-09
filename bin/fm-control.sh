@@ -390,7 +390,72 @@ fi
 # cannot say is WHY, and "malformed metadata" is the wrong thing to tell an
 # operator about a correctly configured remote route. Name the placement
 # instead, using the same `remote_host` signal bin/fm-send.sh routes on.
+fm_control_remote_worker() {
+  local route hop_out hop_rc hop_target hop_session line key value
+  local -a hop_args
+  route=$(fm_meta_get "$META" remote_route)
+  case "$VERB" in
+    interrupt|exit) ;;
+    relaunch)
+      [ "$HARNESS_SET" = 1 ] && hop_args+=(--harness "$NEW_HARNESS")
+      [ "$MODEL_SET" = 1 ] && hop_args+=(--model "$NEW_MODEL")
+      [ "$EFFORT_SET" = 1 ] && hop_args+=(--effort "$NEW_EFFORT")
+      [ "$CLAUDE_ACCOUNT_SET" = 1 ] && hop_args+=(--claude-account "$NEW_CLAUDE_ACCOUNT")
+      [ "$NOTE_SET" = 1 ] && hop_args+=(--note "$NOTE")
+      ;;
+  esac
+  FM_CONTROL_REMOTE_BUDGET=${FM_CONTROL_REMOTE_BUDGET:-180}
+  case "$FM_CONTROL_REMOTE_BUDGET" in ''|*[!0-9]*|0)
+    die "FM_CONTROL_REMOTE_BUDGET must be a positive integer: $FM_CONTROL_REMOTE_BUDGET" ;;
+  esac
+  [ -n "$route" ] || die "task $ID is a remote worker with no recorded route; refusing a lifecycle hop with no destination"
+  if ! hop_out=$(fm_run_timed "$FM_CONTROL_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "$route" \
+    fm-remote-worker-control.sh "$VERB" "$ID" ${hop_args[@]+"${hop_args[@]}"} 2>&1); then
+    hop_rc=$?
+    printf '%s\n' "$hop_out" >&2
+    case "$hop_out" in
+      *'unknown remote worker command'*) die "task $ID runs on a remote code root older than this home; update that host before driving worker lifecycle from here (hop exit $hop_rc)" ;;
+    esac
+    case "$hop_rc" in
+      124) die "task $ID remote $VERB did not complete within ${FM_CONTROL_REMOTE_BUDGET}s; completion unknown - verify with bin/fm-crew-state.sh before retrying" ;;
+      255) die "task $ID remote $VERB lost its transport; completion unknown - verify with bin/fm-crew-state.sh before retrying" ;;
+    esac
+    die "task $ID remote $VERB refused on $(fm_meta_get "$META" remote_host) (hop exit $hop_rc; the hop stderr above has the reason)"
+  fi
+  hop_target=
+  hop_session=
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      target=*) hop_target=${line#target=} ;;
+      herdr_session=*) hop_session=${line#herdr_session=} ;;
+    esac
+  done <<EOF
+$hop_out
+EOF
+  [ -n "$hop_target" ] || die "task $ID remote $VERB reported success without a route readback; refusing to trust a hop with no endpoint to republish"
+  for key in remote_target remote_herdr_session; do
+    case "$key" in
+      remote_target) value=$hop_target ;;
+      remote_herdr_session) value=$hop_session; [ -n "$value" ] || continue ;;
+    esac
+    awk -v k="$key" -v v="$value" '{ if (!done && substr($0, 1, length(k)+1) == k "=") { print k "=" v; done=1; next } print } END{ if (!done) print k "=" v }' "$META" > "$META.tmp" \
+      && mv "$META.tmp" "$META"
+  done
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      schema=*|backend=*|target=*|kind=*|harness=*|model=*|effort=*|worktree=*|project=*|herdr_session=*) ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <<EOF
+$hop_out
+EOF
+}
+
 if [ -n "$(fm_meta_get "$META" remote_host)" ]; then
+  if [ "$(fm_meta_get "$META" kind)" != secondmate ] && [ -n "$(fm_meta_get "$META" remote_route)" ]; then
+    fm_control_remote_worker
+    exit "$?"
+  fi
   die "task $ID is a remotely placed secondmate on $(fm_meta_get "$META" remote_host); its agent runs outside this home, so no lifecycle action here could verify that it interrupted, stopped, or came back. Drive its lifecycle on that host, and reconcile it through the secondmate recovery path rather than this plane"
 fi
 

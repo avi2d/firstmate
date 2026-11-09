@@ -286,6 +286,11 @@ WATCH_HOME_EXISTED=0
 # (inbox_steer_check below).
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
+# The per-poll remote-worker sweep (fleet agent-state edges plus doorbell
+# re-rings for delivered-but-unacked steers) lives in its own library so it
+# can be exercised without running the watcher.
+# shellcheck source=bin/fm-remote-worker-poll-lib.sh
+. "$SCRIPT_DIR/fm-remote-worker-poll-lib.sh"
 # The away-posture record (state/.afk-contract) is the posture in both the
 # attended and the afk session; bin/fm-afk-contract.sh owns its schema and its
 # away-or-quiet reading, which is all this watcher reads (away_record_present
@@ -4036,6 +4041,11 @@ while :; do
   # repost after grace, and escalate once if the recovery turn is also missed.
   # No conversation scraping; unresolved records are never silently expired.
   fm_pending_reply_tick "$STATE" || true
+
+  # Remote-worker sweep: fleet agent-state edges plus doorbell re-rings for
+  # delivered-but-unacked steers, for every worker this home placed on
+  # another host. Transport failure stays silent inside the sweep.
+  remote_worker_poll || true
 
   open_decision_reminder_tick || {
     echo 'watcher: open-decision reminder check failed' >&2

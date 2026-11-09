@@ -24,7 +24,8 @@ cat > "$FAKE_ROOT/bin/fm-on.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
 case "$*" in
-  *' capabilities') printf 'fm-remote-worker-control.v1\n' ;;
+  *' capabilities') printf 'fm-remote-worker-control.v2\n' ;;
+  *' admit '*) printf 'admit project=alpha holders=0\n' ;;
   *' launch '*)
     cat >/dev/null
     target=fm-lab-test:w1:pane1

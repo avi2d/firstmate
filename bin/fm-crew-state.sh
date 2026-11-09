@@ -361,6 +361,22 @@ LOG_VERB=$(status_line_verb "$LOG_LINE")
 # down or dead mate; only the remote host's own dead/missing verdict may say
 # the endpoint is actually gone.
 if [ -n "$REMOTE_HOST" ]; then
+  if [ "$(fm_meta_get "$META" kind)" != secondmate ] && [ -n "$(fm_meta_get "$META" remote_route)" ]; then
+    FM_CREW_STATE_REMOTE_BUDGET=${FM_CREW_STATE_REMOTE_BUDGET:-120}
+    case "$FM_CREW_STATE_REMOTE_BUDGET" in ''|*[!0-9]*|0)
+      emit unknown remote-endpoint "unknown-remote: FM_CREW_STATE_REMOTE_BUDGET must be a positive integer" ;;
+    esac
+    if REMOTE_LINE=$(fm_run_timed "$FM_CREW_STATE_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "$(fm_meta_get "$META" remote_route)" \
+      fm-remote-worker-control.sh crew-state "$ID" < /dev/null 2>/dev/null); then
+      REMOTE_LINE=$(printf '%s\n' "$REMOTE_LINE" | grep '^state: ' | tail -1)
+    else
+      REMOTE_LINE=
+    fi
+    case "$REMOTE_LINE" in
+      'state: '*) printf '%s\n' "$REMOTE_LINE"; exit 0 ;;
+      *) emit unknown remote-endpoint "unknown-remote: worker state unreadable on $REMOTE_HOST (not proof of death)" ;;
+    esac
+  fi
   if ! REMOTE_STATE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" "$ID" \
     fm-remote-secondmate-control.sh state "$ID" < /dev/null 2>/dev/null); then
     REMOTE_STATE=

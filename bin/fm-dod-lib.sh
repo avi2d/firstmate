@@ -1017,6 +1017,33 @@ fm_dod_accept_ship_done() {  # <kind> <mode> <worktree> <project> <line> [<state
     && fm_dod_recorded_pr_on_forge "$state" "$id" "$meta" "$mode" "$url"; then
     return 0
   fi
+  if [ -n "${state:-}" ] && [ -n "${id:-}" ] && [ -n "${meta:-}" ] && [ -f "$meta" ] \
+    && [ -n "$(fm_dod_meta_value "$meta" remote_host)" ] \
+    && [ -n "$(fm_dod_meta_value "$meta" remote_route)" ] \
+    && [ "$(fm_dod_meta_value "$meta" kind)" != secondmate ]; then
+    FM_DOD_REMOTE_BUDGET=${FM_DOD_REMOTE_BUDGET:-120}
+    case "$FM_DOD_REMOTE_BUDGET" in ''|*[!0-9]*|0)
+      printf '%s\n' "FM_DOD_REMOTE_BUDGET must be a positive integer: $FM_DOD_REMOTE_BUDGET"
+      return 1 ;;
+    esac
+    command -v fm_run_timed >/dev/null 2>&1 || . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-timeout-lib.sh"
+    if refusal=$(fm_run_timed "$FM_DOD_REMOTE_BUDGET" "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-on.sh" "$(fm_dod_meta_value "$meta" remote_route)" \
+      fm-remote-worker-control.sh done-gate "$id" "$line" 2>&1); then
+      case "$refusal" in
+        ok) return 0 ;;
+        refused:\ *) printf '%s\n' "${refusal#refused: }"; return 1 ;;
+      esac
+      printf '%s\n' "host done gate passed but misreported its verdict: $refusal"
+      return 1
+    fi
+    refusal=$(printf '%s\n' "$refusal" | grep '^refused: ' | tail -1)
+    if [ -n "$refusal" ]; then
+      printf '%s\n' "${refusal#refused: }"
+      return 1
+    fi
+    printf '%s\n' "host done gate unreachable: ship done gates did not pass (remote completion unknown)"
+    return 1
+  fi
   if [ -z "$wt" ] || [ ! -d "$wt" ]; then
     printf '%s\n' "named head cannot be verified: worktree missing"
     return 1
