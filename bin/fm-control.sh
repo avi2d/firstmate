@@ -409,9 +409,10 @@ fm_control_remote_worker() {
     die "FM_CONTROL_REMOTE_BUDGET must be a positive integer: $FM_CONTROL_REMOTE_BUDGET" ;;
   esac
   [ -n "$route" ] || die "task $ID is a remote worker with no recorded route; refusing a lifecycle hop with no destination"
-  if ! hop_out=$(fm_run_timed "$FM_CONTROL_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "$route" \
-    fm-remote-worker-control.sh "$VERB" "$ID" ${hop_args[@]+"${hop_args[@]}"} 2>&1); then
-    hop_rc=$?
+  hop_rc=0
+  hop_out=$(fm_run_timed "$FM_CONTROL_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" "$route" \
+    fm-remote-worker-control.sh "$VERB" "$ID" ${hop_args[@]+"${hop_args[@]}"} 2>&1) || hop_rc=$?
+  if [ "$hop_rc" -ne 0 ]; then
     printf '%s\n' "$hop_out" >&2
     case "$hop_out" in
       *'unknown remote worker command'*) die "task $ID runs on a remote code root older than this home; update that host before driving worker lifecycle from here (hop exit $hop_rc)" ;;

@@ -40,6 +40,7 @@ case "$verb" in
     case "${FM_TEST_HOP_MODE:-ok}" in
       ok) printf 'interrupt delivered to %s on host\nschema=fm-remote-worker-control.v2\nbackend=tmux\ntarget=lab:fm-%s\nherdr_session=\nkind=ship\nharness=pi\n' "$task" "$task" ;;
       old) printf "unknown remote worker command '%s'\n" "$verb"; exit 1 ;;
+      lost) exit 255 ;;
     esac ;;
   crew-state)
     if [ "${FM_TEST_CREW_MODE:-ok}" = ok ]; then printf 'state: working: building the widget\n'; else exit 1; fi ;;
@@ -65,6 +66,9 @@ pass "remote interrupt hops to the execution home and records its endpoint"
 out=$(FM_TEST_HOP_MODE=old FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-control.sh" w1 interrupt 2>&1) && fail "remote interrupt trusted an older remote code root"
 printf '%s\n' "$out" | grep -F 'older than this home' >/dev/null || fail "remote interrupt did not identify the older root: $out"
 pass "remote lifecycle refuses an older remote code root by name"
+out=$(FM_TEST_HOP_MODE=lost FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-control.sh" w1 interrupt 2>&1) && fail "remote interrupt trusted a lost transport"
+printf '%s\n' "$out" | grep -F 'lost its transport; completion unknown' >/dev/null || fail "a lost transport was reported as a host refusal: $out"
+pass "a lost lifecycle transport reads as completion unknown, not a host refusal"
 out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-control.sh" w2 interrupt 2>&1) && fail "lifecycle reached a remotely placed secondmate"
 printf '%s\n' "$out" | grep -F 'remotely placed secondmate' >/dev/null || fail "secondmate refusal lost its placement reason: $out"
 pass "a remotely placed secondmate keeps its own recovery path"
