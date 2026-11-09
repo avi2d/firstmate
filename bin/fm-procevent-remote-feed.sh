@@ -37,6 +37,7 @@ Usage:
   fm-procevent-remote-feed.sh source-id <route>
   fm-procevent-remote-feed.sh relisten
   fm-procevent-remote-feed.sh retire <route> [--force]
+  fm-procevent-remote-feed.sh retire-task <route> <task>
 EOF
   exit 2
 }
@@ -755,6 +756,26 @@ cmd_retire() {
   )
 }
 
+# The caller removes the task record first, so a racing ingest cannot recreate the cursor for a listed task.
+cmd_retire_task() {
+  local route=${1:-} task=${2:-} lock receipt seq
+  validate_route "$route"
+  validate_task "$task"
+  lock=$(feed_lifecycle_lock_path "$STATE" "$route")
+  (
+    fm_lock_acquire_wait "$lock" || die "cannot lock remote feed lifecycle for $route"
+    LIFECYCLE_LOCK=$lock
+    trap 'cleanup_temp_paths; fm_lock_release "$LIFECYCLE_LOCK"' EXIT
+    rm -f -- "$(cursor_path "$route" "$task")" || die "cannot retire the feed cursor for $task"
+    for receipt in "$CURSOR_ROOT/$route/$task".*.ingested; do
+      seq=${receipt#"$CURSOR_ROOT/$route/$task".}
+      seq=${seq%.ingested}
+      case "$seq" in ''|*[!0-9]*) continue ;; esac
+      rm -f -- "$receipt" || die "cannot retire the feed receipts for $task"
+    done
+  )
+}
+
 require_parent_lifecycle_lock() {
   local route=$1 lock owner pid
   lock=$(feed_lifecycle_lock_path "$STATE" "$route")
@@ -782,6 +803,7 @@ case "${1:-}" in
   source-id) shift; [ "$#" -eq 1 ] || usage; source_id "$1" ;;
   relisten) shift; [ "$#" -eq 0 ] || usage; exit 0 ;;
   retire) shift; [ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage; cmd_retire "$@" ;;
+  retire-task) shift; [ "$#" -eq 2 ] || usage; cmd_retire_task "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown command: $1" ;;
 esac

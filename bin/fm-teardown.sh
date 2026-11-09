@@ -1153,6 +1153,164 @@ remote_outbox_cleanup() {
   )
 }
 
+retire_busy_state() {
+  local state_dir=$1 id=$2 gen=${3:-}
+  # A remote host's route state lives inside the secondmate home this removed.
+  [ -d "$state_dir" ] || return 0
+  if [ -n "$gen" ]; then
+    "$SCRIPT_DIR/fm-busy-event.sh" retire "$state_dir" "$id" --gen "$gen"
+  elif [ -f "$state_dir/$id.busy-gen" ]; then
+    "$SCRIPT_DIR/fm-busy-event.sh" retire "$state_dir" "$id" --current-gen
+  fi
+}
+
+validate_pr_poll_cleanup() {
+  local state_dir=$1 id=$2 state_device artifact has_artifact=0
+  fm_task_id_path_safe "$id" || return 0
+  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
+    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
+    "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust"; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    has_artifact=1
+  done
+  [ "$has_artifact" -eq 1 ] || return 0
+  [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
+  state_device=$(fm_pr_file_device "$state_dir") || return 1
+  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
+    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
+    "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust"; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
+      || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \
+      || [ "$(fm_pr_file_link_count "$artifact")" != 1 ] \
+      || { [ "$artifact" = "$state_dir/$id.merge-authority" ] \
+        && [ "$(fm_pr_file_mode "$artifact")" != 600 ]; }; then
+      echo "REFUSED: unsafe task PR-check artifact; preserving task state." >&2
+      return 1
+    fi
+  done
+  if [ -e "$state_dir/$id.pr-poll-retirement" ] \
+    || [ -L "$state_dir/$id.pr-poll-retirement" ]; then
+    fm_pr_poll_retirement_state_valid "$state_dir" "$id" || {
+      echo "REFUSED: invalid PR-poll retirement receipt; preserving task state." >&2
+      return 1
+    }
+  fi
+}
+
+remove_pr_poll_artifacts() {
+  local state_dir=$1 id=$2
+  validate_pr_poll_cleanup "$state_dir" "$id" || return 1
+  fm_pr_poll_retirement_recover_one "$state_dir" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || return 1
+  fm_pr_poll_merge_notified_remove "$state_dir" "$id" || return 1
+  rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
+    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
+    "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust" || return 1
+}
+
+# The host-side teardown owns the landed-work test, the slot return, and the
+# pane close. A 255 or 124 leaves its completion unknown, so nothing local changes.
+remote_worker_teardown() {
+  local route host kind mode project_name pr_url window busy_gen out rc=0 marker data_relative
+  local -a done_args flags hop_args
+  route=$(fm_meta_get "$META" remote_route)
+  host=$(fm_meta_get "$META" remote_host)
+  kind=$TEARDOWN_META_KIND
+  [ -n "$route" ] && [ -n "$host" ] || { echo "REFUSED: remote worker metadata is incomplete" >&2; return 1; }
+  [ "$(secondmate_registry_field "$DATA/remote-homes.md" "$route" host 2>/dev/null || true)" = "$host" ] \
+    || { echo "REFUSED: remote worker $ID's execution home $route is not registered for host $host" >&2; return 1; }
+  [ "$TEARDOWN_LEGACY_PENDING" != 1 ] \
+    || { echo "REFUSED: remote worker $ID's record has no spawn_gen; relaunch it to publish an incarnation, then retry" >&2; return 1; }
+  mode=$(fm_meta_get "$META" mode)
+  project_name=$(fm_meta_get "$META" project)
+  project_name=${project_name##*/}
+  [ -n "$mode" ] || mode=no-mistakes
+  pr_url=$(fm_meta_get "$META" pr)
+  done_args=()
+  if [ "$kind" = scout ]; then
+    if [ -f "$DATA/$ID/report.md" ]; then
+      data_relative=$(fm_backlog_data_relative "$DATA") || return 1
+      done_args=(--report "$data_relative/$ID/report.md")
+    elif [ "$FORCE" = --force ]; then
+      [ "$TEARDOWN_BACKLOG_TRANSITION" = retain ] || done_args=(--note discarded)
+    else
+      echo "REFUSED: scout task $ID's report has not reached this home at $DATA/$ID/report.md; wait for its status feed, or use --force after explicit discard approval" >&2
+      return 1
+    fi
+  elif [ "$mode" = local-only ]; then
+    done_args=(--note "local main")
+  elif [ -n "$pr_url" ]; then
+    done_args=(--pr "$pr_url")
+  fi
+  validate_pr_poll_cleanup "$STATE" "$ID" || return 1
+  hop_args=(fm-remote-worker-control.sh teardown "$ID")
+  [ "$FORCE" != --force ] || hop_args+=(--force)
+  out=$(fm_run_timed "${FM_TEARDOWN_REMOTE_BUDGET:-900}" "$SCRIPT_DIR/fm-on.sh" "$route" "${hop_args[@]}" < /dev/null 2>&1) || rc=$?
+  case "$rc" in
+    0|"$TEARDOWN_LOST_SLOT_EXIT") ;;
+    124|255)
+      [ -z "$out" ] || printf '%s\n' "$out" >&2
+      echo "error: remote cleanup of $ID on $route did not confirm completion; every local record is preserved, rerun teardown to reconcile" >&2
+      return 1
+      ;;
+    *)
+      [ -z "$out" ] || printf '%s\n' "$out" >&2
+      echo "REFUSED: remote cleanup of $ID on $route refused (exit $rc); every local record is preserved" >&2
+      return 1
+      ;;
+  esac
+  [ "$rc" -eq 0 ] || printf '%s\n' "$out" | grep -E '^(warning: treehouse return left pool slot |  )' >&2 || true
+  if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+      "$SCRIPT_DIR/fm-inactive-reconcile.sh" report "$ID"; then
+    echo "error: $ID's final outcome has not reached the parent channel; retaining every durable task record so a rerun can retry the delivery" >&2
+    return 1
+  fi
+  teardown_export_records "$STATE" "$ID" || return 1
+  remove_pr_poll_artifacts "$STATE" "$ID" || return 1
+  busy_gen=$(fm_meta_get "$META" busy_gen)
+  retire_busy_state "$STATE" "$ID" "$busy_gen" || return 1
+  [ ! -e "$CONFIG/fleet-ledger" ] || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG "$SCRIPT_DIR/fm-fleet-ledger.sh" cleaned_up "$ID" || true
+  teardown_retire_status "$STATE" "$ID" || return 1
+  window=$(fm_meta_get "$META" window)
+  fm_wake_queue_prune_task "$STATE" "$ID" "$window" 2>/dev/null || true
+  rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
+    "$(fm_wake_signal_seen_path "$STATE" "$STATE/$ID.turn-ended")" \
+    "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
+    "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
+    "$STATE/$ID.reconcile-nudged" "$STATE/$ID.pr-register-refused" "$STATE/.$ID.branch-outcome-index"
+  rm -rf "$STATE/$ID.inbox"
+  if [ "$TEARDOWN_BACKLOG_APPLIES" = 1 ]; then
+    flags=()
+    [ "$TEARDOWN_BACKLOG_TRANSITION" = close ] || flags=(--retain)
+    fm_backlog_close_marker_write "$STATE" "$ID" "$DATA" "$TEARDOWN_META_SPAWN_GEN" \
+      ${flags[@]+"${flags[@]}"} ${done_args[@]+"${done_args[@]}"} || {
+      echo "error: $ID's remote copy is cleaned up, but its pending backlog $TEARDOWN_BACKLOG_TRANSITION could not be recorded ($FM_BACKLOG_TRANSITION_ERROR); rerun teardown" >&2
+      return 1
+    }
+    marker=$(fm_backlog_close_marker_path "$STATE" "$ID") || return 1
+    fm_backlog_atomic_transition "$TEARDOWN_BACKLOG_TRANSITION" "$STATE/$ID.meta" "$marker" \
+      "$DATA" "$ID" "$STATE" ${done_args[@]+"${done_args[@]}"} || {
+      echo "error: $ID's remote copy is cleaned up, but its backlog item could not be updated atomically ($FM_BACKLOG_TRANSITION_ERROR); the pending change is recorded and the next session start retries it" >&2
+      return 1
+    }
+  else
+    fm_backlog_atomic_transition remove "$STATE/$ID.meta" "task record" "$STATE" || {
+      echo "error: $ID's remote copy is cleaned up, but its task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      return 1
+    }
+  fi
+  "$SCRIPT_DIR/fm-procevent-remote-feed.sh" retire-task "$route" "$ID" \
+    || echo "warning: $ID's status-feed cursor for $route was not retired; it is ignored once no record names the task" >&2
+  fm_lock_release "$META_LOCK"
+  META_LOCK_HELD=0
+  if [ "$kind" != scout ] && [ "$mode" != local-only ]; then
+    [ -z "$project_name" ] || [ ! -d "$FM_HOME/projects/$project_name" ] \
+      || "$FM_ROOT/bin/fm-fleet-sync.sh" "$project_name" || true
+  fi
+  printf 'teardown %s complete (remote %s on %s)\n' "$ID" "$route" "$host"
+  return "$rc"
+}
+
 remote_secondmate_teardown() {
   local remote_host remote_root remote_home kind route_host route_root route_home out rc tmp
   remote_host=$(fm_meta_get "$META" remote_host)
@@ -1249,6 +1407,11 @@ remote_secondmate_teardown_locked() {
   return "$rc"
 }
 
+if [ "$TEARDOWN_META_KIND" != secondmate ] && [ -n "$(fm_meta_get "$META" remote_route)" ]; then
+  if remote_worker_teardown; then remote_teardown_rc=0; else remote_teardown_rc=$?; fi
+  [ "$remote_teardown_rc" -ne 0 ] || "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  exit "$remote_teardown_rc"
+fi
 if remote_secondmate_teardown_locked; then
   remote_teardown_rc=0
 else
@@ -1583,61 +1746,6 @@ remove_kimi_turnend_auth() {
   path=$(fm_control_harness_turnend_auth_path kimi "$token") || return 1
   [ -n "$path" ] || return 0
   rm -f -- "$path"
-}
-
-retire_busy_state() {
-  local state_dir=$1 id=$2 gen=${3:-}
-  # A remote host's route state lives inside the secondmate home this removed.
-  [ -d "$state_dir" ] || return 0
-  if [ -n "$gen" ]; then
-    "$SCRIPT_DIR/fm-busy-event.sh" retire "$state_dir" "$id" --gen "$gen"
-  elif [ -f "$state_dir/$id.busy-gen" ]; then
-    "$SCRIPT_DIR/fm-busy-event.sh" retire "$state_dir" "$id" --current-gen
-  fi
-}
-
-validate_pr_poll_cleanup() {
-  local state_dir=$1 id=$2 state_device artifact has_artifact=0
-  fm_task_id_path_safe "$id" || return 0
-  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
-    "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust"; do
-    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
-    has_artifact=1
-  done
-  [ "$has_artifact" -eq 1 ] || return 0
-  [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || return 1
-  state_device=$(fm_pr_file_device "$state_dir") || return 1
-  for artifact in "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
-    "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust"; do
-    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
-    if [ ! -f "$artifact" ] || [ -L "$artifact" ] \
-      || [ "$(fm_pr_file_device "$artifact")" != "$state_device" ] \
-      || [ "$(fm_pr_file_link_count "$artifact")" != 1 ] \
-      || { [ "$artifact" = "$state_dir/$id.merge-authority" ] \
-        && [ "$(fm_pr_file_mode "$artifact")" != 600 ]; }; then
-      echo "REFUSED: unsafe task PR-check artifact; preserving task state." >&2
-      return 1
-    fi
-  done
-  if [ -e "$state_dir/$id.pr-poll-retirement" ] \
-    || [ -L "$state_dir/$id.pr-poll-retirement" ]; then
-    fm_pr_poll_retirement_state_valid "$state_dir" "$id" || {
-      echo "REFUSED: invalid PR-poll retirement receipt; preserving task state." >&2
-      return 1
-    }
-  fi
-}
-
-remove_pr_poll_artifacts() {
-  local state_dir=$1 id=$2
-  validate_pr_poll_cleanup "$state_dir" "$id" || return 1
-  fm_pr_poll_retirement_recover_one "$state_dir" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" || return 1
-  fm_pr_poll_merge_notified_remove "$state_dir" "$id" || return 1
-  rm -f "$state_dir/$id.check.sh" "$state_dir/$id.pr-poll" \
-    "$state_dir/$id.pr-poll-registration" "$state_dir/$id.pr-poll-retirement" \
-    "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust" || return 1
 }
 
 pr_number_from_target() {

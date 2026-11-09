@@ -122,6 +122,30 @@ worker_control_hop() {  # <id> <verb> [control args]
   route "$id"
 }
 
+# A missing record answers teardown=absent, so a rerun after a lost reply converges.
+worker_teardown() {  # <id> [--force]
+  local id=$1 force=${2:-} rc=0
+  local -a args
+  case "$id" in ''|*[!A-Za-z0-9._-]*|*..*) die "invalid task id" ;; esac
+  validate_home
+  if [ ! -e "$TARGET_HOME/state/$id.meta" ] && [ ! -L "$TARGET_HOME/state/$id.meta" ]; then
+    printf 'teardown=absent\n'
+    return 0
+  fi
+  worker_endpoint_require "$id"
+  args=("$id")
+  [ -z "$force" ] || args+=(--force)
+  if [ "$WORKER_BACKEND" = herdr ]; then
+    HERDR_SESSION="$(execution_session)" FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-teardown.sh" "${args[@]}" >&2 || rc=$?
+  else
+    FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-teardown.sh" "${args[@]}" >&2 || rc=$?
+  fi
+  case "$rc" in
+    0|4) printf 'teardown=done rc=%s\n' "$rc" ;;
+  esac
+  return "$rc"
+}
+
 worker_crew_state() {  # <id>
   worker_endpoint_require "$1"
   FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-crew-state.sh" "$1"
@@ -358,6 +382,10 @@ case "${1:-}" in
   relaunch)
     [ "$#" -ge 2 ] || die "relaunch requires a task id"
     worker_control_hop "$2" relaunch "${@:3}"
+    ;;
+  teardown)
+    [ "$#" -eq 2 ] || { [ "$#" -eq 3 ] && [ "$3" = --force ]; } || die "teardown requires a task id and optional --force"
+    worker_teardown "$2" "${3:-}"
     ;;
   crew-state)
     [ "$#" -eq 2 ] || die "crew-state requires a task id"

@@ -1,39 +1,6 @@
 #!/usr/bin/env bash
-# Refresh project clones: fast-forward the checked-out local default branch to
-# origin/<default> when safe, and prune local branches whose upstream tracking
-# branch is gone (the remote branch was deleted, i.e. its PR merged) and that no
-# worktree still needs.
-# Self-heals the one unambiguously safe drift: a clean, detached HEAD that holds
-# no unique commits (it is an ancestor of origin/<default>) and whose <default>
-# branch is free to check out is re-attached and then fast-forwarded ("recovered:").
-# Every other off-default state - a non-default named branch, a detached HEAD with
-# unique commits, a dirty tree, or a diverged default - may hold real work, so it
-# is left untouched and reported as a quantified, loud "STUCK: ... N commits behind
-# ... - needs attention" warning rather than a quiet drift. Nothing is ever forced,
-# stashed, or discarded.
-# Still skips (benignly) local-only/no-origin projects, missing remotes/branches,
-# and fetch failures. A project whose registry entry bin/fm-project-mode.sh
-# refuses is skipped too, naming that command so its refusal is readable, rather
-# than synced under a guessed posture.
-# A candidate under projects/ must be the root of its own work tree: git discovery
-# walks up, so a plain nested directory would otherwise resolve to the enclosing
-# repository (the firstmate checkout) and be synced under that directory's label.
-# Anything else is reported as "skipped: not a clone root" naming the repository
-# that would have been touched.
-# Pruning never deletes the checked-out branch or a branch that still has a
-# worktree, so it cannot discard unlanded work; set FM_FLEET_PRUNE=0 to disable it.
-# When the fetch fails on an orphaned .git/packed-refs.lock (left by a ref rewrite
-# killed mid-write - e.g. a timed-out bootstrap sync or a teardown process kill),
-# it is retried with a bounded wait and removed only when provably stale; see
-# fetch_with_packed_refs_lock_guard and the FM_FLEET_SYNC_PACKED_REFS_LOCK_* knobs.
-# Usage: fm-fleet-sync.sh [<project-dir-or-name>]
-# The single-project form accepts either a path (absolute, or relative to the
-# caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
-# this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
-# Bare names and "projects/<name>" forms prefer this home's projects dir before
-# falling back to an explicit path. Example: from anywhere,
-# `fm-fleet-sync.sh dotfiles-private` syncs just that one clone, same as
-# passing its full projects/dotfiles-private path.
+# Refresh project clones with safe fast-forwards and merged-branch pruning.
+# Usage: fm-fleet-sync.sh [<project-dir-or-name>] | --remote <route> <project-name>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,11 +32,24 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
 fi
 
 usage() {
-  echo "usage: fm-fleet-sync.sh [<project-dir-or-name>]" >&2
+  echo "usage: fm-fleet-sync.sh [<project-dir-or-name>] | --remote <route> <project-name>" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage
+  exit 0
+fi
+if [ "${1:-}" = --remote ]; then
+  [ $# -eq 3 ] || { usage; exit 1; }
+  case "$3" in ''|.*|*[!A-Za-z0-9._-]*) echo "fleet-sync: invalid remote project name: $3" >&2; exit 1 ;; esac
+  remote_rc=0
+  remote_out=$("$SCRIPT_DIR/fm-on.sh" "$2" fm-fleet-sync.sh "$3" < /dev/null 2>&1) || remote_rc=$?
+  [ -z "$remote_out" ] || printf '%s\n' "$remote_out" | sed "s|^|$2: |"
+  case "$remote_rc" in
+    0) ;;
+    255) echo "$2: skipped: the execution home did not answer; its clone of $3 refreshes at its next sync" ;;
+    *) echo "$2: skipped: remote sync of $3 exited $remote_rc" ;;
+  esac
   exit 0
 fi
 [ $# -le 1 ] || { usage; exit 1; }
