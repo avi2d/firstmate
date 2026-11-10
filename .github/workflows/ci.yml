@@ -360,6 +360,23 @@ jobs:
           # worktree acquisition (presentation, workspace-per-home, autodetect).
           bin/fm-install-treehouse.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Restore cached tasks-axi
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/node_modules/tasks-axi
+            /usr/local/bin/tasks-axi
+          key: tasks-axi-${{ env.FM_CI_TASKS_AXI_VERSION }}-${{ runner.os }}
+      - name: Install tasks-axi
+        run: |
+          set -eu
+          # Remote E2E scripts file and complete backlog items in a real home.
+          if [ -x /usr/local/bin/tasks-axi ] && [ "$(tasks-axi --version)" = "${FM_CI_TASKS_AXI_VERSION}" ]; then
+            echo "tasks-axi ${FM_CI_TASKS_AXI_VERSION} restored from cache"
+          else
+            npm install -g "tasks-axi@${FM_CI_TASKS_AXI_VERSION}"
+          fi
+          tasks-axi --version
       - name: Assert Herdr pin and protocol floor
         run: |
           set -eu
