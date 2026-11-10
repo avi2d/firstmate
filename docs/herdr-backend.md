@@ -153,6 +153,11 @@ Firstmate running outside Herdr entirely has no launcher workspace to inherit, s
 That path needs the home label to identify exactly one workspace.
 Two workspaces sharing it are an unresolvable placement and refuse rather than adopting either.
 
+On a remote execution home with presentation spaces on, that labeled workspace is the header its worker rows hang under.
+When the home creates it, the header's idle shell opens in the execution home folder, and `state/herdr-home-header` records its exact workspace, tab, and pane.
+Cleaning up the last worker of that home in the session closes the recorded header, but only while it still carries the home label and holds nothing but its own idle shell.
+A labeled workspace the home found already present is never recorded and always stays.
+
 Avoid naming a personal workspace `firstmate` or `2ndmate-<id>` for that reason.
 Also avoid it because the adapter cannot distinguish that label collision from its own container.
 
@@ -496,6 +501,7 @@ Any of these preserves the candidate and lets session startup continue with at m
 | Test | What it covers |
 | --- | --- |
 | `tests/fm-backend-herdr-presentation-e2e.test.sh` | Multi-home ordering, concurrency, lock contention, legacy coexistence, focus preservation, exact same-identity restart replacement, ambiguous bindings and tokens, and exact-pane cleanup through the guarded lab path. |
+| `tests/fm-remote-home-header-herdr-e2e.test.sh` | Proves through the real remote launch path that an execution home's header opens in the home folder, survives while a worker row remains, goes with the last one, and that a pre-existing labeled workspace stays. |
 | `tests/fm-herdr-session-cleanup.test.sh` | Every discovery, ownership, topology, process, locking, revalidation, focus, retirement, and continue-on-error boundary. |
 | `tests/fm-herdr-session-cleanup-e2e.test.sh` | The restored-shell cleanup in a guarded non-default named lab. |
 | `tests/fm-backend-herdr-focus-flash-e2e.test.sh` | Reproduces the raw explicit-close focus steal on the installed release, and proves the focus-safe emptying-close plan removes a doomed workspace with no wrong-focus interval. |
@@ -1055,6 +1061,7 @@ tests/fm-backend-herdr-prune-safety-e2e.test.sh
 tests/fm-backend-herdr-respawn-idem-e2e.test.sh
 tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
 tests/fm-backend-herdr-launcher-workspace-e2e.test.sh
+tests/fm-remote-home-header-herdr-e2e.test.sh
 tests/fm-spawn-herdr-rebind-placement-e2e.test.sh
 tests/fm-backend-herdr-presentation-e2e.test.sh
 tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh

@@ -2416,7 +2416,7 @@ spawn_herdr_rebind_journal_retire() {  # <session>
 # the ordinary flat layout must be used instead. A hard failure exits.
 # Expects HERDR_LABEL_HOME, HERDR_PARENT_LABEL and HERDR_PRESENTATION_JOURNAL.
 spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
-  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace projection_id projection_label home_id order_key
+  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace header_cwd execution_home projection_id projection_label home_id order_key
   if ! fm_backend_herdr_server_ensure "$session"; then
     echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
     return 0
@@ -2445,7 +2445,22 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
   set -e
   case "$launcher_status" in
   0) parent_workspace=$FM_BACKEND_HERDR_LAUNCHER_WORKSPACE_ID ;;
-  2) parent_workspace=$(fm_backend_herdr_workspace_ensure "$session" "$cwd" || true) ;;
+  2)
+    parent_workspace=
+    execution_home=0
+    if [ -f "$FM_HOME/.fm-exec-home" ] && [ ! -L "$FM_HOME/.fm-exec-home" ]; then
+      execution_home=1
+    fi
+    header_cwd=$cwd
+    [ "$execution_home" = 0 ] || header_cwd=$FM_HOME
+    if fm_backend_herdr_workspace_ensure "$session" "$header_cwd" >/dev/null; then
+      parent_workspace=$FM_BACKEND_HERDR_WS_ID
+      if [ "$execution_home" = 1 ] && [ -n "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID" ] &&
+        ! fm_backend_herdr_home_header_record "$STATE" "$session" "$parent_workspace" "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID"; then
+        echo "warning: herdr could not record the home workspace it created; it will stay after its last worker is cleaned up" >&2
+      fi
+    fi
+    ;;
   *)
     spawn_herdr_presentation_order_lock_release
     exit 1
