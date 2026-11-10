@@ -179,15 +179,22 @@ test_red_pull_request_stays_open() {
   pass "a red pull request stays open and is read again only on the slower recheck cadence"
 }
 
-test_pending_and_unreported_checks_wait() {
+test_pending_checks_wait() {
   local c
   c=$(make_case pending)
   write_view "$c" "$HEAD_A" "$pending_rollup"
   expect_stays_open "$c" wait "still running" pending
-  c=$(make_case unreported)
+  pass "pending checks wait"
+}
+
+test_empty_check_list_merges_instead_of_waiting_forever() {
+  local c
+  c=$(make_case empty-rollup)
   write_view "$c" "$HEAD_A" '[]'
-  expect_stays_open "$c" wait "no check has reported" unreported
-  pass "pending checks and a pull request with no reported check wait"
+  sweep "$c"
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "empty-rollup: a pull request with no checks and no required check never merged: $(cat "$c/gh.log")"
+  pass "a pull request with an empty check list merges when the base requires no check"
 }
 
 test_draft_and_conflicting_stay_open() {
@@ -531,7 +538,8 @@ test_settled_green_pull_request_merges_on_its_first_sweep
 test_green_without_a_settled_finish_merges_on_the_second_sighting
 test_unsettled_green_waits
 test_red_pull_request_stays_open
-test_pending_and_unreported_checks_wait
+test_pending_checks_wait
+test_empty_check_list_merges_instead_of_waiting_forever
 test_draft_and_conflicting_stay_open
 test_yolo_must_be_on_in_the_registry_and_the_task
 test_captain_hold_and_open_decisions_stay_open

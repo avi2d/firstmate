@@ -444,8 +444,7 @@ EOF
   checks=${checks%$'\t'*}
   case "$CHECKS_DONE_AT" in ''|*[!0-9]*) CHECKS_DONE_AT=0 ;; esac
   case "$checks" in
-    green) ;;
-    none) verdict wait "no check has reported yet"; return ;;
+    green|none) ;;
     pending) verdict wait "checks are still running"; return ;;
     red:*) verdict skip "checks are not green: ${checks#red:}"; return ;;
     *) verdict wait "the checks could not be read"; return ;;
