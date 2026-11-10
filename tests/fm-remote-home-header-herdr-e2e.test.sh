@@ -64,6 +64,8 @@ touch "$EXEC_HOME/state/.last-watcher-beat"
 printf 'codex\n' > "$EXEC_HOME/config/crew-harness"
 printf 'exec-one\n' > "$EXEC_HOME/.fm-exec-home"
 printf 'manual\n' > "$EXEC_HOME/config/backlog-backend"
+# The header holds projected rows; CI's pinned herdr is below the default floor.
+printf 'on\n' > "$EXEC_HOME/config/herdr-presentation-spaces"
 printf '%s\n' "$HERDR_LAB_SESSION" > "$EXEC_HOME/config/herdr-session"
 git -C "$EXEC_HOME/projects/alpha" init -q -b main
 printf '# alpha\n' > "$EXEC_HOME/projects/alpha/README.md"
