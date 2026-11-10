@@ -103,18 +103,25 @@ out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-rem
 printf '%s\n' "$out" | grep -F 'no worker ghost' >/dev/null || fail "remote done gate did not identify the task it refused: $out"
 pass "remote done gate refuses a task the execution home does not know"
 rm -f "$HOME_DIR/state/holder.meta"
-printf 'alpha 1\n' > "$HOME_DIR/config/project-capacity"
+printf 'alpha 1\n@heavy-limit 20\n' > "$HOME_DIR/config/project-capacity"
 printf 'window=lab:fm-holder\nworktree=/tmp\nproject=/tmp/alpha\nkind=ship\nharness=pi\n' > "$HOME_DIR/state/holder.meta"
 out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" admit new-task alpha 2>&1) && fail "remote admit accepted a worker past the declared host capacity"
-printf '%s\n' "$out" | grep -F 'defer: ' >/dev/null || fail "remote admit refusal did not say defer: $out"
+printf '%s\n' "$out" | grep -F 'defer: host already holds 1 alpha worker(s) at its declared limit 1' >/dev/null || fail "remote admit refusal did not name the project capacity: $out"
 pass "remote admit defers past the declared host capacity instead of launching blind"
 rm "$HOME_DIR/state/holder.meta"
-printf 'alpha 5\n' > "$HOME_DIR/config/project-capacity"
+printf 'alpha 5\n@heavy-limit 20\n' > "$HOME_DIR/config/project-capacity"
 out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" admit new-task alpha) || fail "remote admit refused room the host has: $out"
 case "$out" in 'admit project=alpha holders=0/5 load='*) ;;
   *) fail "remote admit misreported its admission: $out" ;;
 esac
 pass "remote admit reports its host-scoped admission"
+printf 'alpha 5\n@heavy-limit 2\n' > "$HOME_DIR/config/project-capacity"
+rc=0
+out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" admit new-task alpha 2>&1) || rc=$?
+[ "$rc" -eq 75 ] || fail "remote admit at the host heavy limit answered exit $rc instead of 75: $out"
+printf '%s\n' "$out" | grep -E '^defer: host already runs [0-9]+ heavy worker\(s\) at its limit 2 ' >/dev/null || fail "remote admit did not name the heavy limit: $out"
+rm "$HOME_DIR/config/project-capacity"
+pass "remote_admit_at_host_heavy_limit_defers_75_instead_of_admitting_a_launch_the_host_spawn_refuses"
 if PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" admit new-task 'bad name' >/dev/null 2>&1; then fail "remote admit accepted an invalid project name"; fi
 pass "remote admit refuses an invalid project name"
 out=$(PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" crew-state scout-a) || fail "remote crew-state refused: $out"

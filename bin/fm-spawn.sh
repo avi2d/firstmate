@@ -1755,7 +1755,7 @@ spawn_remote_secondmate() {
 
 spawn_remote_worker() {
   local route=$1 project=$2 host=$3 root home session harness backend brief meta tmp out rc target remote_kind remote_harness remote_session worktree remote_project
-  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen remote_account
+  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 started_row=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen remote_account
   local -a contract_fields launch_args
   [ "${#POS[@]}" -eq 2 ] || { echo "error: remote workers require one project argument" >&2; return 1; }
   case "$project" in ''|*[!A-Za-z0-9._-]*|*..*) echo "error: invalid remote project name" >&2; return 1 ;; esac
@@ -1829,6 +1829,7 @@ spawn_remote_worker() {
       echo "error: task $ID has no dispatchable backlog item" >&2
       return 1
     fi
+    [ "$FM_BACKLOG_ROW_STATE" != 'queued no no' ] || started_row=1
   else
     rc=$?
     [ "$rc" -ne 2 ] || { echo "error: backlog is inaccessible: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
@@ -1888,6 +1889,19 @@ spawn_remote_worker() {
   launch_args=("$ID" "$project" "$KIND" "$mode_arg" "$yolo_arg" "$BRANCH_PREFIX" "$base_arg" "$harness" "$model_arg" "$effort_arg" "$backend")
   [ -z "$CLAUDE_ACCOUNT" ] || launch_args+=("$CLAUDE_ACCOUNT")
   out=$("$SCRIPT_DIR/fm-on.sh" --stdin "$route" fm-remote-worker-control.sh launch "${launch_args[@]}" < "$brief" 2>&1) || rc=$?
+  if [ "$rc" -eq 75 ]; then
+    printf '%s\n' "$out" >&2
+    if ! fm_backlog_atomic_transition remove "$meta" "task record" "$STATE"; then
+      echo "error: remote launch deferred for task $ID, but its pending task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      return 1
+    fi
+    if [ "$started_row" -eq 1 ] && ! fm_backlog_mutate "$DATA" reopen "$ID"; then
+      echo "error: remote launch deferred for task $ID, but its backlog item could not return to Queued ($FM_BACKLOG_TRANSITION_ERROR); it can be dispatched again as it stands" >&2
+      return 1
+    fi
+    echo "error: remote launch deferred for task $ID; its backlog item stays queued - dispatch it again once the host has room" >&2
+    return 75
+  fi
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out" >&2
     echo "error: remote launch outcome is unconfirmed; task record and backlog are preserved" >&2
