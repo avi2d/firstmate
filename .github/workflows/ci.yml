@@ -13,6 +13,8 @@ permissions:
 env:
   FM_CI_TASKS_AXI_VERSION: '0.2.6'
   FM_CI_PI_VERSION: '1.5.0'
+  FM_CI_CHECKS_VERSION: '0.89.0'
+  FM_CI_BUN_VERSION: '1.4.3'
 
 # Timeout policy: paired lint shards are capped at 15 minutes and the static gate
 # at 10 minutes. Scheduled and manual dispatch jobs keep the tiers in
@@ -658,10 +660,15 @@ jobs:
   static:
     name: Static checks
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     # Static cap (see the timeout policy above).
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Compatibility pointers must stay intact
         run: |
           set -eu
@@ -682,3 +689,19 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ github.event_name == 'schedule' }}
+        with:
+          bun-version: ${{ env.FM_CI_BUN_VERSION }}
+      - name: Scan the commits that landed on main since the previous scheduled run
+        if: ${{ github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=schedule&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // empty')
+          if [ -z "$base" ] || ! git merge-base --is-ancestor "$base" HEAD; then
+            base=$(git rev-list -1 --before='24 hours ago' HEAD)
+          fi
+          [ -n "$base" ] || { echo "::error::no commit older than 24 hours to start the secrets scan from"; exit 1; }
+          bunx --package "@avi2dg/checks@$FM_CI_CHECKS_VERSION" checks-secrets "$base" HEAD

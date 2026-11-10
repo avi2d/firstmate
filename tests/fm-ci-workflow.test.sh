@@ -412,6 +412,124 @@ RUBY
   pass "CI matrices cover every executable serial lane and canonical lint root exactly once"
 }
 
+SCAN_STEP_NAME='Scan the commits that landed on main since the previous scheduled run'
+
+scan_step_run() {  # <destination-file>
+  ruby -ryaml -e '
+step = YAML.load_file(ARGV[0]).fetch("jobs").fetch("static").fetch("steps").find { |s| s["name"] == ARGV[1] }
+abort "static has no step named #{ARGV[1]}" unless step
+print step.fetch("run")
+' "$CI_WORKFLOW" "$SCAN_STEP_NAME" > "$1" || fail "could not read the daily scan step from ci.yml"
+}
+
+scan_commit() {  # <repo> <epoch> <subject> -> prints the new commit
+  GIT_AUTHOR_DATE="@$2" GIT_COMMITTER_DATE="@$2" \
+    git -C "$1" -c commit.gpgsign=false commit -q --allow-empty -m "$3" \
+    && git -C "$1" rev-parse HEAD
+}
+
+scan_fixture() {  # <repo>
+  local repo=$1 now
+  fm_git_identity
+  now=$(date +%s)
+  git init -q -b main "$repo"
+  SCAN_OLD=$(scan_commit "$repo" $((now - 5 * 86400)) oldest) || fail "fixture commit failed"
+  SCAN_DAY=$(scan_commit "$repo" $((now - 3 * 86400)) three-days) || fail "fixture commit failed"
+  scan_commit "$repo" $((now - 7200)) two-hours >/dev/null || fail "fixture commit failed"
+  scan_commit "$repo" "$now" now >/dev/null || fail "fixture commit failed"
+}
+
+scan_run() {  # <root> <runs-json>
+  local root=$1 bin="$1/bin" record="$1/bunx-args"
+  mkdir -p "$bin"
+  printf '%s\n' "$2" > "$root/runs.json"
+  cat > "$bin/gh" <<'SH'
+#!/usr/bin/env bash
+expr=
+while [ $# -gt 0 ]; do
+  if [ "$1" = --jq ]; then expr=$2; fi
+  shift
+done
+jq -r "$expr" "$FAKE_RUNS_JSON"
+SH
+  cat > "$bin/bunx" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FAKE_BUNX_RECORD"
+SH
+  chmod +x "$bin/gh" "$bin/bunx"
+  scan_step_run "$root/scan.sh"
+  rm -f "$record"
+  (cd "$root/repo" && PATH="$bin:$PATH" GITHUB_REPOSITORY=avi2d/firstmate FM_CI_CHECKS_VERSION=0.89.0 \
+    FAKE_RUNS_JSON="$root/runs.json" FAKE_BUNX_RECORD="$record" bash "$root/scan.sh") \
+    || fail "the daily scan step exited non-zero"
+  tail -n 2 "$record" | paste -sd' ' -
+}
+
+test_scan_step_runs_on_the_schedule_and_nowhere_else() {
+  local event actual want
+  for event in schedule workflow_dispatch pull_request push; do
+    actual=$(ruby -ryaml -e "$EXPRESSION_RUBY" -e '
+step = YAML.load_file(ARGV[0]).fetch("jobs").fetch("static").fetch("steps").find { |s| s["name"] == ARGV[1] }
+abort "static has no step named #{ARGV[1]}" unless step
+puts Expression.condition(step["if"], { "github.event_name" => ARGV[2] })
+' "$CI_WORKFLOW" "$SCAN_STEP_NAME" "$event") || fail "could not evaluate the daily scan condition for $event"
+    if [ "$event" = schedule ]; then want=true; else want=false; fi
+    assert_equals "$want" "$actual" "the daily scan step on a $event run"
+  done
+  pass "the daily scan step runs on the scheduled run and on no other event"
+}
+
+test_scan_starts_from_the_previous_scheduled_success() {
+  local root
+  root=$(fm_test_tmproot scan-previous) || fail "could not create the scan fixture"
+  scan_fixture "$root/repo"
+  assert_equals "$SCAN_OLD HEAD" \
+    "$(scan_run "$root" "{\"workflow_runs\":[{\"head_sha\":\"$SCAN_OLD\"}]}")" \
+    "the scan must start from the commit the previous scheduled success checked out"
+  pass "the daily scan starts from the previous scheduled success, not the day window"
+}
+
+test_scan_without_a_previous_run_starts_at_the_last_commit_older_than_a_day() {
+  local root
+  root=$(fm_test_tmproot scan-fallback) || fail "could not create the scan fixture"
+  scan_fixture "$root/repo"
+  assert_equals "$SCAN_DAY HEAD" "$(scan_run "$root" '{"workflow_runs":[]}')" \
+    "with no previous scheduled success the scan must start at the newest commit older than 24 hours"
+  pass "with no previous scheduled success the daily scan falls back to 24 hours of commits"
+}
+
+test_scan_ignores_a_previous_run_sha_that_main_does_not_contain() {
+  local root side
+  root=$(fm_test_tmproot scan-offmain) || fail "could not create the scan fixture"
+  scan_fixture "$root/repo"
+  fm_git_identity
+  side=$(git -C "$root/repo" -c commit.gpgsign=false commit-tree "$(git -C "$root/repo" rev-parse "$SCAN_OLD^{tree}")" -p "$SCAN_OLD" -m off-main) \
+    || fail "could not create an off-main commit"
+  assert_equals "$SCAN_DAY HEAD" "$(scan_run "$root" "{\"workflow_runs\":[{\"head_sha\":\"$side\"}]}")" \
+    "a previous run sha that main does not contain must not be used as the scan base"
+  pass "a previous run sha that main does not contain falls back to 24 hours of commits"
+}
+
+test_static_gate_keeps_history_and_may_read_workflow_runs() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "static gate must check out full history and hold actions: read"
+static = YAML.load_file(ARGV[0]).fetch("jobs").fetch("static")
+perms = static.fetch("permissions")
+raise "static needs exactly contents and actions read, got #{perms}" unless perms == {"contents" => "read", "actions" => "read"}
+checkout = static.fetch("steps").find { |s| s["uses"].to_s.start_with?("actions/checkout") }
+raise "static checkout must fetch full history" unless checkout && checkout.dig("with", "fetch-depth") == 0
+RUBY
+  pass "the static gate checks out full history and may read the workflow's runs"
+}
+
+test_scan_version_pin_matches_the_documented_local_command() {
+  local pinned documented
+  pinned=$(ruby -ryaml -e 'puts YAML.load_file(ARGV[0]).fetch("env").fetch("FM_CI_CHECKS_VERSION")' "$CI_WORKFLOW") \
+    || fail "ci.yml must pin FM_CI_CHECKS_VERSION"
+  documented=$(grep -o '@avi2dg/checks@[0-9.]*' "$ROOT/CONTRIBUTING.md" | head -n 1 | sed 's/.*@//')
+  assert_equals "$documented" "$pinned" "CONTRIBUTING.md's local secrets command must name the CI pin"
+  pass "the CI secrets pin matches the version CONTRIBUTING.md documents"
+}
+
 test_ci_matrices_match_executable_partitions
 test_triggers_are_one_daily_schedule_and_manual_dispatch
 test_every_job_runs_on_the_scheduled_and_manual_runs
@@ -426,3 +544,9 @@ test_lint_and_static_keep_their_caps
 test_fast_tier_shares_one_short_tripwire
 test_normal_tier_shares_one_budget
 test_heavy_tier_keeps_a_step_tripwire_under_a_job_backstop
+test_scan_step_runs_on_the_schedule_and_nowhere_else
+test_scan_starts_from_the_previous_scheduled_success
+test_scan_without_a_previous_run_starts_at_the_last_commit_older_than_a_day
+test_scan_ignores_a_previous_run_sha_that_main_does_not_contain
+test_static_gate_keeps_history_and_may_read_workflow_runs
+test_scan_version_pin_matches_the_documented_local_command
