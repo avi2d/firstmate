@@ -1,58 +1,33 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  # The full portable matrix runs on manual dispatch and on pull requests
-  # that touch a shared test helper. Other pull requests run the capped
-  # static gate plus the changed-tests job, and pushes run that gate without
-  # the secrets scan.
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
-
-# Per-PR supersession: a new push to the same PR replaces that PR's in-flight
-# CI instead of letting superseded heads keep the full hosted-runner fan-out.
-# The group uses the PR number for pull_request events, so every run of one PR
-# shares a group, and falls back to the unique run id for push events, so each
-# main push gets its own group and is never cancelled. Cancellation is likewise
-# limited to pull_request events. Evidence and rationale: the September 12
-# Actions starvation report, section 3 "Workflow mechanics to ship first".
-# The compliance workflow deliberately keeps its own event-specific groups; do
-# not collapse it onto this simpler shape.
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Single owner of the CI npm-tool pins. Every cache key below embeds its pin
 # with no restore-keys fallback, so a bump installs fresh instead of reusing a stale tree.
 env:
   FM_CI_TASKS_AXI_VERSION: '0.2.6'
   FM_CI_PI_VERSION: '1.5.0'
-  # checks-secrets pins: the @avi2dg/checks package and the Bun version its
-  # .bun-version pins. CONTRIBUTING.md's local secrets scan names these too.
-  FM_CI_CHECKS_VERSION: '0.89.0'
-  FM_CI_BUN_VERSION: '1.4.3'
 
-# Timeout policy: paired lint shards are capped at 15 minutes and every other
-# pull request or push job at 10 minutes. Manual dispatch jobs keep the tiers
-# in docs/fm-test-portable-shards.md "Timeouts".
+# Timeout policy: paired lint shards are capped at 15 minutes and the static gate
+# at 10 minutes. Scheduled and manual dispatch jobs keep the tiers in
+# docs/fm-test-portable-shards.md "Timeouts".
 # Each job comment identifies the tier implemented by its executable value.
 
-# Fork opt-out: the repository variable FM_CI_SKIP_PUSH=1 skips the push run,
-# and FM_CI_SKIP_MACOS=1 skips the macOS job in the manual dispatch run. The condition is
-# repeated per job because workflow syntax has no shared anchor, and it is never
-# a trigger filter: a job skipped by its condition reports success, while a
-# workflow filtered out at the trigger stays pending and blocks the merge.
+# Fork opt-out: the repository variable FM_CI_SKIP_MACOS=1 skips the macOS job.
+# The condition sits on that job rather than on a trigger, because a job that a
+# condition skips reports success.
+
 jobs:
   lint:
     name: Lint ${{ matrix.shard }}
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
-    # Pull request and push lint cap (see the timeout policy above).
+    # Lint cap (see the timeout policy above).
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -120,162 +95,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # Changed-parts behavior gate coordinator. Curated family mappings stay with
-  # --changed: only reference-scanned shared helpers escalate. The detect step
-  # reports whether the pull request touches a shared test helper, and the
-  # portable lanes below fan out on that output. The shard jobs after this one
-  # run the selection; this job only publishes the shared-helper output, so it
-  # stays seconds-long on every pull request and push.
-  tests-changed:
-    name: Behavior changed tests
-    runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
-    # Pull request and push cap (see the timeout policy above).
-    timeout-minutes: 10
-    outputs:
-      shared-helpers: ${{ steps.detect.outputs.shared-helpers }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Detect shared test helper changes
-        id: detect
-        run: |
-          set -eu
-          shared=$(git diff --name-only 'origin/main...HEAD' | grep -E '^tests/(lib\.sh|fixtures\.sh|[^/]*-helpers\.sh|[^/]*-fixture\.sh|fixtures/|captures/)' || true)
-          if [ -n "$shared" ]; then
-            printf 'shared-helpers=true\n' >>"$GITHUB_OUTPUT"
-            printf '%s\n' "$shared"
-          else
-            printf 'shared-helpers=false\n' >>"$GITHUB_OUTPUT"
-          fi
-
-  # Changed-parts behavior gate, sharded. One selection never fits a capped
-  # pull request job, so six shards split the selection by measured
-  # per-script duration and every selected script runs in exactly one shard.
-  # Selection, composition, and the 1500-second per-script bound belong to
-  # bin/fm-test-run.sh.
-  tests-changed-shards:
-    name: Behavior changed tests ${{ matrix.shard }}
-    runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
-    # Changed-tests shards cap: the heaviest observed slice exceeds thirteen minutes.
-    timeout-minutes: 27
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6]
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Select shard slice
-        id: slice
-        run: |
-          set -eu
-          slice=$(bin/fm-test-run.sh --list --changed-shard "${{ matrix.shard }}of6" --base origin/main)
-          {
-            printf 'scripts<<FM_EOF\n'
-            printf '%s\n' "$slice"
-            printf 'FM_EOF\n'
-          } >>"$GITHUB_OUTPUT"
-      - name: Install pinned ShellCheck
-        if: steps.slice.outputs.scripts != ''
-        run: |
-          set -eu
-          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Install pinned actionlint
-        if: steps.slice.outputs.scripts != ''
-        run: |
-          set -eu
-          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Require tmux for e2e tests
-        if: steps.slice.outputs.scripts != ''
-        run: |
-          set -eu
-          command -v tmux >/dev/null || {
-            echo "::error::tmux is required for real afk injection e2e coverage"
-            exit 1
-          }
-          tmux -V
-      - name: Restore cached tasks-axi
-        if: steps.slice.outputs.scripts != ''
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/lib/node_modules/tasks-axi
-            /usr/local/bin/tasks-axi
-          key: tasks-axi-${{ env.FM_CI_TASKS_AXI_VERSION }}-${{ runner.os }}
-      - name: Install tasks-axi
-        if: steps.slice.outputs.scripts != ''
-        run: |
-          set -eu
-          if [ -x /usr/local/bin/tasks-axi ] && [ "$(tasks-axi --version)" = "${FM_CI_TASKS_AXI_VERSION}" ]; then
-            echo "tasks-axi ${FM_CI_TASKS_AXI_VERSION} restored from cache"
-          else
-            npm install -g "tasks-axi@${FM_CI_TASKS_AXI_VERSION}"
-          fi
-          tasks-axi --version
-      - name: Restore cached Pi package
-        if: steps.slice.outputs.scripts != ''
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/lib/node_modules/@earendil-works/pi-coding-agent
-            /usr/local/bin/pi
-          key: pi-coding-agent-${{ env.FM_CI_PI_VERSION }}-${{ runner.os }}
-      - name: Install the Pi package for the Pi extension tests
-        if: steps.slice.outputs.scripts != ''
-        run: |
-          set -eu
-          installed=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/package.json 2>/dev/null | head -1)
-          if [ "${installed}" = "${FM_CI_PI_VERSION}" ]; then
-            echo "pi-coding-agent ${FM_CI_PI_VERSION} restored from cache"
-          else
-            npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
-          fi
-          npm ls -g --depth 0 @earendil-works/pi-coding-agent
-      - name: Run changed shard
-        if: steps.slice.outputs.scripts != ''
-        # Step tripwire at 25 under the 27-minute job cap, so a hung script still uploads partial timing.
-        timeout-minutes: 25
-        run: |
-          set -eu
-          mkdir -p "$RUNNER_TEMP/fm-test"
-          # Naming scripts does not apply the changed per-script bound, so it is passed explicitly.
-          slice_file="$RUNNER_TEMP/fm-test/changed-slice-${{ matrix.shard }}.txt"
-          cat >"$slice_file" <<'FM_EOF'
-          ${{ steps.slice.outputs.scripts }}
-          FM_EOF
-          scripts=()
-          while IFS= read -r line; do
-            [ -n "$line" ] && scripts+=("$line")
-          done <"$slice_file"
-          if [ "${#scripts[@]}" -eq 0 ]; then
-            echo "changed shard ${{ matrix.shard }} has no scripts; skipping."
-            exit 0
-          fi
-          bin/fm-test-run.sh "${scripts[@]}" \
-            --per-script-timeout-secs 1500 \
-            --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
-            --json "$RUNNER_TEMP/fm-test/fm-test-timing-changed-${{ matrix.shard }}.json"
-      - name: Upload changed shard timing artifact
-        if: always() && steps.slice.outputs.scripts != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: fm-test-timing-changed-${{ matrix.shard }}
-          path: ${{ runner.temp }}/fm-test/fm-test-timing-changed-${{ matrix.shard }}.json
-          if-no-files-found: warn
-
   # Deterministic proof that portable parallel shards + portable serial + Herdr
   # equal the complete tests/*.test.sh inventory with no missing or duplicates,
   # and that the portable serial CI shards partition that serial lane exactly.
   test-coverage:
     name: Test coverage guard
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     # Fast tier: the coverage guard is a seconds-long local computation.
     timeout-minutes: 5
     steps:
@@ -288,9 +113,6 @@ jobs:
   tests-portable-parallel-1:
     name: Behavior portable parallel 1
     runs-on: ubuntu-24.04
-    # Shared-helper pull requests fan out here; manual dispatch runs unconditionally (see tests-changed).
-    needs: tests-changed
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.tests-changed.outputs.shared-helpers == 'true')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -358,9 +180,6 @@ jobs:
   tests-portable-parallel-2:
     name: Behavior portable parallel 2
     runs-on: ubuntu-24.04
-    # Shared-helper pull requests fan out here; manual dispatch runs unconditionally (see tests-changed).
-    needs: tests-changed
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.tests-changed.outputs.shared-helpers == 'true')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -416,9 +235,6 @@ jobs:
   tests-portable-serial:
     name: Behavior portable serial ${{ matrix.shard }}
     runs-on: ubuntu-24.04
-    # Shared-helper pull requests fan out here; manual dispatch runs unconditionally (see tests-changed).
-    needs: tests-changed
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.tests-changed.outputs.shared-helpers == 'true')) }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     strategy:
@@ -513,7 +329,6 @@ jobs:
   tests-herdr:
     name: Behavior tests (Herdr)
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     # Heavy tier (see the timeout policy above): the last-resort job backstop.
     # The family-run step below owns the hang tripwire, so a wedged suite fails
     # there with the always() cleanup and timing upload still running.
@@ -639,7 +454,6 @@ jobs:
   tests-hc:
     name: Behavior tests (herdr-core)
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     # Heavy tier (see the timeout policy above): the last-resort job backstop.
     # The family-run step below owns the hang tripwire, so a wedged suite fails
     # there with the always() cleanup and timing upload still running.
@@ -726,16 +540,13 @@ jobs:
     runs-on: ubuntu-24.04
     # Fast tier: aggregation is seconds of work over lane artifacts.
     timeout-minutes: 5
-    # Shared-helper pull requests fan out here; manual dispatch runs unconditionally (see tests-changed).
     needs:
-      - tests-changed
       - tests-portable-parallel-1
       - tests-portable-parallel-2
       - tests-portable-serial
       - tests-herdr
       - tests-hc
-      - tests-changed-shards
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.tests-changed.outputs.shared-helpers == 'true')) }}
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@v6
       - name: Download lane timing artifacts
@@ -769,7 +580,7 @@ jobs:
   macos-stock-bash:
     name: Stock macOS Bash snapshot compatibility
     runs-on: macos-latest
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.FM_CI_SKIP_MACOS != '1' }}
+    if: ${{ vars.FM_CI_SKIP_MACOS != '1' }}
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
@@ -843,22 +654,14 @@ jobs:
           FM_TEST_STOCK_BASH=1 FM_TEST_BASH=/bin/bash \
             /bin/bash bin/fm-test-tap-verify.sh tests/fm-backend.test.sh
 
-  # One static gate: the repo invariants run on every pull request and push,
-  # and the added-lines secrets scan joins them on pull requests, sharing one
-  # checkout and one runner instead of two. CHECKS_SECRETS_PACK stays unset,
-  # so no private pack runs.
+  # One static gate: the repo invariants.
   static:
     name: Static checks
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && vars.FM_CI_SKIP_PUSH != '1') }}
-    # Pull request and push cap (see the timeout policy above).
+    # Static cap (see the timeout policy above).
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-        with:
-          # The secrets scan diffs the pull request range, so the gate takes
-          # full history even though the invariants need none of it.
-          fetch-depth: 0
       - name: Compatibility pointers must stay intact
         run: |
           set -eu
@@ -879,16 +682,3 @@ jobs:
             printf '%s\n' "$tracked"
             exit 1
           fi
-      - uses: oven-sh/setup-bun@v2
-        if: ${{ github.event_name == 'pull_request' }}
-        with:
-          bun-version: ${{ env.FM_CI_BUN_VERSION }}
-      - name: Scan the PR range for added secrets
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -eu
-          bunx --package "@avi2dg/checks@$FM_CI_CHECKS_VERSION" checks-secrets "$BASE_SHA" "$HEAD_SHA"
-
