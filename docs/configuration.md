@@ -787,6 +787,8 @@ A head that is behind its base is first brought up to date with `gh pr update-br
 A refused merge or a failed update is retried at the same head only after `FM_MERGE_ON_GREEN_RETRY_SECS`, 300 seconds by default.
 A merge refused for security-sensitive paths instead holds the task for the captain once, and that head is never retried.
 A pull request skipped for what the forge reported, such as a red check, is read again only every `FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS`, 60 seconds by default, so a standing red pull request does not spend a forge read on every sweep.
+A task its own record rules out, because it is not a ship task, its yolo is off, or its project lacks `+yolo`, is skipped before any report is resolved through the forge.
+Reports are read newest first, so a waiting task with a long history costs no forge read per sweep.
 Every other pull request, including a red, pending, draft, conflicting, held, or boundary-touching one, stays open on the supervised path.
 
 The merge outcome reaches supervision exactly as a merge firstmate runs by hand: a main home gets its `check: merge landed:` wake, and a secondmate home reports upward and also wakes itself so its own cleanup and fleet sync run.
