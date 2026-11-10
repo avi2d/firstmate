@@ -13,7 +13,7 @@ TMP_ROOT=$(fm_test_tmproot fm-remote-job-launchagent)
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 REMOTE_ROOT="$TMP_ROOT/remote-root"
 ACCOUNT_HOME="$TMP_ROOT/account"
-STATE_ROOT="$TMP_ROOT/state"
+STATE_ROOT="$ACCOUNT_HOME/.firstmate/remote-job"
 STUB_BIN="$TMP_ROOT/stub-bin"
 LAUNCH_LOG="$TMP_ROOT/launchctl.log"
 SWEEP_GATE="$TMP_ROOT/sweep-gate"
@@ -100,7 +100,7 @@ start_worker() {
   (
     /bin/sleep "${FM_TEST_SPAWN_DELAY:-1}"
     HOME="$FM_TEST_ACCOUNT" FM_ROOT_OVERRIDE="$FM_TEST_ROOT" \
-      FM_REMOTE_JOB_STATE_ROOT="$FM_TEST_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Darwin \
+      FM_REMOTE_JOB_PLATFORM_OVERRIDE=Darwin \
       exec "$FM_TEST_WORKER"
   ) >> "$FM_TEST_WORKER_LOG" 2>&1 < /dev/null &
   printf '%s\n' "$!" > "$FM_TEST_TRACKED"
@@ -156,7 +156,9 @@ export FM_TEST_LOADED="$TMP_ROOT/launchagent.loaded" FM_TEST_TRACKED="$TMP_ROOT/
 export FM_TEST_REMOVING="$TMP_ROOT/launchagent.removing"
 export FM_TEST_PLIST="$ACCOUNT_HOME/Library/LaunchAgents/dev.firstmate.remote-job.plist"
 export FM_TEST_SWEEP_GATE="$SWEEP_GATE"
-export FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Darwin
+# The account-default state root: a private FM_REMOTE_JOB_STATE_ROOT makes
+# Darwin ensure refuse before it reaches launchctl.
+export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Darwin
 # shellcheck source=bin/fm-remote-job-lib.sh
 . "$ROOT/bin/fm-remote-job-lib.sh"
 
