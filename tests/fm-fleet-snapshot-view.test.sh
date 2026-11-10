@@ -1152,6 +1152,96 @@ EOF
   pass "home-summary excludes kind=secondmate from unowned_current and terminal_in_flight"
 }
 
+# A secondmate task whose open decisions the real drain has already folded into
+# its cursor, so the snapshot reads a log that may have moved past that cursor.
+write_drained_secondmate() {  # <home> <id> <status-text>
+  local home=$1 id=$2
+  mkdir -p "$home/secondmate-home"
+  fm_write_meta "$home/state/$id.meta" \
+    "window=firstmate:fm-$id" \
+    "worktree=$home/secondmate-home" \
+    "project=$home/secondmate-home" \
+    "harness=codex" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "home=$home/secondmate-home" \
+    "projects=alpha"
+  printf '%s' "$3" > "$home/state/$id.status"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>&1 \
+    || fail "drain over $id failed"
+  [ -f "$home/state/.$id.open-decisions-cursor" ] || fail "drain left no open-decisions cursor for $id"
+}
+
+snapshot_open_decisions() {  # <home> <id>
+  local fakebin
+  fakebin=$(make_fakebin "$1")
+  PATH="$fakebin:$PATH" FM_HOME="$1" "$SNAPSHOT" --json \
+    | jq -c --arg id "$2" '.tasks[] | select(.id == $id) | .hints.open_decisions | map([.key, .verb, .summary])'
+}
+
+test_decision_resolved_after_drain_is_not_reported_open() {
+  local home out
+  home=$(make_home drained-then-resolved)
+  write_drained_secondmate "$home" mate 'needs-decision [key=early]: pick a schema
+blocked [key=keep]: waiting on access
+'
+  printf 'resolved [key=early]: schema picked\nneeds-decision [key=late]: pick a port\n' >> "$home/state/mate.status"
+  out=$(snapshot_open_decisions "$home" mate)
+  assert_equals '[["keep","blocked","waiting on access"],["late","needs-decision","pick a port"]]' "$out" \
+    "lines appended after the drain must still open and close decisions"
+  pass "a decision resolved after the drain's cursor is not reported open"
+}
+
+test_replaced_log_does_not_resurrect_drained_decision() {
+  local home out
+  home=$(make_home drained-then-replaced)
+  write_drained_secondmate "$home" mate 'needs-decision [key=old]: same width
+'
+  printf 'needs-decision [key=new]: same width\nworking: the replacement outgrows the old log\n' > "$home/state/mate.status.next"
+  mv -f "$home/state/mate.status.next" "$home/state/mate.status"
+  out=$(snapshot_open_decisions "$home" mate)
+  assert_equals '[["new","needs-decision","same width"]]' "$out" \
+    "a cursor folded from a replaced log must not supply decisions"
+  pass "a replaced status log does not resurrect a decision from the old log's cursor"
+}
+
+test_snapshot_reads_only_bytes_appended_after_the_drain() {
+  local home fakebin probe appended reads
+  home=$(make_home drained-read-bound)
+  write_drained_secondmate "$home" mate "$(printf 'working: filler line %04d\n' $(seq 1 400))
+needs-decision [key=buried]: still open
+"
+  printf 'blocked [key=fresh]: new blocker\n' >> "$home/state/mate.status"
+  appended=$(printf 'blocked [key=fresh]: new blocker\n' | wc -c | tr -d '[:space:]')
+  probe="$home/span-reads"
+  cat > "$home/span-reader" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$3" >> "$FM_TEST_SPAN_PROBE"
+tail -c +"$(($2 + 1))" "$1" | head -c "$3"
+SH
+  chmod +x "$home/span-reader"
+  fakebin=$(make_fakebin "$home")
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_STATUS_SPAN_READER="$home/span-reader" FM_TEST_SPAN_PROBE="$probe" \
+    "$SNAPSHOT" --json > "$home/out.json" || fail "snapshot failed"
+  jq -e '.tasks[] | select(.id == "mate") | .hints.open_decisions | map(.key) == ["buried","fresh"]' "$home/out.json" >/dev/null \
+    || fail "snapshot lost a decision: $(cat "$home/out.json")"
+  reads=$(tr '\n' ' ' < "$probe" 2>/dev/null)
+  [ "$reads" = "$((appended + 1)) " ] \
+    || fail "snapshot read [$reads] bytes, expected one read of the $appended appended bytes plus the boundary newline"
+  pass "the snapshot folds only what was appended after the drain"
+}
+
+test_cursor_ending_mid_line_does_not_split_the_decision() {
+  local home out
+  home=$(make_home drained-mid-line)
+  write_drained_secondmate "$home" mate 'needs-decision [key=split]: first ha'
+  printf 'lf of the note\n' >> "$home/state/mate.status"
+  out=$(snapshot_open_decisions "$home" mate)
+  assert_equals '[["split","needs-decision","first half of the note"]]' "$out" \
+    "a line the drain read half-written must be folded whole"
+  pass "a cursor that ends mid-line does not split the decision it cut"
+}
+
 fm_test_run \
   test_empty_fleet_json \
   test_fixture_snapshot_json \
@@ -1165,6 +1255,10 @@ fm_test_run \
   test_secondmate_open_decision_survives_live_endpoint \
   test_open_decision_transfers_to_captain_hold \
   test_open_decision_clears_on_keyed_resolution \
+  test_decision_resolved_after_drain_is_not_reported_open \
+  test_replaced_log_does_not_resurrect_drained_decision \
+  test_cursor_ending_mid_line_does_not_split_the_decision \
+  test_snapshot_reads_only_bytes_appended_after_the_drain \
   test_completed_scout_report_is_pointer_not_pending \
   test_parked_scout_decision_stays_pending \
   test_scout_reports_include_teardown_reports \
