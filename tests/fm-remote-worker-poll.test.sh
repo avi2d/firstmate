@@ -33,7 +33,7 @@ case "$*" in
 esac
 SH
 chmod +x "$TMP_ROOT/fakebin/fm-on.sh"
-stat_mtime() { /usr/bin/stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null; }
+stat_mtime() { stat -c %Y "$1" 2>/dev/null || /usr/bin/stat -f %m "$1" 2>/dev/null; }
 age_of() {
   local f=$1 m now
   m=$(stat_mtime "$f") || { echo 999999; return; }

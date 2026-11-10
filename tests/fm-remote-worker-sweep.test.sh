@@ -23,7 +23,7 @@ export STATE POLL=30 SCRIPT_DIR="$ROOT/bin"
 . "$ROOT/bin/fm-remote-worker-poll-lib.sh"
 age_of() {
   local f=$1 m now
-  m=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null) || return 1
+  m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null) || return 1
   now=$(date +%s) || return 1
   printf '%s' "$((now - m))"
 }
