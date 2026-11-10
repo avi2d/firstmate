@@ -51,7 +51,8 @@ pending Exit 0 while some yolo task's GitHub pull request is not yet merged,
         1 when there is nothing left to merge.
 
 Verdicts: green (merge once settled), update (behind its base), wait (checks
-running or a forge read failed), skip (stays on the supervised path).
+running, a check the base's merged pull requests carried not yet reported, or
+a forge read failed), skip (stays on the supervised path).
 docs/configuration.md "Merge on green" owns the eligibility contract.
 EOF
   exit 2
@@ -61,6 +62,7 @@ SETTLE_SECS=${FM_MERGE_ON_GREEN_SETTLE_SECS:-10}
 RETRY_SECS=${FM_MERGE_ON_GREEN_RETRY_SECS:-300}
 SKIP_RECHECK_SECS=${FM_MERGE_ON_GREEN_SKIP_RECHECK_SECS:-60}
 FORGE_TIMEOUT=${FM_MERGE_ON_GREEN_FORGE_TIMEOUT:-20}
+BASE_HISTORY_PRS=5
 LOG_MAX_BYTES=262144
 LOG="$STATE/merge-on-green.log"
 
@@ -255,6 +257,29 @@ checks_state() {  # <pull-request-json>
   ' 2>/dev/null
 }
 
+# GitHub lists nothing for a workflow run it has not created yet, and a private
+# repository on a free plan cannot declare a required check, so the base's own
+# merged pull requests are the only reading of what a head still owes.
+# Prints covered, none, unproven, or missing:<names>; fails on an unreadable
+# payload.
+expected_checks_state() {  # <pull-request-json> <merged-pull-requests-json>
+  printf '%s\n%s\n' "$1" "$2" | jq -rs '
+    def names: [ .statusCheckRollup[]
+                 | (if .__typename == "CheckRun" then .name else .context end)
+                 | select(type == "string" and length > 0) ] | unique;
+    if length != 2 or (.[1] | type) != "array" then error("no merged pull requests") else . end
+    | (.[0] | names) as $reported
+    | (.[1] | length) as $merged
+    | [ .[1][] | names | select(length > 0) ] as $carrying
+    | if ($reported | length) == 0 and ($carrying | length) > 0 then "none"
+      elif ($reported | length) == 0 and $merged == 0 then "unproven"
+      else
+        (reduce $carrying[1:][] as $carried ($carrying[0] // []; . - (. - $carried))) - $reported
+        | if length > 0 then "missing:" + join(", ") else "covered" end
+      end
+  ' 2>/dev/null
+}
+
 forge() {
   fm_run_timed "$FORGE_TIMEOUT" "$@" 2>/dev/null
 }
@@ -336,7 +361,7 @@ log_line() {  # <task-id> <event> <detail>
 assess() {  # <task-id>
   local id=$1 meta kind yolo project posture hold_rc open json fields
   local state draft mergeable merge_state base checks diff behind base_enc
-  local adopted candidate supersede head_branch expected_branch
+  local adopted candidate supersede head_branch expected_branch merged expected
   VERDICT='' REASON='' URL='' HEAD='' DIFF_HEAD='' DIFF_RESULT='' CHECKS_DONE_AT=0
   meta="$STATE/$id.meta"
   [ -f "$meta" ] && [ ! -L "$meta" ] || { verdict skip "no task record"; return; }
@@ -468,6 +493,17 @@ EOF
   DIFF_HEAD=$HEAD
   [ "$DIFF_RESULT" = clear ] || { verdict skip "the diff $DIFF_RESULT"; return; }
 
+  merged=$(forge gh pr list --repo "$FM_PR_HOST/$FM_PR_OWNER/$FM_PR_REPO" --state merged --base "$base" \
+    --limit "$BASE_HISTORY_PRS" --json statusCheckRollup) || merged=
+  expected=$(expected_checks_state "$json" "$merged") || expected=
+  case "$expected" in
+    covered) ;;
+    none) verdict wait "no check has reported yet"; return ;;
+    unproven) verdict wait "no check has reported, and $base has no merged pull request to show it expects none"; return ;;
+    missing:*) verdict wait "checks the pull requests merged into $base carried have not reported: ${expected#missing:}"; return ;;
+    *) verdict wait "the pull requests merged into $base could not be read"; return ;;
+  esac
+
   base_enc=$(printf '%s' "$base" | jq -sRr @uri 2>/dev/null) || base_enc=
   [ -n "$base_enc" ] || { verdict wait "the base branch could not be read"; return; }
   behind=$(forge gh api "repos/$FM_PR_OWNER/$FM_PR_REPO/compare/$base_enc...$HEAD" --jq .behind_by) || behind=
@@ -507,7 +543,7 @@ merge_task() {  # <task-id> <now>
   local id=$1 now=$2 out rc=0
   REC_ATTEMPT_KIND=merge REC_ATTEMPT_HEAD=$HEAD REC_ATTEMPT_AT=$now
   record_save "$id" || true
-  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-pr-merge.sh" "$id" "$URL" 2>&1) || rc=$?
+  out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-pr-merge.sh" "$id" "$URL" --expected-head "$HEAD" 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
     log_line "$id" merge-refused "$(printf '%s\n' "$out" | grep -E '^(error|actionable):|^  - ' | tail -4 | tr '\n' ' ')"
     case "$out" in
