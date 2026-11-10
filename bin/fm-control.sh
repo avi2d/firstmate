@@ -444,7 +444,7 @@ EOF
   done
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
-      schema=*|backend=*|target=*|kind=*|harness=*|model=*|effort=*|worktree=*|project=*|herdr_session=*) ;;
+      schema=*|backend=*|target=*|kind=*|harness=*|model=*|effort=*|claude_account=*|worktree=*|project=*|herdr_session=*) ;;
       *) printf '%s\n' "$line" ;;
     esac
   done <<EOF

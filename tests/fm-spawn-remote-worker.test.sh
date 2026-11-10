@@ -25,14 +25,23 @@ cat > "$FAKE_ROOT/bin/fm-on.sh" <<'SH'
 set -eu
 case "$*" in
   *' capabilities') printf 'fm-remote-worker-control.v2\n' ;;
+  *' claude-account-check '*)
+    [ "${FM_TEST_OLD_HOST:-0}" != 1 ] || { printf 'error: unknown remote worker command\n' >&2; exit 1; }
+    [ "$6" = main ] || { printf 'error: --claude-account %s needs a login declared for it in config/claude-accounts: /remote/home/config/claude-accounts\n' "$6" >&2; exit 1; }
+    printf '%s\n' "$*" > "$FM_HOME/account-check-args"
+    printf 'claude_account=%s\n' "$6" ;;
   *' admit '*)
     if [ "${FM_TEST_ADMIT_DEFER:-0}" = 1 ]; then printf 'defer: host already holds 6 alpha worker(s) at its declared limit 6\n'; exit 75; fi
     printf 'admit project=alpha holders=0\n' ;;
   *' launch '*)
     cat >/dev/null
+    printf '%s\n' "$*" > "$FM_HOME/launch-args"
+    account=${16:-}
+    [ "${FM_TEST_DROP_ACCOUNT:-0}" != 1 ] || account=
     target=fm-lab-test:w1:pane1
     [ "${FM_TEST_BAD_TARGET:-0}" != 1 ] || target=fm-lab-test:bad/path
-    printf 'schema=fm-remote-worker-control.v1\nbackend=herdr\ntarget=%s\nherdr_session=fm-lab-test\nkind=%s\nharness=pi\nworktree=/remote/worktree\nproject=/remote/home/projects/alpha\n' "$target" "$7" ;;
+    printf 'schema=fm-remote-worker-control.v1\nbackend=herdr\ntarget=%s\nherdr_session=fm-lab-test\nkind=%s\nharness=pi\nworktree=/remote/worktree\nproject=/remote/home/projects/alpha\n%s' "$target" "$7" "${account:+claude_account=$account
+}" ;;
   *) exit 1 ;;
 esac
 SH
@@ -77,3 +86,57 @@ printf '# Task\n## Captain\x27s intent\nResearch.\n\n## Firstmate spec\nReport e
 out=$(FM_TEST_BAD_TARGET=1 FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" FM_SPAWN_NO_GUARD=1 bash "$FAKE_ROOT/bin/fm-spawn.sh" bad-route "$HOME_DIR/projects/alpha" --scout --harness pi 2>&1) && fail "remote launch accepted a malformed endpoint"
 assert_grep 'remote_target=pending' "$HOME_DIR/state/bad-route.meta" "ambiguous launch was not preserved"
 pass "remote launch preserves an unconfirmed record instead of accepting a malformed endpoint"
+
+new_remote_scout() {  # <task-id>
+  FM_HOME="$HOME_DIR" "$ROOT/bin/fm-tasks-axi.sh" add "$1" 'Research alpha' --kind scout >/dev/null
+  mkdir -p "$HOME_DIR/data/$1"
+  printf '# Task\n## Captain\x27s intent\nResearch.\n\n## Firstmate spec\nReport evidence.\n' > "$HOME_DIR/data/$1/brief.md"
+}
+remote_spawn() {  # <task-id> [spawn flags...]
+  local id=$1
+  shift
+  FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$HOME_DIR" FM_SPAWN_NO_GUARD=1 bash "$FAKE_ROOT/bin/fm-spawn.sh" "$id" "$HOME_DIR/projects/alpha" --scout --harness pi --model claude-bridge/opus "$@" 2>&1
+}
+
+new_remote_scout acct-ok
+out=$(remote_spawn acct-ok --claude-account main) || fail "remote launch refused a Claude account: $out"
+assert_grep 'claude_account=main' "$HOME_DIR/state/acct-ok.meta" "remote task record did not record the Claude account"
+printf '%s\n' "$out" | grep -F 'claude_account=main' >/dev/null || fail "spawned line did not name the Claude account: $out"
+assert_grep 'claude-account-check pi claude-bridge/opus main' "$HOME_DIR/account-check-args" "the host was not asked to resolve the account against its own map"
+[ "$(awk '{print $NF}' "$HOME_DIR/launch-args")" = main ] || fail "remote launch did not carry the account: $(cat "$HOME_DIR/launch-args")"
+pass "remote launch forwards --claude-account to the host and records it instead of refusing the flag"
+
+new_remote_scout acct-none
+out=$(remote_spawn acct-none) || fail "remote launch without an account failed: $out"
+[ "$(wc -w < "$HOME_DIR/launch-args")" -eq 15 ] || fail "a launch without an account sent an account argument: $(cat "$HOME_DIR/launch-args")"
+assert_no_grep 'claude_account=' "$HOME_DIR/state/acct-none.meta" "a launch without an account recorded one"
+pass "remote launch without an account sends the older launch shape instead of an empty account"
+
+new_remote_scout acct-missing
+out=$(remote_spawn acct-missing --claude-account second) && fail "remote launch accepted an account the host does not map: $out"
+printf '%s\n' "$out" | grep -F 'Claude account second' >/dev/null || fail "refusal did not name the missing account: $out"
+[ ! -e "$HOME_DIR/state/acct-missing.meta" ] || fail "an unmapped account published a task record"
+FM_HOME="$HOME_DIR" "$ROOT/bin/fm-tasks-axi.sh" list --state queued | grep -F 'acct-missing' >/dev/null || fail "an unmapped account moved its item out of Queued"
+pass "remote launch on an account the host does not map refuses before publishing instead of launching on another login"
+
+new_remote_scout acct-old
+out=$(FM_TEST_OLD_HOST=1 remote_spawn acct-old --claude-account main) && fail "an older host accepted an account it cannot apply: $out"
+printf '%s\n' "$out" | grep -F 'older than this home' >/dev/null || fail "older host refusal did not say to update the host: $out"
+[ ! -e "$HOME_DIR/state/acct-old.meta" ] || fail "an older host published a task record"
+pass "remote launch on an older host refuses the account instead of dropping it"
+
+new_remote_scout acct-dropped
+out=$(FM_TEST_DROP_ACCOUNT=1 remote_spawn acct-dropped --claude-account main) && fail "remote launch trusted a host that dropped the account: $out"
+printf '%s\n' "$out" | grep -F 'inconsistent identity' >/dev/null || fail "dropped account was not reported: $out"
+assert_grep 'remote_target=pending' "$HOME_DIR/state/acct-dropped.meta" "dropped account did not preserve the pending record"
+pass "remote launch whose host reports no account is not recorded as launched on it"
+
+printf '{}\n' > "$HOME_DIR/config/crew-dispatch.json"
+new_remote_scout acct-clear
+printf '{"task":"acct-clear","status":"clear","profile":{"harness":"pi","model":"claude-bridge/opus","effort":null,"claude_account":"main"}}\n' > "$HOME_DIR/data/acct-clear/dispatch-resolution.json"
+out=$(remote_spawn acct-clear) && fail "remote launch dropped the account the clear dispatch selection chose: $out"
+[ ! -e "$HOME_DIR/state/acct-clear.meta" ] || fail "a launch without the selected account published a task record"
+out=$(remote_spawn acct-clear --claude-account main) || fail "remote launch refused the clear dispatch profile line unchanged: $out"
+assert_grep 'claude_account=main' "$HOME_DIR/state/acct-clear.meta" "the selected account was not recorded"
+rm "$HOME_DIR/config/crew-dispatch.json"
+pass "remote launch takes the clear dispatch profile line unchanged and refuses one missing its account"
