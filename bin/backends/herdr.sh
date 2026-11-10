@@ -2171,6 +2171,68 @@ fm_backend_herdr_container_ensure() {  # <cwd-for-a-fresh-workspace> [<launcher-
   printf '%s:%s\t%s' "$session" "$FM_BACKEND_HERDR_WS_ID" "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID"
 }
 
+# A label match cannot tell the header this home created from one it adopted.
+fm_backend_herdr_home_header_record_path() {  # <state-dir>
+  printf '%s/herdr-home-header' "$1"
+}
+
+fm_backend_herdr_home_header_record() {  # <state-dir> <session> <workspace_id> <seeded_tab_id>
+  local state=$1 session=$2 wsid=$3 tab_id=$4 pane_id tmp
+  pane_id=$(fm_backend_herdr_pane_for_tab "$session" "$wsid" "$tab_id") || return 1
+  [ -n "$pane_id" ] || return 1
+  tmp=$(mktemp "$state/.herdr-home-header.XXXXXX") || return 1
+  if ! printf 'session=%s\nworkspace_id=%s\ntab_id=%s\npane_id=%s\n' \
+    "$session" "$wsid" "$tab_id" "$pane_id" > "$tmp" ||
+    ! mv -f "$tmp" "$(fm_backend_herdr_home_header_record_path "$state")"; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+fm_backend_herdr_home_header_has_other_workers() {  # <state-dir> <session> <closing-task-id>
+  local state=$1 session=$2 closing=$3 meta journal
+  for meta in "$state"/*.meta; do
+    [ -f "$meta" ] || continue
+    [ "$(basename "$meta" .meta)" != "$closing" ] || continue
+    [ "$(sed -n 's/^herdr_session=//p' "$meta" | tail -1)" != "$session" ] || return 0
+  done
+  for journal in "$state"/*"$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX"; do
+    [ -e "$journal" ] || [ -L "$journal" ] || continue
+    [ "$(basename "$journal" "$FM_BACKEND_HERDR_PRESENTATION_JOURNAL_SUFFIX")" != "$closing" ] || continue
+    return 0
+  done
+  return 1
+}
+
+# The caller holds <session>'s presentation lock.
+fm_backend_herdr_home_header_retire() {  # <state-dir> <session> <closing-task-id>
+  local state=$1 session=$2 closing=$3 record field wsid tab_id pane_id label spaces tabs panes
+  record=$(fm_backend_herdr_home_header_record_path "$state")
+  [ -f "$record" ] && [ ! -L "$record" ] || return 0
+  [ "$(fm_backend_herdr_projection_journal_field "$record" session)" = "$session" ] || return 0
+  wsid=$(fm_backend_herdr_projection_journal_field "$record" workspace_id) || return 0
+  tab_id=$(fm_backend_herdr_projection_journal_field "$record" tab_id) || return 0
+  pane_id=$(fm_backend_herdr_projection_journal_field "$record" pane_id) || return 0
+  for field in "$wsid" "$tab_id" "$pane_id"; do
+    [ -n "$field" ] || return 0
+  done
+  spaces=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 0
+  label=$(printf '%s' "$spaces" | jq -er --arg w "$wsid" '
+    [.result.workspaces[]? | select(.workspace_id == $w)]
+    | if length == 1 then .[0].label else empty end' 2>/dev/null) || {
+    [ "$(fm_backend_herdr_workspace_presence_state "$session" "$wsid")" != dead ] || rm -f "$record"
+    return 0
+  }
+  [ "$label" = "$(fm_backend_herdr_workspace_label)" ] || return 0
+  ! fm_backend_herdr_home_header_has_other_workers "$state" "$session" "$closing" || return 0
+  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) || return 0
+  [ "$(printf '%s' "$tabs" | jq -r '[.result.tabs[]?.tab_id] | join(" ")' 2>/dev/null)" = "$tab_id" ] || return 0
+  panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) || return 0
+  [ "$(printf '%s' "$panes" | jq -r '[.result.panes[]?.pane_id] | join(" ")' 2>/dev/null)" = "$pane_id" ] || return 0
+  fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane_id" no-agent || return 0
+  [ "$(fm_backend_herdr_workspace_presence_state "$session" "$wsid")" != dead ] || rm -f "$record"
+}
+
 # fm_backend_herdr_pane_presence_state: classify one exact pane get response
 # as dead|present|unknown from its JSON body, never from process exit status.
 fm_backend_herdr_pane_presence_state() {  # <session> <pane_id>

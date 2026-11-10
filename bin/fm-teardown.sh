@@ -4155,6 +4155,9 @@ if [ "$BACKEND" = herdr ]; then
       exit 1
     fi
   fi
+  if [ "$FOCUS_HELD_DEFERRAL" = 0 ] && teardown_herdr_session_lock_held "$TEARDOWN_HERDR_SESSION"; then
+    fm_backend_herdr_home_header_retire "$STATE" "$TEARDOWN_HERDR_SESSION" "$ID"
+  fi
 fi
 
 if [ "$KIND" != secondmate ] && teardown_owns_worktree; then
