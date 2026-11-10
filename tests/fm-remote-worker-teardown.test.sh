@@ -101,3 +101,64 @@ out=$(FM_TEST_SYNC_MODE=lost FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-fleet-sync.s
 printf '%s\n' "$out" | grep -F 'lab: skipped: the execution home did not answer' >/dev/null || fail "an unanswered remote sync was not reported as skipped: $out"
 out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-fleet-sync.sh" --remote lab ../alpha 2>&1) && fail "the remote sync hop accepted a path for a project name"
 pass "the post-merge remote sync hop relays the host result and skips an unanswered host"
+sweep_stale_check() {
+  (
+    export FM_HOME="$HOME_DIR" STATE="$HOME_DIR/state" SCRIPT_DIR="$TMP_ROOT/fakebin" POLL=30
+    export FM_REMOTE_FLEET_CACHE_SECS=0 FM_REMOTE_FLEET_BUDGET=60
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_wake_append() { printf 'queued %s\n' "$3" >> "$TMP_ROOT/alarms"; }
+    wake() { printf 'woke %s\n' "$1" >> "$TMP_ROOT/alarms"; }
+    fm_run_timed() { shift; "$@"; }
+    age_of() { printf '0\n'; }
+    # shellcheck source=bin/fm-remote-worker-poll-lib.sh
+    . "$ROOT/bin/fm-remote-worker-poll-lib.sh"
+    remote_worker_poll
+  )
+}
+cat > "$TMP_ROOT/fakebin/fm-on.sh" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *' fleet') printf 'other\tworking\tbusy\thash9\n' ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$TMP_ROOT/fakebin/fm-on.sh"
+
+seed
+printf 'working [at=1]: started\n' > "$HOME_DIR/state/.remote-feed-mirrored-w1"
+printf 'working\n' > "$HOME_DIR/state/.remote-agent-w1"
+printf 'rings=1\nlast=1\n' > "$HOME_DIR/state/.remote-ring-w1"
+mkdir -p "$HOME_DIR/state/remote-feeds/lab"
+: > "$HOME_DIR/state/remote-feeds/lab/w1.cursor"
+out=$(FM_TEST_HOP_MODE=ok FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-teardown.sh" w1 2>&1) || fail "remote cleanup refused: $out"
+rm -f "$TMP_ROOT/alarms"
+sweep_stale_check
+[ ! -s "$TMP_ROOT/alarms" ] || fail "the sweep alarmed on a vacated task: $(cat "$TMP_ROOT/alarms")"
+leftover=$(find "$HOME_DIR/state" -path "$HOME_DIR/state/status-archive" -prune -o -name '*w1*' -print)
+[ -z "$leftover" ] || fail "cleanup and the feed left the vacated task's records behind: $leftover"
+pass "a vacated remote worker leaves no state and raises no alarm"
+
+seed
+rm -f "$TMP_ROOT/alarms" "$TMP_ROOT/held" "$TMP_ROOT/release"
+(
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$ROOT/bin/fm-wake-lib.sh"
+  lock=$(fm_meta_lock_path "$HOME_DIR/state/w1.meta") && fm_lock_acquire_wait "$lock" || exit 1
+  : > "$TMP_ROOT/held"
+  waited=0
+  while [ ! -e "$TMP_ROOT/release" ] && [ "$waited" -lt 400 ]; do waited=$((waited + 1)); sleep 0.05; done
+  fm_lock_release "$lock"
+) &
+HOLDER=$!
+attempt=0
+while [ ! -e "$TMP_ROOT/held" ] && [ "$attempt" -lt 200 ]; do attempt=$((attempt + 1)); sleep 0.05; done
+[ -e "$TMP_ROOT/held" ] || fail "the record lock holder never started"
+sweep_stale_check
+[ ! -s "$TMP_ROOT/alarms" ] || fail "a record under teardown raised an endpoint alarm: $(cat "$TMP_ROOT/alarms")"
+: > "$TMP_ROOT/release"
+wait "$HOLDER"
+sweep_stale_check
+grep -F 'stale: remote:w1 (remote endpoint missing' "$TMP_ROOT/alarms" >/dev/null \
+  || fail "a live record whose endpoint vanished no longer alarms"
+pass "a record under teardown raises no alarm, and a live vanished endpoint still does"

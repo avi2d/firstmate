@@ -183,6 +183,18 @@ test_break_escalates_and_adopts() {
   assert_grep 'after rewrite' "$PARENT/state/w1.status" "adopted cursor misses the next delta"
   pass "break escalates into its own stream and the proven prefix is adopted"
 }
+test_vacated_task_leaves_no_record() {
+  reset_w1
+  printf 'working [at=300]: late line\n' >> "$REMOTE/state/w1.status"
+  (printf 'w1 %s %s\n' 0 "$(empty_hash)") | feed_result "$TMP_ROOT/vacated.result"
+  rm -f -- "$PARENT/state/w1.meta"
+  remote_env "$ADAPTER" ingest "$ROUTE" "$TMP_ROOT/vacated.result" >/dev/null \
+    || fail "ingest of a vacated task's result failed"
+  [ ! -e "$PARENT/state/w1.status" ] || fail "a vacated task's result recreated its status log"
+  [ ! -e "$PARENT/state/.remote-feed-mirrored-w1" ] || fail "a vacated task's result recreated its mirror identity"
+  printf 'remote_route=%s\n' "$ROUTE" > "$PARENT/state/w1.meta"
+  pass "a result for a vacated task writes no record"
+}
 test_documents_land_in_task_tree() {
   reset_w1
   rm -rf -- "$PARENT/data/w1" "$PARENT/data/other"
@@ -246,5 +258,6 @@ fm_test_run \
   test_ingest_appends_and_dedups \
   test_break_escalates_and_adopts \
   test_documents_land_in_task_tree \
+  test_vacated_task_leaves_no_record \
   test_ensure_armed_is_idempotent \
   test_runner_applies_one_window

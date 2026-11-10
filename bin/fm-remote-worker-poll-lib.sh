@@ -133,7 +133,7 @@ remote_worker_rering() {  # <id> <host> <route> <now>
 # re-rings for delivered-but-unacked steers, for every worker this home
 # placed on another host. Unknown transport stays silent by design.
 remote_worker_poll() {
-  local meta id kind host route fleet line agent now
+  local meta id kind host route fleet line agent now lock
   now=$(date +%s) || return 0
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
@@ -151,8 +151,10 @@ remote_worker_poll() {
       agent=$(printf '%s' "$line" | cut -f2)
       [ -n "$agent" ] || continue
     fi
+    lock=$(fm_meta_lock_path "$meta") || continue
+    fm_lock_try_acquire "$lock" || continue
     remote_worker_note_agent "$id" "$host" "$agent" || true
-    case "$agent" in dead|missing) continue ;; esac
-    remote_worker_rering "$id" "$host" "$route" "$now" || true
+    case "$agent" in dead|missing) ;; *) remote_worker_rering "$id" "$host" "$route" "$now" || true ;; esac
+    fm_lock_release "$lock"
   done
 }
