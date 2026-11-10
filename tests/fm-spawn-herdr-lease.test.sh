@@ -130,6 +130,7 @@ esac
 exit 0
 SH
   chmod +x "$fb/treehouse" "$fb/herdr" "$fb/polytoken"
+  fm_fake_exit0 "$fb" codex
   fm_test_fake_sleep_noop "$fb"
   printf '%s\n' "$dir"
 }
