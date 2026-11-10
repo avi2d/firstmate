@@ -33,16 +33,10 @@ Before dispatching an agent-driven contribution, follow the [Firstmate role and 
 ## Maintaining required checks
 
 GitHub required checks are configured in the repository's existing main ruleset, not activated by committing workflow YAML.
-When applying this CI layout, preserve its existing pull-request, merge-method, linear-history, deletion, non-fast-forward, and administrator-bypass settings.
-Add required status checks with `strict_required_status_checks_policy: false`; a main update alone must not force a branch update and retest.
-Bind the checks to the GitHub Actions app already producing them, rather than accepting the same context from any integration.
-No new app installation or manual runner setup is needed for that setting.
-
-Require the pull-request job contexts: `Lint 1` through `Lint 6` and `Static checks`.
-The full matrix jobs run only on manual dispatch and never on pull requests, so they are not required checks.
-There is no scheduled run and no failure issue job, so a red dispatch run is triaged by hand from its run page.
-
-Apply the approved rule change only after the corresponding workflow is green and landed, confirming exact names and the Actions integration id from real checks first.
+CI does not run on pull requests, so no CI job reports on one and none is a required check.
+A pull request therefore carries no CI check, and none is required before it merges.
+CI runs once a day on `main` and on manual dispatch.
+A red run is triaged by hand from its run page.
 Snapshot the current ruleset, amend that same rule with the authenticated GitHub API or settings UI, and read back both the ruleset and effective branch rules.
 Verify missing or red checks prevent ordinary merging without creating a test merge; administrator override intentionally remains available.
 Coordinate any workflow rollback with its required-check names so a retired check cannot leave ordinary merges waiting forever.
@@ -100,7 +94,7 @@ Check and test the toolbelt before pushing:
 ```sh
 while IFS= read -r script; do /bin/bash -n "$script" || exit; done < <(bin/fm-lint.sh --list-files)   # syntax-check the shell surface fm-lint.sh will cover (changed files locally, full set in CI/on main)
 bin/fm-lint.sh   # lint that shell surface plus GitHub workflows via pinned actionlint; the single owner CI and the no-mistakes gate both run
-git fetch origin main && bunx --package @avi2dg/checks@0.89.0 checks-secrets origin/main HEAD   # the CI Secrets scan over the commits your branch adds, unpushed ones included (needs Bun)
+git fetch origin main && bunx --package @avi2dg/checks@0.89.0 checks-secrets origin/main HEAD   # the Secrets scan over the commits your branch adds, unpushed ones included (needs Bun). CI does not run it
 bin/fm-test-run.sh tests/<subject>.test.sh   # one script (primary local focus path, timed)
 bin/fm-test-run.sh tests/<a>.test.sh tests/<b>.test.sh   # several subjects at once: bounded automatic concurrency
 bin/fm-test-run.sh --family pure-contract-unit   # ordinary family-scoped local path (serial, timed)
@@ -111,7 +105,7 @@ bin/fm-test-run.sh --proven-isolated --jobs 4   # explicit local parallel of the
 bin/fm-test-run.sh --lane portable-serial   # portable serial remainder (watcher/AFK/tmux/stateful)
 bin/fm-test-run.sh --list-lanes   # discover exact lane names, including the current CI serial shards
 bin/fm-test-run.sh --check-coverage   # prove portable shards + serial + serial shards + Herdr equal the full inventory
-bin/fm-test-run.sh --all   # deliberate complete regression (CI owns it; not a pre-push step, not no-mistakes Test)
+bin/fm-test-run.sh --all   # deliberate complete regression (the daily and manual CI runs own it, not a pre-push step or no-mistakes Test)
 bin/fm-test-linux.sh   # opt-in: run the tests changed on this branch in a Debian container with GNU userland (needs docker or podman)
 bin/fm-test-isolation-proof.sh --list   # proven portable parallel candidate set
 bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json   # re-run the portable candidate proof
@@ -131,10 +125,9 @@ Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 `bin/fm-test-linux.sh` is optional and never part of CI: on macOS, run it before publishing a branch whose tests depend on `stat`, `date`, or process behavior, because BSD and GNU tools differ.
 Its header owns selection, runtime detection, and exit codes.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
-CI owns broad regression across required portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, the herdr-core lane, six paired lint shards, the static gate holding the repo invariants and the pull-request secrets scan, the pull-request changed-tests shards, which run the portable lanes when a shared helper changes, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
-Pushing a new head to a pull request cancels that pull request's still-running CI so only the current head is validated; pushes to `main` are never cancelled, and the workflow owns that contract and its rationale.
-A fork can set the repository variable `FM_CI_SKIP_PUSH` to `1` to skip the push run of `CI`, and `FM_CI_SKIP_MACOS` to `1` to skip the stock macOS Bash job, without a tracked edit that drifts from upstream.
-Each skip is a job-level condition, so a skipped job reports success rather than leaving the pull request pending, and with neither variable set every job runs on upstream and on every fork exactly as before.
+CI runs once a day on `main` and on manual dispatch, and owns broad regression across the portable parallel shards, the portable serial lane's separate-runner shards, the Herdr lane, the herdr-core lane, six paired lint shards, the static gate holding the repo invariants, the coverage guard, and stock macOS Bash compatibility in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+A fork can set the repository variable `FM_CI_SKIP_MACOS` to `1` to skip the stock macOS Bash job without a tracked edit that drifts from upstream.
+The skip is a job-level condition, so the skipped job reports success.
 Use `bin/fm-test-run.sh --list-lanes` for exact lane names and `--help` for `--jobs` rules and required gate-skip flags when reproducing a lane locally.
 Leave the `sleep 0.1` cadence in the suites' bounded condition waits alone.
 Those sleeps look like recoverable overhead - the watch-triage suite (`fm-watch-triage.test.sh`, `fm-watch-triage-pause.test.sh`, and `fm-watch-triage-wedge-defer.test.sh`) issues about 1,900 of them, each paying a flat ~100ms scheduler wake-up penalty on macOS - but they are not overhead added to the clock; they are how a test waits for a subject that only moves on `fm-watch.sh`'s own one-second `FM_POLL` cadence.
