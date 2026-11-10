@@ -496,6 +496,37 @@ test_unrecorded_pull_request_merges_through_the_sweep() {
   pass "a green pull request with no recorded pr= merges through the sweep and ends recorded"
 }
 
+test_records_waiting_on_a_merge_word_are_not_reresolved_from_the_forge_every_sweep() {
+  local c n
+  c=$(make_case merge-word-wait "direct-PR +yolo" off)
+  : > "$c/state/task-x1.status"
+  for n in $(seq 100 160); do
+    printf 'done [at=1792400000]: PR %s checks green\n' "$n" >> "$c/state/task-x1.status"
+  done
+  printf 'done [at=1792400100]: PR %s checks green\n' "$URL" >> "$c/state/task-x1.status"
+  mkdir -p "$c/projects/repo"
+  fm_write_meta "$c/state/mate-x2.meta" "window=fm-mate-x2" "project=$c/projects/repo" "kind=secondmate" "mode=secondmate" "yolo=off"
+  cp "$c/state/task-x1.status" "$c/state/mate-x2.status"
+  sweep "$c"
+  sweep "$c"
+  sweep "$c"
+  [ ! -s "$c/gh.log" ] || fail "merge-word-wait: three sweeps of records that wait on the captain read the forge $(wc -l < "$c/gh.log") times"
+  expect_verdict "$c" skip "task yolo is off" merge-word-wait
+
+  c=$(make_case long-history)
+  sed -i.bak '/^pr=/d' "$c/state/task-x1.meta"
+  : > "$c/state/task-x1.status"
+  for n in $(seq 100 160); do
+    printf 'done [at=1792400000]: PR %s checks green\n' "$n" >> "$c/state/task-x1.status"
+  done
+  printf 'done [at=1792400100]: PR 9 checks green\n' >> "$c/state/task-x1.status"
+  sweep "$c"
+  [ "$(grep -c -- '--json url,headRefName' "$c/gh.log")" -eq 1 ] \
+    || fail "long-history: the newest report took more than one bare-number lookup: $(grep -c -- '--json url,headRefName' "$c/gh.log")"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "long-history: the newest bare-number report did not merge: $(cat "$c/gh.log")"
+  pass "a record waiting on the captain costs no forge read per sweep, and a long report history costs one lookup"
+}
+
 test_settled_green_pull_request_merges_on_its_first_sweep
 test_green_without_a_settled_finish_merges_on_the_second_sighting
 test_unsettled_green_waits
@@ -521,3 +552,4 @@ test_bare_epoch_done_report_merges_once_green
 test_follow_up_pull_request_merges_after_the_recorded_one_landed
 test_bare_pull_request_number_resolves_from_the_task_branch
 test_ready_line_naming_a_bare_pull_request_is_followed
+test_records_waiting_on_a_merge_word_are_not_reresolved_from_the_forge_every_sweep

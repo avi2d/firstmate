@@ -133,17 +133,24 @@ resolve_bare_pr() {  # <meta> <number>
 # The newest GitHub pull request the done or ready reports name, so a later
 # report supersedes the recorded one instead of ending at the earlier merge.
 # A bare number resolves through the task copy, never from the number alone.
+# Reports are walked newest first because each bare number costs a forge read.
 latest_status_pr_url() {  # <status-file> <meta>
-  local file=$1 meta=$2 line verb first note url num rest last=
+  local file=$1 meta=$2 line verb first note url num rest i
+  local -a lines=()
   [ -f "$file" ] && [ ! -L "$file" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
+    lines+=("$line")
+  done < "$file"
+  for ((i = ${#lines[@]} - 1; i >= 0; i--)); do
+    line=${lines[i]}
     status_line_verb "$line" verb
     first=${verb%%[[:space:]]*}
     case "$first" in done|ready) ;; *) continue ;; esac
     note=$(status_line_note "$line")
     if url=$(fm_dod_pr_url_from_done_note "$note" 2>/dev/null); then
       if fm_pr_url_parse "$url" 2>/dev/null && [ "$FM_PR_PROVIDER" = github ]; then
-        last=$FM_PR_URL
+        printf '%s\n' "$FM_PR_URL"
+        return 0
       fi
       continue
     fi
@@ -151,10 +158,10 @@ latest_status_pr_url() {  # <status-file> <meta>
     num=$(printf '%s' "$rest" | grep -Eo '(^|[^[:alnum:]])PR[ \t]*#?[0-9]+' | tail -1 | grep -Eo '[0-9]+$') || continue
     [ -n "$num" ] || continue
     if url=$(resolve_bare_pr "$meta" "$num"); then
-      last=$url
+      printf '%s\n' "$url"
+      return 0
     fi
-  done < "$file"
-  [ -n "$last" ] && printf '%s\n' "$last"
+  done
   return 0
 }
 
@@ -335,6 +342,21 @@ assess() {  # <task-id>
   [ -f "$meta" ] && [ ! -L "$meta" ] || { verdict skip "no task record"; return; }
   adopted=
   URL=$(meta_value "$meta" pr)
+  # These gates read only local records, so they run before any report is
+  # resolved through the forge.
+  kind=$(meta_value "$meta" kind)
+  [ "${kind:-ship}" = ship ] || { verdict skip "not a ship task"; return; }
+  yolo=$(meta_value "$meta" yolo)
+  [ "$yolo" = on ] || { verdict skip "task yolo is ${yolo:-unset}"; return; }
+  project=$(meta_value "$meta" project)
+  project=${project%/}
+  project=${project##*/}
+  [ -n "$project" ] || { verdict skip "no recorded project"; return; }
+  posture=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-project-mode.sh" "$project" 2>/dev/null) || posture=
+  case "$posture" in
+    *" on") ;;
+    *) verdict skip "the registry entry for $project does not carry +yolo"; return ;;
+  esac
   read_status_report "$STATE/$id.status"
   candidate=$(latest_status_pr_url "$STATE/$id.status" "$meta") || candidate=
   if [ -n "$candidate" ] && [ "$candidate" != "$URL" ]; then
@@ -362,19 +384,6 @@ assess() {  # <task-id>
     return
   fi
   URL=$FM_PR_URL
-  kind=$(meta_value "$meta" kind)
-  [ "${kind:-ship}" = ship ] || { verdict skip "not a ship task"; return; }
-  yolo=$(meta_value "$meta" yolo)
-  [ "$yolo" = on ] || { verdict skip "task yolo is ${yolo:-unset}"; return; }
-  project=$(meta_value "$meta" project)
-  project=${project%/}
-  project=${project##*/}
-  [ -n "$project" ] || { verdict skip "no recorded project"; return; }
-  posture=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-project-mode.sh" "$project" 2>/dev/null) || posture=
-  case "$posture" in
-    *" on") ;;
-    *) verdict skip "the registry entry for $project does not carry +yolo"; return ;;
-  esac
   if fm_pr_poll_merge_already_notified "$STATE" "$id" "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER"; then
     verdict skip "already merged"
     return
