@@ -87,6 +87,9 @@ printf 'OpenAI Codex (fake)\n> '
 exec sleep 100000
 SH
 chmod +x "$REMOTE_ROOT/bin/treehouse" "$REMOTE_ROOT/bin/codex"
+# A remote job composes its PATH from the account home and system directories,
+# so a herdr installed elsewhere is only reachable through the code root's bin.
+ln -s "$(command -v herdr)" "$REMOTE_ROOT/bin/herdr"
 git -C "$REMOTE_ROOT" init -q -b main
 git -C "$REMOTE_ROOT" add .
 git -C "$REMOTE_ROOT" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm fixture
