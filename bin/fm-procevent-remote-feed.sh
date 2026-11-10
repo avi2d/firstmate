@@ -88,6 +88,7 @@ cursor_dir() { printf '%s/%s\n' "$CURSOR_ROOT" "$1"; }
 cursor_path() { printf '%s/%s/%s.cursor\n' "$CURSOR_ROOT" "$1" "$2"; }
 ingest_receipt_path() { printf '%s/%s/%s.%s.ingested\n' "$CURSOR_ROOT" "$1" "$2" "$3"; }
 mirrored_source_path() { printf '%s/.remote-feed-mirrored-%s\n' "$STATE" "$1"; }
+ingest_lock_path() { printf '%s/.remote-feed-ingest-%s.lock\n' "$1" "$2"; }
 
 read_cursor() {
   local path=$1 offset hash schema
@@ -294,6 +295,12 @@ route_tasks() {
     [ "$placed" = "$route" ] || continue
     printf '%s\n' "$task"
   done
+}
+
+task_routed_here() {
+  local route=$1 task=$2 meta="$STATE/$2.meta"
+  [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  [ "$(fm_meta_get "$meta" remote_route 2>/dev/null || true)" = "$route" ]
 }
 
 cmd_source() {
@@ -519,8 +526,13 @@ ingest_task_block() {
   status_file="$STATE/$task.status"
   mkdir -p "$STATE" || die "cannot create parent state directory"
   [ ! -L "$status_file" ] || die "parent status log is a symlink"
-  lock="$STATE/.remote-feed-ingest-$task.lock"
+  lock=$(ingest_lock_path "$STATE" "$task")
   fm_lock_acquire_wait "$lock" || die "cannot lock remote feed ingest for $task"
+  if ! task_routed_here "$route" "$task"; then
+    fm_lock_release "$lock"
+    printf 'ingested: %s appended=0 offset=%s record=absent\n' "$task" "$to"
+    return 0
+  fi
   if [ ! -e "$status_file" ]; then
     (umask 077; : > "$status_file") \
       || { fm_lock_release "$lock"; die "cannot create parent status log"; }
@@ -758,7 +770,7 @@ cmd_retire() {
 
 # The caller removes the task record first, so a racing ingest cannot recreate the cursor for a listed task.
 cmd_retire_task() {
-  local route=${1:-} task=${2:-} lock receipt seq
+  local route=${1:-} task=${2:-} lock receipt seq ingest_lock
   validate_route "$route"
   validate_task "$task"
   lock=$(feed_lifecycle_lock_path "$STATE" "$route")
@@ -767,6 +779,10 @@ cmd_retire_task() {
     LIFECYCLE_LOCK=$lock
     trap 'cleanup_temp_paths; fm_lock_release "$LIFECYCLE_LOCK"' EXIT
     rm -f -- "$(cursor_path "$route" "$task")" || die "cannot retire the feed cursor for $task"
+    ingest_lock=$(ingest_lock_path "$STATE" "$task")
+    fm_lock_acquire_wait "$ingest_lock" || die "cannot lock remote feed ingest for $task"
+    rm -f -- "$(mirrored_source_path "$task")" || { fm_lock_release "$ingest_lock"; die "cannot retire the mirror identity for $task"; }
+    fm_lock_release "$ingest_lock"
     for receipt in "$CURSOR_ROOT/$route/$task".*.ingested; do
       seq=${receipt#"$CURSOR_ROOT/$route/$task".}
       seq=${seq%.ingested}
