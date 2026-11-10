@@ -2417,18 +2417,18 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
     return 0
   fi
   # The projected child is placed and bound UNDER this launcher's exact
-  # parent workspace. Its own herdr pane identity names that workspace
-  # directly; the label lookup is only the fallback for a launcher with
-  # no herdr ancestry at all. A claimed-but-broken identity refuses here
-  # rather than projecting under a guessed parent.
+  # parent workspace. A launcher with no herdr ancestry (a remote execution
+  # home) has no pane to inherit, so its parent is the home's own labelled
+  # workspace, resolved or created on first use as a flat task would. A
+  # claimed-but-broken identity refuses here rather than projecting under a
+  # guessed parent.
   set +e
   HERDR_PANE_ID=$launcher_pane fm_backend_herdr_launcher_identity "$session"
   launcher_status=$?
   set -e
   case "$launcher_status" in
   0) parent_workspace=$FM_BACKEND_HERDR_LAUNCHER_WORKSPACE_ID ;;
-  2) parent_workspace=$(fm_backend_herdr_projection_parent_workspace_exact \
-    "$session" "$HERDR_PARENT_LABEL" 2>/dev/null || true) ;;
+  2) parent_workspace=$(fm_backend_herdr_workspace_ensure "$session" "$cwd" || true) ;;
   *)
     spawn_herdr_presentation_order_lock_release
     exit 1
