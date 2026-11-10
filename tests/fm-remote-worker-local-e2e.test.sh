@@ -66,18 +66,19 @@ printf 'manual\n' > "$REMOTE_HOME/config/backlog-backend"
 printf 'fm-lab-test\n' > "$REMOTE_HOME/config/herdr-session"
 fm_git_init_commit "$REMOTE_HOME/projects/alpha"
 git clone -q "$REMOTE_HOME/projects/alpha" "$TMP_ROOT/slot"
+printf '%s' "$TMP_ROOT/slot" > "$FAKE/slot"
 printf '%s' "$REMOTE_HOME/projects/alpha" > "$FAKE/cwd"
 printf '%s' "$REMOTE_HOME/projects/alpha" > "$FAKE/fg"
 cat > "$REMOTE_ROOT/bin/treehouse" <<SH
 #!/usr/bin/env bash
 case "\$*" in
-  'get --lease '*) printf '%s\\n' '$TMP_ROOT/slot' ;;
+  'get --lease '*) cat '$FAKE/slot'; printf '\\n' ;;
 esac
 SH
 cat > "$REMOTE_ROOT/bin/herdr" <<SH
 #!/usr/bin/env bash
 D='$FAKE'
-SLOT='$TMP_ROOT/slot'
+SLOT=\$(cat '$FAKE/slot')
 case "\${1:-} \${2:-}" in
   'status --json') printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":true}}\\n' ;;
   'session list') printf '{"sessions":[{"name":"fm-lab-test","running":true,"socket_path":"%s/herdr.sock"}]}\\n' "\$D" ;;
@@ -106,7 +107,8 @@ cat > "$REMOTE_ROOT/bin/codex" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
-chmod +x "$REMOTE_ROOT/bin/treehouse" "$REMOTE_ROOT/bin/herdr" "$REMOTE_ROOT/bin/codex"
+cp "$REMOTE_ROOT/bin/codex" "$REMOTE_ROOT/bin/claude"
+chmod +x "$REMOTE_ROOT/bin/treehouse" "$REMOTE_ROOT/bin/herdr" "$REMOTE_ROOT/bin/codex" "$REMOTE_ROOT/bin/claude"
 git -C "$REMOTE_ROOT" init -q -b main
 git -C "$REMOTE_ROOT" config user.name Test
 git -C "$REMOTE_ROOT" config user.email test@example.com
@@ -145,3 +147,31 @@ if [ "$(uname -s)" = Darwin ]; then
   cmp -s "$TMP_ROOT/agents-before" "$TMP_ROOT/agents-after" || fail "account launch-agent directory changed during local transport"
 fi
 pass "local transport launches through the remote job worker and host-local spawn"
+
+ACCOUNT_DIR="$TMP_ROOT/claude-accounts/main"
+mkdir -p "$ACCOUNT_DIR"
+printf 'main %s\n' "$ACCOUNT_DIR" > "$REMOTE_HOME/config/claude-accounts"
+remote_account_spawn() {  # <task-id> <account>
+  FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" add "$1" 'Research alpha' --kind scout >/dev/null
+  mkdir -p "$PARENT/data/$1"
+  printf "# Task\n## Captain's intent\nResearch the project.\n\n## Firstmate spec\nReport evidence.\n" > "$PARENT/data/$1/brief.md"
+  git -C "$REMOTE_HOME/projects/alpha" worktree add -q --detach "$TMP_ROOT/slot-$1"
+  printf '%s' "$TMP_ROOT/slot-$1" > "$FAKE/slot"
+  printf '%s' "$REMOTE_HOME/projects/alpha" > "$FAKE/cwd"
+  printf '%s' "$REMOTE_HOME/projects/alpha" > "$FAKE/fg"
+  rm -f "$FAKE/launch" "$FAKE/live"
+  FM_HOME="$PARENT" FM_SPAWN_NO_GUARD=1 FM_SSH_BIN="$FAKE/ssh" FM_REMOTE_JOB_STATE_ROOT="$JOB_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$ROOT/bin/fm-spawn.sh" "$1" "$PARENT/projects/alpha" --scout --harness claude --claude-account "$2" 2>&1
+}
+out=$(remote_account_spawn e2e-account main) || fail "remote launch on a mapped Claude account failed: $out"
+printf '%s\n' "$out" | grep -F 'claude_account=main' >/dev/null || fail "spawned line did not print the account: $out"
+grep -qx 'claude_account=main' "$PARENT/state/e2e-account.meta" || fail "main task record did not record the account: $(cat "$PARENT/state/e2e-account.meta")"
+grep -qx 'claude_account=main' "$REMOTE_HOME/state/e2e-account.meta" || fail "host task record did not record the account: $(cat "$REMOTE_HOME/state/e2e-account.meta")"
+assert_grep "CLAUDE_CONFIG_DIR='$ACCOUNT_DIR'" "$FAKE/launch" "the host's own account folder did not reach the launch command"
+pass "remote launch applies --claude-account through the host's own account map instead of the host's ambient login"
+out=$(remote_account_spawn e2e-unmapped second) && fail "remote launch accepted an account the host does not map: $out"
+printf '%s\n' "$out" | grep -F -- '--claude-account second needs a login declared for it in config/claude-accounts' >/dev/null || fail "refusal did not name the missing account: $out"
+[ ! -e "$PARENT/state/e2e-unmapped.meta" ] || fail "an unmapped account published a main task record"
+[ ! -e "$REMOTE_HOME/state/e2e-unmapped.meta" ] && [ ! -e "$REMOTE_HOME/data/e2e-unmapped" ] || fail "an unmapped account reached the host's records"
+[ ! -e "$FAKE/launch" ] || fail "an unmapped account launched a worker"
+FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" list --state queued | grep -F e2e-unmapped >/dev/null || fail "an unmapped account moved its item out of Queued"
+pass "remote launch on an account the host does not map refuses naming it instead of launching on another login"
