@@ -120,6 +120,9 @@ while [ "\$#" -gt 0 ]; do case "\$1" in -o) shift 2 ;; --) shift; break ;; *) ex
 [ "\$1" = testhost ] || exit 91
 [ "\$2" = fm-remote-entrypoint.sh ] || exit 92
 shift 2
+if [ -d '$FAKE/race' ] && printf '%s' "\$4" | base64 -d 2>/dev/null | tr '\\0' '\\n' | grep -qx launch; then
+  cp '$FAKE'/race/*.meta '$REMOTE_HOME/state/'
+fi
 export FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_STATE_ROOT='$JOB_STATE' FM_MAC_LOAD_MOCK_5MIN=0
 exec '$REMOTE_ROOT/bin/fm-remote-entrypoint.sh' "\$@"
 SH
@@ -175,3 +178,50 @@ printf '%s\n' "$out" | grep -F -- '--claude-account second needs a login declare
 [ ! -e "$FAKE/launch" ] || fail "an unmapped account launched a worker"
 FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" list --state queued | grep -F e2e-unmapped >/dev/null || fail "an unmapped account moved its item out of Queued"
 pass "remote launch on an account the host does not map refuses naming it instead of launching on another login"
+
+remote_scout_spawn() {  # <task-id>
+  if ! FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" show "$1" >/dev/null 2>&1; then
+    FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" add "$1" 'Research alpha' --kind scout >/dev/null
+    mkdir -p "$PARENT/data/$1"
+    printf "# Task\n## Captain's intent\nResearch the project.\n\n## Firstmate spec\nReport evidence.\n" > "$PARENT/data/$1/brief.md"
+  fi
+  [ -d "$TMP_ROOT/slot-$1" ] || git -C "$REMOTE_HOME/projects/alpha" worktree add -q --detach "$TMP_ROOT/slot-$1"
+  printf '%s' "$TMP_ROOT/slot-$1" > "$FAKE/slot"
+  printf '%s' "$REMOTE_HOME/projects/alpha" > "$FAKE/cwd"
+  printf '%s' "$REMOTE_HOME/projects/alpha" > "$FAKE/fg"
+  rm -f "$FAKE/launch" "$FAKE/live"
+  FM_HOME="$PARENT" FM_SPAWN_NO_GUARD=1 FM_SSH_BIN="$FAKE/ssh" FM_REMOTE_JOB_STATE_ROOT="$JOB_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$ROOT/bin/fm-spawn.sh" "$1" "$PARENT/projects/alpha" --scout --harness codex 2>&1
+}
+assert_deferred_untouched() {  # <task-id> <rc> <output> <deferring-step-line-prefix>
+  [ "$2" -eq 75 ] || fail "a host at its heavy limit answered exit $2 instead of 75: $3"
+  printf '%s\n' "$3" | grep -E "^$4 " | grep -F 'heavy worker(s)' >/dev/null || fail "the host's $4 line was not passed through: $3"
+  printf '%s\n' "$3" | grep -F 'unconfirmed' >/dev/null && fail "a known deferral was reported as an unconfirmed outcome: $3"
+  [ ! -e "$PARENT/state/$1.meta" ] || fail "a deferral left a main task record: $(cat "$PARENT/state/$1.meta")"
+  FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" list --state queued | grep -F "$1" >/dev/null || fail "a deferral moved the backlog item out of Queued"
+  [ ! -e "$REMOTE_HOME/data/$1" ] || fail "a deferral left the task's data on the host: $(ls -A "$REMOTE_HOME/data/$1")"
+  [ ! -e "$REMOTE_HOME/state/$1.meta" ] || fail "a deferral left a host task record"
+  [ ! -e "$FAKE/launch" ] || fail "a deferral launched a worker"
+}
+
+printf '@heavy-limit 1\n' > "$REMOTE_HOME/config/project-capacity"
+rc=0
+out=$(remote_scout_spawn e2e-heavy-full) || rc=$?
+assert_deferred_untouched e2e-heavy-full "$rc" "$out" defer:
+rm "$REMOTE_HOME/config/project-capacity"
+out=$(remote_scout_spawn e2e-heavy-full) || fail "dispatching a deferred task again once the host had room failed: $out"
+assert_grep 'remote_target=fm-lab-test:' "$PARENT/state/e2e-heavy-full.meta" "the redispatch did not record the host's endpoint"
+FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" list --state in_flight | grep -F e2e-heavy-full >/dev/null || fail "the redispatch did not move the backlog item"
+pass "remote_launch_at_host_heavy_limit_exits_75_and_leaves_nothing_instead_of_an_unconfirmed_pending_record"
+
+printf '@heavy-limit 50\n' > "$REMOTE_HOME/config/project-capacity"
+mkdir -p "$FAKE/race"
+for n in $(seq 1 50); do
+  printf 'kind=scout\nharness=codex\nproject=%s/projects/alpha\n' "$REMOTE_HOME" > "$FAKE/race/race-$n.meta"
+done
+rc=0
+out=$(remote_scout_spawn e2e-heavy-race) || rc=$?
+assert_deferred_untouched e2e-heavy-race "$rc" "$out" deferred:
+rm -rf "$FAKE/race" "$REMOTE_HOME"/state/race-*.meta "$REMOTE_HOME/config/project-capacity"
+out=$(remote_scout_spawn e2e-heavy-race) || fail "dispatching a launch-deferred task again once the host had room failed: $out"
+FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" list --state in_flight | grep -F e2e-heavy-race >/dev/null || fail "the redispatch after a launch deferral did not move the backlog item"
+pass "host_filling_between_admit_and_launch_exits_75_and_leaves_nothing_instead_of_a_half_made_task"
