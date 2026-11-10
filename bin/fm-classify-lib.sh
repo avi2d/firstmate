@@ -1827,6 +1827,61 @@ status_open_decisions_incremental() {  # <status-file> [<captured-end-offset>] [
   printf '%s' "$open"
 }
 
+# Prints exactly what `status_open_decisions <copy> <kind>` prints.
+# Precondition: <cursor-copy> is the live log's open-decisions cursor, read
+# while the live log had identity <ident> both before and after <copy> was
+# taken from it. Never writes the cursor.
+status_open_decisions_from_cursor() {  # <copy> <kind> <cursor-copy> <ident>
+  local f=$1 kind=$2 open
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
+  kind=$(_fm_status_kind "$f" "$kind")
+  if open=$(_fm_open_decisions_resume_cursor "$f" "$kind" "$3" "$4"); then
+    printf '%s' "$open"
+  else
+    status_open_decisions "$f" "$kind"
+  fi
+}
+
+# Folds <copy> onward from the cursor's offset, or returns 1 having printed
+# nothing when the cursor cannot vouch for the copy's first <offset> bytes. The
+# log is append-only, so a cursor for the copy's identity whose offset fits in
+# the copy and ends a line has folded exactly those bytes. The cursor records
+# no verb overrides, so an override makes it untrusted.
+_fm_open_decisions_resume_cursor() {  # <copy> <kind> <cursor-copy> <ident>
+  local f=$1 kind=$2 cursor=$3 ident=$4 data rest offset open='' size span line verb resolve held
+  [ -z "${FM_CLASSIFY_RESOLVE_VERB:-}${FM_CLASSIFY_CAPTAIN_HELD_VERB:-}" ] && [ -n "$ident" ] || return 1
+  [ -f "$cursor" ] && data=$(LC_ALL=C command cat "$cursor" 2>/dev/null) || return 1
+  case "$data" in "version=$FM_OPEN_DECISIONS_FOLD_VERSION:$kind"$'\n'offset=*$'\n'*) ;; *) return 1 ;; esac
+  rest=${data#*$'\n'}
+  offset=${rest%%$'\n'*}
+  offset=${offset#offset=}
+  rest=${rest#*$'\n'}
+  [ "${rest%%$'\n'*}" = "ident=$ident" ] || return 1
+  case "$rest" in *$'\n'*) open=${rest#*$'\n'} ;; esac
+  size=$(_fm_status_file_size "$f") || return 1
+  size=${size//[[:space:]]/}
+  case "$offset:$size" in *[!0-9:]*|:*|*:|0:*) return 1 ;; esac
+  [ "$offset" -le "$size" ] || return 1
+  # The sentinel keeps command substitution from stripping the span's newlines.
+  span=$(_fm_status_read_span "$f" "$((offset - 1))" "$((size - offset + 1))" && printf x) || return 1
+  case "$span" in $'\n'*x) ;; *) return 1 ;; esac
+  span=${span#$'\n'}
+  span=${span%x}
+  resolve=$FM_CLASSIFY_RESOLVE_VERB_DEFAULT
+  held=$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT
+  while IFS= read -r line || [ -n "$line" ]; do
+    status_line_verb "$line" verb
+    case "$verb" in
+      needs-decision|blocked|done|failed|"$resolve"|"$held")
+        _fm_decision_fold_line_into open "$open" "$line" "$resolve" "$held" "$kind"
+        ;;
+    esac
+  done <<EOF
+$span
+EOF
+  printf '%s' "$open"
+}
+
 # Incremental sibling of scan_open_decisions: same fleet-wide directory walk and
 # output shape ("<task>\t<key>\t<verb>\t<note>" per open decision), but folds
 # each task's status log through status_open_decisions_incremental instead of
