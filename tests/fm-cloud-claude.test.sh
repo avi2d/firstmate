@@ -183,6 +183,15 @@ wait_for() {  # <file> <needle> <what>
   fail "timed out waiting for $3; $1 holds: $(cat "$1" 2>/dev/null)"
 }
 
+wait_present() {  # <file> <failure>
+  local i
+  for i in $(seq 1 100); do
+    [ -e "$1" ] && return 0
+    sleep 0.1
+  done
+  fail "$2"
+}
+
 # cloud_push <case-dir> <bare-origin> <branch> <file>: what the cloud session does.
 cloud_push() {
   local clone=$1/cloud-clone
@@ -239,6 +248,8 @@ test_relay_flags_the_deadline_and_reports_the_pull_request() {
   wait_for "$STATUS" "blocked [key=cloud-deadline]" "the deadline report"
   wait_for "$STATE/rt.busy-state" "event=deadline" "the deadline busy event"
   assert_equals "idle cloud-relay" "$(busy_verdict "$STATE" rt)" "a passed deadline should read idle so the blocker surfaces"
+  # The notification lands after the record, so removing it on the record alone races the deadline's own notification.
+  wait_present "$STATE/rt.turn-ended" "a passed deadline should notify the watcher"
   rm -f "$STATE/rt.turn-ended"
 
   sha=$(cloud_push "$dir" "$BARE" fm/rt first.txt)
@@ -248,7 +259,7 @@ test_relay_flags_the_deadline_and_reports_the_pull_request() {
   assert_equals "$sha" "$(git -C "$WT" rev-parse HEAD)" "the local copy should sit at the pull request head"
   assert_grep "head=acme:fm/rt" "$dir/gh-calls" "the poll should ask for the task branch's pull request"
   wait_for "$STATE/rt.busy-state" "event=pr-ready" "the pr-ready busy event"
-  assert_present "$STATE/rt.turn-ended" "a ready pull request should notify the watcher"
+  wait_present "$STATE/rt.turn-ended" "a ready pull request should notify the watcher"
   out=$(bash -c '. "$1/bin/fm-dod-lib.sh" && fm_dod_accept_ship_done ship direct-PR "$2" "$3" "$(grep "^done" "$4" | tail -n 1)"' \
     _ "$ROOT" "$WT" "$dir/project" "$STATUS") || fail "the ship-done check should accept the relay's report: $out"
   stop_relay
