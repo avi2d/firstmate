@@ -132,6 +132,7 @@ MEM_FREE_MIN_PCT=10
 DISK_FREE_MIN_MB=5120
 LANE_FOOTPRINT_GB=1
 QUOTA_TIMEOUT=5
+HEAVY_TIMEOUT=5
 BOOTS_KEPT=10
 
 mode=report
@@ -559,6 +560,19 @@ if [ "$mode" = admit ]; then
 fi
 
 # --- report -----------------------------------------------------------------
+heavy_queue_line() {
+  local out depth
+  command -v orc >/dev/null 2>&1 || return 0
+  if [ "$have_jq" -eq 1 ]; then
+    # shellcheck source=bin/fm-timeout-lib.sh
+    . "$SCRIPT_DIR/fm-timeout-lib.sh"
+    out=$(fm_run_timed "$HEAVY_TIMEOUT" orc heavy check --json </dev/null 2>/dev/null) || out=
+    depth=$(printf '%s' "$out" | jq -r '
+      select((.running | type) == "array" and (.queued | type) == "array")
+      | "\(.running | length) running, \(.queued | length) queued"' 2>/dev/null) || depth=
+  fi
+  echo "Heavy queue: ${depth:-unreadable}."
+}
 if [ "$mode" = report ]; then
   printf 'capacity: free_lanes=%s reason=%s lanes=%s target=%s secondmates=%s load1=%s cores=%s mem_free_pct=%s disk_free_mb=%s\n' \
     "$free_lanes" "$reason" "$lanes" "$target" "$secondmates" "$load1" "$cores" "$mem_free_pct" "$disk_free_mb"
@@ -572,6 +586,7 @@ if [ "$mode" = report ]; then
   mem_text="${mem_free_pct}%"; [ "$mem_free_pct" != unknown ] || mem_text=unknown
   disk_text="$disk_free_mb MB"; [ "$disk_free_mb" != unknown ] || disk_text=unknown
   echo "Host: load $load1 on $cores cores, memory free $mem_text, disk free $disk_text."
+  heavy_queue_line
   if [ -n "$pressure_files" ]; then
     why_text=$(printf '%s' "$why" | paste -sd ';' - | sed 's/;/; /g')
     echo "Pressure: $level from $basis${why_text:+ ($why_text)}."

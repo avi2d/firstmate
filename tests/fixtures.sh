@@ -411,14 +411,17 @@ EOF
 }
 
 # fm_test_make_spawn_fakebin <dir> [extra-exit0-tool...]
-# Creates <dir>/fakebin with the spawn tmux stub, a no-op treehouse, and any
-# extra exit-0 tools. Echoes the fakebin path.
+# Creates <dir>/fakebin with the spawn tmux stub, a no-op treehouse, an orc
+# whose every command fails, and any extra exit-0 tools. Echoes the fakebin path.
 fm_test_make_spawn_fakebin() {
   local dir=$1 fakebin
   shift
   fakebin=$(fm_fakebin "$dir")
   fm_test_fake_tmux_spawn "$fakebin"
   fm_fake_exit0 "$fakebin" treehouse claude codex opencode grok gemini "$@"
+  # A real orc would add a heavy queue to the developer's own pueue daemon.
+  printf '#!/bin/sh\nexit 1\n' > "$fakebin/orc"
+  chmod +x "$fakebin/orc"
   printf '%s\n' "$fakebin"
 }
 

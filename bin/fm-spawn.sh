@@ -3053,6 +3053,36 @@ shell_quote() {
   printf "'"
 }
 
+spawn_heavy_queue_path() {
+  local dir skip=
+  if [ "$BACKEND" = t3code ]; then
+    skip="T3 Code owns the worker's environment"
+  elif [ "$HARNESS" = cloud-claude ]; then
+    skip="the worker runs in the cloud"
+  # A sandboxed worker cannot reach pueue, so a stand-in it calls would fail
+  # instead of running the tool.
+  elif [ -n "${FM_SANDBOX_PROFILE:-}" ]; then
+    skip="the worker is sandboxed"
+  elif ! command -v orc >/dev/null 2>&1; then
+    skip="orc is not installed"
+  elif ! dir=$(fm_run_timed "${FM_HEAVY_PATH_TIMEOUT:-20}" orc heavy path </dev/null 2>/dev/null); then
+    skip="\`orc heavy path\` failed"
+  else
+    case "$dir" in
+      /*) ;;
+      *) dir= ;;
+    esac
+    case "$dir" in *:*|*$'\n'*) dir= ;; esac
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    skip="\`orc heavy path\` printed no folder"
+  fi
+  echo "note: $ID launches without the heavy queue on its PATH: $skip" >&2
+  return 1
+}
+
 resolve_pi_executable() {
   local candidate dir
   candidate=$(type -P -- "$1" 2>/dev/null) || return 1
@@ -8204,6 +8234,7 @@ esac
 # A home's worker account pin replaces that forwarding: the launch names the
 # pinned root (or unsets the variable for the ordinary Claude account) and
 # sheds the environment credentials Claude ranks above the root's login.
+FM_SANDBOX_PROFILE=
 if { [ "$HARNESS" = pi ] || [ "$HARNESS" = pi-signed ]; } && [ "$KIND" != secondmate ] && { [ "$KIND" = scout ] || [ "${MODE:-}" = no-mistakes ]; }; then
   if "$SCRIPT_DIR/fm-agent-sandbox.sh" enabled "$CONFIG"; then
     "$SCRIPT_DIR/fm-agent-sandbox.sh" check "$CONFIG" || exit 1
@@ -8493,6 +8524,11 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
     LAUNCH="unset TRACEPARENT; $LAUNCH"
   fi
 fi
+fi
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  if HEAVY_QUEUE_DIR=$(spawn_heavy_queue_path); then
+    LAUNCH="export PATH=$(shell_quote "$HEAVY_QUEUE_DIR")\":\$PATH\"; $LAUNCH"
+  fi
 fi
 if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH_ENV_PREFIX='/usr/bin/env -i'

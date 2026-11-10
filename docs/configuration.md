@@ -896,7 +896,7 @@ The file is a home-local site choice and is not inherited by secondmate homes; `
 ## Lane capacity (config/lane-capacity)
 
 The optional local, gitignored `config/lane-capacity` file says how many ship and scout lanes this home should run at once, and when it should stop taking more.
-`bin/fm-capacity.sh` reads it to report how many lanes are open for queued work, alongside running lanes, 1-minute load against logical cores, free memory, and free disk.
+`bin/fm-capacity.sh` reads it to report how many lanes are open for queued work, alongside running lanes, 1-minute load against logical cores, free memory, free disk, and, where orc is installed, the heavy queue's running and queued calls.
 With the file absent nothing changes: the report prints counts and host figures only, never invents a target, never advises holding dispatch, and nothing is published; a malformed value is reported as invalid rather than guessed.
 Persistent secondmates hold no lane.
 The file is a per-machine choice and is not inherited by secondmate homes, so each home owns its own numbers.
@@ -1946,6 +1946,14 @@ A repository whose config sets `core.hooksPath` to the empty string runs no proj
 The hooks directory is read-only, so a hook manager run inside a fleet pane (lefthook's npm postinstall, `pre-commit install`) fails instead of displacing the hooks; install a project's hooks from outside the pane, where the wrappers chain them.
 The flag is a home-wide attribution choice, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract and a secondmate's own workers keep AI trailers too.
 Per-machine Cursor `cli-config.json` attribution-off is not this contract: it does not travel with Firstmate, defaults back to on when unset, and only feeds the CLI's request to the server, so it suppresses the trailer rather than preventing it.
+
+## Heavy queue on the worker PATH
+
+When orc is installed, every ship and scout launch runs `orc heavy path` on the machine that hosts the worker and puts the folder it prints first on the worker's PATH, so the worker's test, build, and browser tools wait their turn in that machine's heavy queue.
+A worker on an execution home gets that host's own folder, because the launch runs there.
+When orc is missing, `orc heavy path` fails or runs past `FM_HEAVY_PATH_TIMEOUT` seconds, 20 by default, or the worker is sandboxed, on T3 Code, or in the cloud, the worker launches with its PATH unchanged and the spawn prints one note saying why.
+Secondmates are not changed.
+`bin/fm-capacity.sh` adds the machine's running and queued heavy calls to its report, read fresh from `orc heavy check --json` each time and never stored.
 
 ## Project capacity (config/project-capacity)
 
