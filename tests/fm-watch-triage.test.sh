@@ -2052,8 +2052,9 @@ test_actionable_signal_survives_a_later_routine_append() {
 # keyed decision is still open must cost the new span, not the log's lifetime.
 # Re-folding the whole log on every such signal made one poll take minutes on a
 # main home, so its liveness beacon aged past the guard's grace. Every read this
-# classification makes goes through the span-reader seam, so recording those
-# reads pins the bound independently of machine speed.
+# classification and the check sweep's open-set fold make goes through the
+# span-reader seam, so recording those reads pins the bound independently of
+# machine speed.
 test_keyed_decision_signal_reads_only_the_new_span() {
   local dir state fakebin out status_file reader reads sig prior appended i pid start length
   dir=$(make_case keyed-span-bound); state="$dir/state"; fakebin="$dir/fakebin"
@@ -2065,6 +2066,8 @@ test_keyed_decision_signal_reads_only_the_new_span() {
     printf 'needs-decision [key=q%s]: choose option %s\nresolved [key=q%s]: took the first option\n' "$i" "$i" "$i"
   done > "$status_file"
   sig=$(seen_sig "$status_file"); printf '%s' "$sig" > "$state/.seen-task_status"
+  # Any home that has run one check sweep already holds that sweep's fold of the history.
+  status_open_decisions_incremental "$status_file" '' timed >/dev/null
   prior=$(size_of "$status_file")
   printf 'needs-decision [key=fresh]: pick the rollout window\nworking: preparing both windows\n' >> "$status_file"
   appended=$(( $(size_of "$status_file") - prior ))
