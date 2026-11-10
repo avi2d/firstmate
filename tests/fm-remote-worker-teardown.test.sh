@@ -140,24 +140,23 @@ leftover=$(find "$HOME_DIR/state" -path "$HOME_DIR/state/status-archive" -prune 
 pass "a vacated remote worker leaves no state and raises no alarm"
 
 seed
-rm -f "$TMP_ROOT/alarms" "$TMP_ROOT/held" "$TMP_ROOT/release"
-(
-  # shellcheck source=bin/fm-wake-lib.sh
-  . "$ROOT/bin/fm-wake-lib.sh"
-  lock=$(fm_meta_lock_path "$HOME_DIR/state/w1.meta") && fm_lock_acquire_wait "$lock" || exit 1
-  : > "$TMP_ROOT/held"
+rm -f "$TMP_ROOT/alarms" "$TMP_ROOT/held" "$TMP_ROOT/release" "$TMP_ROOT/released"
+FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" bash -c '
+  . "$1/bin/fm-wake-lib.sh"
+  lock=$(fm_meta_lock_path "$FM_STATE_OVERRIDE/w1.meta") && fm_lock_acquire_wait "$lock" || exit 1
+  : > "$2/held"
   waited=0
-  while [ ! -e "$TMP_ROOT/release" ] && [ "$waited" -lt 400 ]; do waited=$((waited + 1)); sleep 0.05; done
-  fm_lock_release "$lock"
-) &
-HOLDER=$!
+  while [ ! -e "$2/release" ] && [ "$waited" -lt 400 ]; do waited=$((waited + 1)); sleep 0.05; done
+  fm_lock_release "$lock" && : > "$2/released"
+' _ "$ROOT" "$TMP_ROOT" &
 attempt=0
 while [ ! -e "$TMP_ROOT/held" ] && [ "$attempt" -lt 200 ]; do attempt=$((attempt + 1)); sleep 0.05; done
 [ -e "$TMP_ROOT/held" ] || fail "the record lock holder never started"
 sweep_stale_check
 [ ! -s "$TMP_ROOT/alarms" ] || fail "a record under teardown raised an endpoint alarm: $(cat "$TMP_ROOT/alarms")"
 : > "$TMP_ROOT/release"
-wait "$HOLDER"
+wait
+[ -e "$TMP_ROOT/released" ] || fail "the record lock holder did not release the lock"
 sweep_stale_check
 grep -F 'stale: remote:w1 (remote endpoint missing' "$TMP_ROOT/alarms" >/dev/null \
   || fail "a live record whose endpoint vanished no longer alarms"
