@@ -104,6 +104,8 @@ SH
 chmod +x "$FAKE/ssh"
 
 printf '%s\n' '- alpha [direct-PR host=exec-one] - project' > "$PARENT/data/projects.md"
+# The Herdr CI job installs no tasks-axi, and nothing here asserts the backlog.
+printf 'manual\n' > "$PARENT/config/backlog-backend"
 printf '%s\n' "- exec-one - execution (host: testhost; root: $REMOTE_ROOT; home: $EXEC_HOME; session: $HERDR_LAB_SESSION; scope: workers; projects: alpha; added 2026-01-01)" \
   > "$PARENT/data/remote-homes.md"
 
@@ -115,8 +117,6 @@ parent() {
 
 launch() {  # <task-id>
   local id=$1 out
-  parent "$ROOT/bin/fm-tasks-axi.sh" add "$id" 'Research alpha' --kind scout >/dev/null \
-    || fail "could not file backlog item $id"
   mkdir -p "$PARENT/data/$id"
   printf "# Task\n## Captain's intent\nResearch the project.\n\n## Firstmate spec\nReport evidence.\n" \
     > "$PARENT/data/$id/brief.md"
