@@ -24,6 +24,28 @@ green_rollup_finished_at() {  # <epoch>
 red_rollup='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-19T10:00:00Z"}]'
 pending_rollup='[{"__typename":"CheckRun","name":"ci","status":"IN_PROGRESS","conclusion":null,"startedAt":"2026-10-19T10:00:00Z"}]'
 
+passed_checks() {  # <name>...
+  jq -nc '$ARGS.positional | map({__typename: "CheckRun", name: ., status: "COMPLETED", conclusion: "SUCCESS",
+    startedAt: "2026-10-19T10:00:00Z", completedAt: "2026-10-19T10:01:00Z"})' --args "$@"
+}
+
+write_merged() {  # <case> <rollup-json>...
+  local c=$1 rollup
+  shift
+  for rollup in "$@"; do
+    printf '{"statusCheckRollup":%s}\n' "$rollup"
+  done | jq -sc . > "$c/merged.json"
+}
+
+write_incident_base_history() {  # <case>
+  local usual
+  usual=$(passed_checks checks commitlint deploy e2e pixel remove 'runner / hosted-minutes' 'runner / pick')
+  write_merged "$1" "$usual" "$usual" \
+    "$(passed_checks checks commitlint deploy e2e pixel remove runner 'runner / hosted-minutes' 'runner / pick' title)" \
+    "$(passed_checks checks deploy remove 'runner / hosted-minutes' 'runner / pick')" \
+    "$usual"
+}
+
 plain_diff() {
   printf '%s\n' 'diff --git a/README.md b/README.md' '--- a/README.md' '+++ b/README.md' '@@ -1 +1 @@' '-old' '+new'
 }
@@ -48,6 +70,7 @@ make_case() {  # <name> [registry-tokens] [task-yolo]
   plain_diff > "$c/diff.txt"
   printf '[]\n' > "$c/files.json"
   printf '0\n' > "$c/behind"
+  printf '[]\n' > "$c/merged.json"
   printf '%s\n' state=MERGED merged=true queued=false base=main > "$c/outcome"
   : > "$c/gh.log"
   cat > "$c/fakebin/gh" <<'SH'
@@ -70,6 +93,7 @@ case "${1:-} ${2:-}" in
       *) cat "$(pick_view "$@")" ;;
     esac
     ;;
+  "pr list") cat "$FM_TEST_CASE/merged.json" ;;
   "pr diff") cat "$FM_TEST_CASE/diff.txt" ;;
   "pr update-branch") printf 'updated\n' ;;
   "pr merge") printf 'merged\n' ;;
@@ -191,10 +215,65 @@ test_empty_check_list_merges_instead_of_waiting_forever() {
   local c
   c=$(make_case empty-rollup)
   write_view "$c" "$HEAD_A" '[]'
+  write_merged "$c" '[]' '[]' '[]' '[]' '[]'
   sweep "$c"
   sweep "$c"
-  [ "$(merge_calls "$c")" -eq 1 ] || fail "empty-rollup: a pull request with no checks and no required check never merged: $(cat "$c/gh.log")"
-  pass "a pull request with an empty check list merges when the base requires no check"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "empty-rollup: a pull request with no checks on a base whose merged pull requests carry none never merged: $(cat "$c/gh.log")"
+  pass "a pull request with an empty check list merges when none of the base's recent merged pull requests carried a check"
+}
+
+test_head_with_no_check_yet_is_not_merged_while_the_base_carries_checks() {
+  local c
+  c=$(make_case no-run-yet)
+  write_incident_base_history "$c"
+  write_view "$c" "$HEAD_A" '[]'
+  expect_stays_open "$c" wait "no check has reported" no-run-yet
+  pass "a head GitHub has created no workflow run for stays open while the base's merged pull requests carry checks"
+}
+
+test_head_reporting_only_its_first_workflow_is_not_merged_before_the_rest_report() {
+  local c
+  c=$(make_case first-workflow-only)
+  write_incident_base_history "$c"
+  write_view "$c" "$HEAD_A" "$(passed_checks 'runner / hosted-minutes' 'runner / pick' deploy)"
+  expect_stays_open "$c" wait "have not reported: checks, remove" first-workflow-only
+  write_view "$c" "$HEAD_A" "$(passed_checks checks commitlint deploy e2e pixel remove 'runner / hosted-minutes' 'runner / pick')"
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 1 ] || fail "first-workflow-only: the head did not merge once every expected check had reported: $(cat "$c/gh.log")"
+  pass "a head whose first workflow passed waits for the checks every recent merged pull request carried, then merges"
+}
+
+test_empty_check_list_is_not_merged_without_proof_the_base_expects_none() {
+  local c
+  c=$(make_case empty-no-history)
+  write_view "$c" "$HEAD_A" '[]'
+  expect_stays_open "$c" wait "no check has reported" empty-no-history
+  : > "$c/merged.json"
+  expect_stays_open "$c" wait "could not be read" empty-unreadable-history
+  pass "an empty check list stays open when the base has no merged pull request or its history is unreadable"
+}
+
+test_head_pushed_after_the_green_reading_is_not_merged_on_the_earlier_heads_checks() {
+  local c
+  c=$(make_case pushed-after-green)
+  mv "$c/fakebin/gh" "$c/fakebin/gh-fixture"
+  cat > "$c/fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+"$FM_TEST_CASE/fakebin/gh-fixture" "$@"
+case "$*" in
+  "api repos/"*/compare/*)
+    [ ! -f "$FM_TEST_CASE/view-pushed.json" ] || mv "$FM_TEST_CASE/view-pushed.json" "$FM_TEST_CASE/view.json"
+    ;;
+esac
+SH
+  chmod +x "$c/fakebin/gh"
+  write_view "$c" "$HEAD_B" '[]'
+  mv "$c/view.json" "$c/view-pushed.json"
+  write_view "$c" "$HEAD_A" "$green_rollup"
+  sweep "$c"
+  [ "$(merge_calls "$c")" -eq 0 ] || fail "pushed-after-green: a head pushed after the green reading was merged with no check of its own: $(cat "$c/gh.log")"
+  assert_grep "not the expected head $HEAD_A" "$c/state/merge-on-green.log" "pushed-after-green: the merge was not refused for the changed head"
+  pass "a head pushed between the green reading and the merge is refused instead of merged on the earlier head's checks"
 }
 
 test_draft_and_conflicting_stay_open() {
@@ -540,6 +619,10 @@ test_unsettled_green_waits
 test_red_pull_request_stays_open
 test_pending_checks_wait
 test_empty_check_list_merges_instead_of_waiting_forever
+test_head_with_no_check_yet_is_not_merged_while_the_base_carries_checks
+test_head_reporting_only_its_first_workflow_is_not_merged_before_the_rest_report
+test_empty_check_list_is_not_merged_without_proof_the_base_expects_none
+test_head_pushed_after_the_green_reading_is_not_merged_on_the_earlier_heads_checks
 test_draft_and_conflicting_stay_open
 test_yolo_must_be_on_in_the_registry_and_the_task
 test_captain_hold_and_open_decisions_stay_open

@@ -763,7 +763,10 @@ A pull request merges only when every one of these holds, each read by the progr
 
 - The task is a ship task recording `yolo=on`, and the project's registry entry still carries `+yolo`.
 - The pull request is on GitHub, open, and not a draft.
-- At least one check has reported, none is still running, and every one passed.
+- No check is still running, and every one that reported passed.
+- Every check the base expects has reported on this head.
+  The expected checks are the names carried by each of the base's last five merged pull requests that carried any check, so a head whose workflow runs GitHub has not created yet waits instead of reading as green.
+  A head with no check at all merges only when none of those five carried one, and waits when the base has no merged pull request or they cannot be read.
 - The task is not held for the captain and has no open `needs-decision` or `blocked` key.
 - The pull request carries no merge hold for the captain, recorded with `bin/fm-merge-hold.sh` against the pull request itself so it survives a task hold answer or release.
 - The pull request is the newest one the task's `done:` or `ready:` reports name.
@@ -783,6 +786,7 @@ A pull request merges only when every one of these holds, each read by the progr
   The default is 10 seconds.
 
 Every merge goes through `bin/fm-pr-merge.sh`, which re-verifies the live head, the captain hold, the per-pull-request merge hold, the away record, and every check before the forge call.
+It is given the head that read green, so a head pushed since then is refused instead of merged on the earlier head's checks.
 A head that is behind its base is first brought up to date with `gh pr update-branch`, which merges the base into the branch and never rebases, and merges once its new head is green.
 A refused merge or a failed update is retried at the same head only after `FM_MERGE_ON_GREEN_RETRY_SECS`, 300 seconds by default.
 A merge refused for security-sensitive paths instead holds the task for the captain once, and that head is never retried.
