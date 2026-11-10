@@ -206,6 +206,38 @@ worker_done_gate() {  # <id> <done line>
   fi
 }
 
+# Defers on every heavy-worker gate the host-local fm-spawn.sh applies, because
+# a deferral met only at launch arrives after the parent published its record.
+admit_heavy_gates() {  # <id>
+  local id=$1 config loadavg
+  # shellcheck source=bin/fm-secondmate-registry-lib.sh
+  . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$SCRIPT_DIR/fm-wake-lib.sh"
+  config=$(fm_project_capacity_config_dir "$TARGET_HOME" "$TARGET_HOME/config") || die "the root home that declares host limits cannot be resolved"
+  if fm_mac_load_gate_active; then
+    fm_mac_load_config "$config" || die "host load declaration is unreadable ($FM_MAC_LOAD_ERROR)"
+    fm_mac_heavy_count "$TARGET_HOME/state" "$id" || die "host task records cannot all be read to count heavy workers ($FM_MAC_LOAD_ERROR)"
+    if [ "$FM_MAC_HEAVY_COUNT" -ge "$FM_MAC_HEAVY_LIMIT" ]; then
+      printf 'defer: host already runs %s heavy worker(s) at its limit %s (%s)\n' "$FM_MAC_HEAVY_COUNT" "$FM_MAC_HEAVY_LIMIT" "$FM_MAC_HEAVY_IDS"
+      return "$FM_MAC_LOAD_DEFER_EXIT"
+    fi
+  fi
+  if fm_linux_load_gate_active "$config"; then
+    fm_linux_load_config "$config" || die "host load declaration is unreadable ($FM_LINUX_LOAD_ERROR)"
+    loadavg=$(fm_mac_loadavg_5min) || die "host five-minute load average cannot be read; refusing a heavy start rather than guessing it"
+    if fm_linux_load_high "$loadavg"; then
+      printf 'defer: host five-minute load average is %s (limit %s)\n' "$loadavg" "$FM_LINUX_LOAD_LIMIT"
+      return "$FM_LINUX_LOAD_DEFER_EXIT"
+    fi
+    fm_linux_heavy_count "$TARGET_HOME/state" "$id" "$config" || die "host task records cannot all be read to count heavy workers ($FM_LINUX_LOAD_ERROR)"
+    if [ "$FM_LINUX_HEAVY_COUNT" -ge "$FM_LINUX_HEAVY_LIMIT" ]; then
+      printf 'defer: host already runs %s heavy worker(s) at its limit %s (%s)\n' "$FM_LINUX_HEAVY_COUNT" "$FM_LINUX_HEAVY_LIMIT" "$FM_LINUX_HEAVY_IDS"
+      return "$FM_LINUX_LOAD_DEFER_EXIT"
+    fi
+  fi
+}
+
 worker_admit() {  # <id> <project>
   local id=$1 project=$2 config holders limit loadavg state meta kind pname sib
   local -a states
@@ -256,6 +288,7 @@ worker_admit() {  # <id> <project>
     printf 'defer: host five-minute load average is %s (limit %s)\n' "$loadavg" "$FM_MAC_LOAD_LIMIT"
     return "$FM_MAC_LOAD_DEFER_EXIT"
   fi
+  admit_heavy_gates "$id" || return $?
   printf 'admit project=%s holders=%s load=%s\n' "$project" "${holders}${limit:+/$limit}" "$loadavg"
 }
 
@@ -282,7 +315,7 @@ claude_account_check() {  # <harness> <model|-> <account>
 launch() {
   local id=$1 project=$2 kind=$3 mode=$4 yolo=$5 prefix=$6 base=$7 harness=$8 model=$9
   shift 9
-  local effort=$1 backend=$2 account=${3:-} temp session out contract token forge=none shape='' pr=auto
+  local effort=$1 backend=$2 account=${3:-} temp session out rc contract token forge=none shape='' pr=auto data_existed=0
   local -a brief_args spawn_args contract_fields
   validate_home
   case "$id" in ''|.|-*|*[!A-Za-z0-9._-]*|*..*) die "invalid task or project id" ;; esac
@@ -324,6 +357,7 @@ launch() {
   [ "$model" = - ] || spawn_args+=(--model "$model")
   [ "$effort" = - ] || spawn_args+=(--effort "$effort")
   [ -z "$account" ] || spawn_args+=(--claude-account "$account")
+  [ ! -e "$TARGET_HOME/data/$id" ] && [ ! -L "$TARGET_HOME/data/$id" ] || data_existed=1
   FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-brief.sh" "${brief_args[@]}" >&2 || die "host-local scaffold failed"
   awk -v intent="$temp/intent" -v spec="$temp/spec" '
     $0 == "{TASK}" { while ((getline line < intent) > 0) print line; close(intent); next }
@@ -335,8 +369,18 @@ launch() {
     FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-dispatch-resolve.sh" "$TARGET_HOME/data/$id/brief.md" --project "$project" >/dev/null || die "host-local dispatch resolution failed"
   fi
   session=$(execution_session)
-  if ! out=$(FM_HOME="$TARGET_HOME" HERDR_SESSION="$session" "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" 2>&1); then
+  rc=0
+  out=$(FM_HOME="$TARGET_HOME" HERDR_SESSION="$session" "$SCRIPT_DIR/fm-spawn.sh" "${spawn_args[@]}" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out" >&2
+    if [ "$rc" -eq 75 ]; then
+      if [ "$data_existed" -eq 1 ]; then
+        rm -f -- "$TARGET_HOME/data/$id/brief.md" "$TARGET_HOME/data/$id/dispatch-resolution.json"
+      else
+        rm -rf -- "${TARGET_HOME:?}/data/$id"
+      fi
+      exit 75
+    fi
     die "host-local worker launch failed"
   fi
   route "$id"

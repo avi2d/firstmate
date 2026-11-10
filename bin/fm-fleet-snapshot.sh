@@ -609,6 +609,25 @@ snapshot_capture_optional() {  # <source> <destination>
   return 1
 }
 
+# The cursor and identity kept beside the copy are what
+# status_open_decisions_from_cursor requires: identity held across the copy.
+snapshot_capture_status() {  # <id>
+  local id=$1 live capture before after
+  live="$STATE/$id.status"
+  capture="$SNAPSHOT_TASK_DIR/$id.status"
+  before=$(_fm_open_decisions_file_ident "$live" 2>/dev/null) || before=''
+  snapshot_capture_optional "$live" "$capture" || return 1
+  [ -n "$before" ] && [ -f "$capture" ] || return 0
+  after=$(_fm_open_decisions_file_ident "$live" 2>/dev/null) || return 0
+  [ "$after" = "$before" ] || return 0
+  if snapshot_capture_optional "$(_fm_open_decisions_cursor_path "$live")" "$SNAPSHOT_TASK_DIR/$id.cursor" 2>/dev/null; then
+    printf '%s\n' "$before" > "$SNAPSHOT_TASK_DIR/$id.ident" || rm -f -- "$SNAPSHOT_TASK_DIR/$id.ident"
+  else
+    rm -f -- "$SNAPSHOT_TASK_DIR/$id.cursor"
+  fi
+  return 0
+}
+
 snapshot_mark_optional_present() {  # <source> <destination>
   local source=$1 destination=$2
   [ -f "$source" ] || return 0
@@ -634,19 +653,18 @@ snapshot_task_generation_is_current() {  # <captured-meta> <id>
 
 prefetch_task_observations() {  # <meta> <id>
   local meta=$1 id=$2 remote_host current_file endpoint_file current_pid='' current_rc=0
-  local status_log status_capture report_path report_capture
+  local status_capture report_path report_capture
   local kind backend target endpoint_exists=null agent_alive=not_checked generation_current=1
   remote_host=$(meta_value "$meta" remote_host)
   current_file="$SNAPSHOT_TASK_DIR/$id.json"
   endpoint_file="$SNAPSHOT_TASK_DIR/$id.endpoint"
-  status_log="$STATE/$id.status"
   status_capture="$SNAPSHOT_TASK_DIR/$id.status"
   report_path="$DATA/$id/report.md"
   report_capture="$SNAPSHOT_TASK_DIR/$id.report"
 
   snapshot_task_generation_is_current "$meta" "$id" || generation_current=0
   if [ "$generation_current" = 1 ]; then
-    snapshot_capture_optional "$status_log" "$status_capture" || current_rc=1
+    snapshot_capture_status "$id" || current_rc=1
     snapshot_mark_optional_present "$report_path" "$report_capture" || current_rc=1
   fi
 
@@ -680,7 +698,7 @@ prefetch_task_observations() {  # <meta> <id>
   # All mutable observations must belong to the metadata generation captured in
   # the manifest. If teardown/relaunch raced any read, discard the whole sample.
   if ! snapshot_task_generation_is_current "$meta" "$id"; then
-    rm -f -- "$status_capture" "$report_capture"
+    rm -f -- "$status_capture" "$report_capture" "$SNAPSHOT_TASK_DIR/$id.cursor" "$SNAPSHOT_TASK_DIR/$id.ident"
     jq -n '{state:"unknown",source:"none",detail:"task generation changed during snapshot",raw:""}' \
       > "$current_file" || current_rc=1
     endpoint_exists=null
@@ -749,7 +767,7 @@ task_json_lines() {
   local remote_host remote_root current_file endpoint_file observation_line index=0
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local last_event_raw current_state current_source pending_decision blocked_event report_present=0 pr_from_status
-  local open_decisions_tsv open_decisions_json
+  local open_decisions_tsv open_decisions_json status_ident
 
   while [ "$index" -lt "$SNAPSHOT_TASK_META_COUNT" ]; do
     meta=${SNAPSHOT_TASK_METAS[index]}
@@ -819,7 +837,9 @@ task_json_lines() {
     # never clear another concern's keyed decision. A parked/blocked state, or a
     # non-authoritative status-log/none read on a still-live task, keeps the fold's
     # open decision surfacing.
-    open_decisions_tsv=$(status_open_decisions "$status_log" "$kind")
+    status_ident=''
+    [ -f "$SNAPSHOT_TASK_DIR/$id.ident" ] && IFS= read -r status_ident < "$SNAPSHOT_TASK_DIR/$id.ident"
+    open_decisions_tsv=$(status_open_decisions_from_cursor "$status_log" "$kind" "$SNAPSHOT_TASK_DIR/$id.cursor" "$status_ident")
     if [ "$kind" != secondmate ] && \
        { { { [ "$current_source" = run-step ] || [ "$current_source" = pane ]; } \
            && [ "$current_state" != parked ] && [ "$current_state" != blocked ]; } \
