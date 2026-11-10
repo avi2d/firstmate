@@ -64,7 +64,7 @@ While a staged set exists, a reclaim that names a different set is refused.
 | Exit | Meaning | What to do |
 | --- | --- | --- |
 | 0 | The host finished the command | Nothing |
-| 75 | The host deferred an admit because it is at capacity | Leave the item queued |
+| 75 | The host deferred the launch because it is at capacity, and nothing was published on either side | Leave the item queued |
 | 124 | The local budget expired, so the host's completion is unknown | Rerun the same command to reconcile |
 | 255 | The transport was unavailable, so the host's completion is unknown | Rerun the same command to reconcile, never a different one |
 

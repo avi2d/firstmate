@@ -1755,7 +1755,7 @@ spawn_remote_secondmate() {
 
 spawn_remote_worker() {
   local route=$1 project=$2 host=$3 root home session harness backend brief meta tmp out rc target remote_kind remote_harness remote_session worktree remote_project
-  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen remote_account
+  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 started_row=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen remote_account
   local -a contract_fields launch_args
   [ "${#POS[@]}" -eq 2 ] || { echo "error: remote workers require one project argument" >&2; return 1; }
   case "$project" in ''|*[!A-Za-z0-9._-]*|*..*) echo "error: invalid remote project name" >&2; return 1 ;; esac
@@ -1829,6 +1829,7 @@ spawn_remote_worker() {
       echo "error: task $ID has no dispatchable backlog item" >&2
       return 1
     fi
+    [ "$FM_BACKLOG_ROW_STATE" != 'queued no no' ] || started_row=1
   else
     rc=$?
     [ "$rc" -ne 2 ] || { echo "error: backlog is inaccessible: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
@@ -1888,6 +1889,19 @@ spawn_remote_worker() {
   launch_args=("$ID" "$project" "$KIND" "$mode_arg" "$yolo_arg" "$BRANCH_PREFIX" "$base_arg" "$harness" "$model_arg" "$effort_arg" "$backend")
   [ -z "$CLAUDE_ACCOUNT" ] || launch_args+=("$CLAUDE_ACCOUNT")
   out=$("$SCRIPT_DIR/fm-on.sh" --stdin "$route" fm-remote-worker-control.sh launch "${launch_args[@]}" < "$brief" 2>&1) || rc=$?
+  if [ "$rc" -eq 75 ]; then
+    printf '%s\n' "$out" >&2
+    if ! fm_backlog_atomic_transition remove "$meta" "task record" "$STATE"; then
+      echo "error: remote launch deferred for task $ID, but its pending task record could not be removed ($FM_BACKLOG_TRANSITION_ERROR)" >&2
+      return 1
+    fi
+    if [ "$started_row" -eq 1 ] && ! fm_backlog_mutate "$DATA" reopen "$ID"; then
+      echo "error: remote launch deferred for task $ID, but its backlog item could not return to Queued ($FM_BACKLOG_TRANSITION_ERROR); it can be dispatched again as it stands" >&2
+      return 1
+    fi
+    echo "error: remote launch deferred for task $ID; its backlog item stays queued - dispatch it again once the host has room" >&2
+    return 75
+  fi
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out" >&2
     echo "error: remote launch outcome is unconfirmed; task record and backlog are preserved" >&2
@@ -2416,7 +2430,7 @@ spawn_herdr_rebind_journal_retire() {  # <session>
 # the ordinary flat layout must be used instead. A hard failure exits.
 # Expects HERDR_LABEL_HOME, HERDR_PARENT_LABEL and HERDR_PRESENTATION_JOURNAL.
 spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
-  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace projection_id projection_label home_id order_key
+  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace header_cwd execution_home projection_id projection_label home_id order_key
   if ! fm_backend_herdr_server_ensure "$session"; then
     echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
     return 0
@@ -2445,7 +2459,22 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
   set -e
   case "$launcher_status" in
   0) parent_workspace=$FM_BACKEND_HERDR_LAUNCHER_WORKSPACE_ID ;;
-  2) parent_workspace=$(fm_backend_herdr_workspace_ensure "$session" "$cwd" || true) ;;
+  2)
+    parent_workspace=
+    execution_home=0
+    if [ -f "$FM_HOME/.fm-exec-home" ] && [ ! -L "$FM_HOME/.fm-exec-home" ]; then
+      execution_home=1
+    fi
+    header_cwd=$cwd
+    [ "$execution_home" = 0 ] || header_cwd=$FM_HOME
+    if fm_backend_herdr_workspace_ensure "$session" "$header_cwd" >/dev/null; then
+      parent_workspace=$FM_BACKEND_HERDR_WS_ID
+      if [ "$execution_home" = 1 ] && [ -n "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID" ] &&
+        ! fm_backend_herdr_home_header_record "$STATE" "$session" "$parent_workspace" "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID"; then
+        echo "warning: herdr could not record the home workspace it created; it will stay after its last worker is cleaned up" >&2
+      fi
+    fi
+    ;;
   *)
     spawn_herdr_presentation_order_lock_release
     exit 1
