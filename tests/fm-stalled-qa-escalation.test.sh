@@ -64,6 +64,26 @@ test_scan_quiet_after_answer() {
   pass "an answered question stays quiet"
 }
 
+test_scan_unchanged_log_is_not_folded_again() {
+  local dir state probe items appended
+  dir=$(make_case stalled-unchanged); state="$dir/state"; probe="$dir/fold-probe"
+  printf 'working: setup\nneeds-decision [at=%s] [key=q1]: pick A or B\n' "$(hour_ago)" > "$state/t.status"
+  items=$(FM_OPEN_DECISIONS_READ_PROBE="$probe" scan_stalled_qa "$state") || fail "the first scan failed"
+  [ "$(cut -f2 "$probe")" = "$(wc -c < "$state/t.status" | tr -d ' ')" ] \
+    || fail "the first scan did not fold the whole log once: $(cat "$probe")"
+  : > "$probe"
+  items=$(FM_OPEN_DECISIONS_READ_PROBE="$probe" scan_stalled_qa "$state") || fail "the second scan failed"
+  [ ! -s "$probe" ] || fail "a log with no new line was folded again: $(cat "$probe")"
+  assert_contains "$items" "q1" "the open question was lost when its log was not folded again"
+  appended='resolved [key=q1]: answered: took A'
+  printf '%s\n' "$appended" >> "$state/t.status"
+  items=$(FM_OPEN_DECISIONS_READ_PROBE="$probe" scan_stalled_qa "$state") || fail "the scan after an append failed"
+  [ "$(cut -f2 "$probe")" = "$(( ${#appended} + 1 ))" ] \
+    || fail "the scan after an append folded more than the appended line: $(cat "$probe")"
+  [ -z "$items" ] || fail "a question answered by an appended line was still reported: $items"
+  pass "a scan folds only the lines appended since the last one"
+}
+
 test_scan_reports_undelivered_answer() {
   local dir state items old
   dir=$(make_case stalled-undelivered); state="$dir/state"
@@ -185,6 +205,7 @@ test_scan_ignores_foreign_state_files() {
 test_scan_reports_old_unanswered_question
 test_scan_quiet_for_fresh_question
 test_scan_quiet_after_answer
+test_scan_unchanged_log_is_not_folded_again
 test_scan_reports_undelivered_answer
 test_scan_quiet_while_ladder_has_budget
 test_scan_quiet_for_acked_and_forgetful_records

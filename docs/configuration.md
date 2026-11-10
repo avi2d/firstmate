@@ -1761,6 +1761,7 @@ A Claude worker on a mapped directory reads that directory's settings, memory, a
 `fm-spawn.sh --claude-account <name>` refuses before any worker endpoint, local copy, or task record exists unless the map declares the account, an `ordinary` account is the active clauth profile, and `claude auth status` says its login is signed in.
 That check runs with the same cleared environment as the worker account pin check.
 The spawn prints and records `claude_account=<name>`.
+A ship or scout for a project placed on an [execution home](remote-workers.md) runs that check on the host, against the host's own `config/claude-accounts`, and refuses before this home records the task when the host does not map the account or runs code too old to apply it.
 Once the map declares an account, a ship or scout spawn or relaunch on a Pi `claude-bridge/<id>` model that names no account refuses before any of those exist, or before the running worker stops, and names `--claude-account` and the declared accounts.
 Without an account the bridge would run on the terminal's ambient Claude login, which clauth folder attach signs out, so the worker would stop at its first turn.
 A secondmate agent without a [declared account](#choose-the-secondmate-harness), a raw launch command, and a home with no declared account still launch without an account.

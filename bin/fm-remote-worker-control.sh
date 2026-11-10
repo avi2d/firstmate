@@ -16,6 +16,8 @@ TARGET_HOME=${FM_HOME:?FM_HOME is required}
 . "$SCRIPT_DIR/fm-mac-load-lib.sh"
 # shellcheck source=bin/fm-project-capacity-lib.sh
 . "$SCRIPT_DIR/fm-project-capacity-lib.sh"
+# shellcheck source=bin/fm-worker-account-lib.sh
+. "$SCRIPT_DIR/fm-worker-account-lib.sh"
 # bin/fm-task-inbox-lib.sh creates $FM_HOME/state when sourced, so the two
 # verbs that write steering records source it lazily only after the worker
 # record they write beside is proven to exist.
@@ -262,16 +264,25 @@ route() {
   validate_home
   endpoint "$id"
   printf 'schema=fm-remote-worker-control.v1\nbackend=%s\ntarget=%s\n' "$FM_BACKEND_VALIDATED_BACKEND" "$FM_BACKEND_VALIDATED_TARGET"
-  for key in kind harness model effort worktree project herdr_session; do
+  for key in kind harness model effort claude_account worktree project herdr_session; do
     value=$(fm_meta_get "$meta" "$key")
     [ -z "$value" ] || printf '%s=%s\n' "$key" "$value"
   done
 }
 
+# Mutates nothing, so the parent asks before it publishes a task record.
+claude_account_check() {  # <harness> <model|-> <account>
+  local harness=$1 model=$2 account=$3
+  validate_home
+  [ "$model" != - ] || model=
+  fm_claude_account_select "$harness" "$TARGET_HOME/config" "$model" "$account" >/dev/null || exit 1
+  printf 'claude_account=%s\n' "$account"
+}
+
 launch() {
   local id=$1 project=$2 kind=$3 mode=$4 yolo=$5 prefix=$6 base=$7 harness=$8 model=$9
   shift 9
-  local effort=$1 backend=$2 temp session out contract token forge=none shape='' pr=auto
+  local effort=$1 backend=$2 account=${3:-} temp session out contract token forge=none shape='' pr=auto
   local -a brief_args spawn_args contract_fields
   validate_home
   case "$id" in ''|.|-*|*[!A-Za-z0-9._-]*|*..*) die "invalid task or project id" ;; esac
@@ -312,6 +323,7 @@ launch() {
   spawn_args+=(--harness "$harness" --backend "$backend" --dispatch-override 'selected by the parent home')
   [ "$model" = - ] || spawn_args+=(--model "$model")
   [ "$effort" = - ] || spawn_args+=(--effort "$effort")
+  [ -z "$account" ] || spawn_args+=(--claude-account "$account")
   FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-brief.sh" "${brief_args[@]}" >&2 || die "host-local scaffold failed"
   awk -v intent="$temp/intent" -v spec="$temp/spec" '
     $0 == "{TASK}" { while ((getline line < intent) > 0) print line; close(intent); next }
@@ -359,9 +371,13 @@ case "${1:-}" in
     fm_backend_capture "$FM_BACKEND_VALIDATED_BACKEND" "$FM_BACKEND_VALIDATED_TARGET" "$lines" "fm-$2" | head -c 65536
     ;;
   launch)
-    [ "$#" -eq 12 ] || die "launch requires task, project, delivery and runtime arguments"
+    [ "$#" -eq 12 ] || [ "$#" -eq 13 ] || die "launch requires task, project, delivery and runtime arguments"
     shift
     launch "$@"
+    ;;
+  claude-account-check)
+    [ "$#" -eq 4 ] || die "claude-account-check requires a harness, model and account"
+    claude_account_check "$2" "$3" "$4"
     ;;
   send-stdin)
     [ "$#" -ge 2 ] && [ "$#" -le 3 ] || die "send-stdin requires a task id and optional delivery mode"

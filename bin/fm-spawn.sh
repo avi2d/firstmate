@@ -1755,12 +1755,12 @@ spawn_remote_secondmate() {
 
 spawn_remote_worker() {
   local route=$1 project=$2 host=$3 root home session harness backend brief meta tmp out rc target remote_kind remote_harness remote_session worktree remote_project
-  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen
-  local -a contract_fields
+  local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen remote_account
+  local -a contract_fields launch_args
   [ "${#POS[@]}" -eq 2 ] || { echo "error: remote workers require one project argument" >&2; return 1; }
   case "$project" in ''|*[!A-Za-z0-9._-]*|*..*) echo "error: invalid remote project name" >&2; return 1 ;; esac
   [ "$KIND" != ship ] || [ "$MODE" != local-only ] || { echo "error: local-only work cannot run remotely" >&2; return 1; }
-  if [ "$CLAUDE_ACCOUNT_SET" -eq 1 ] || [ "$HERMES_PROFILE_SET" -eq 1 ] || [ "$UPSTREAM_CONSENT_SET" -eq 1 ] || [ "$QUOTA_OVERRIDE_SET" -eq 1 ] || [ "$WEIGHT_SET" -eq 1 ]; then
+  if [ "$HERMES_PROFILE_SET" -eq 1 ] || [ "$UPSTREAM_CONSENT_SET" -eq 1 ] || [ "$QUOTA_OVERRIDE_SET" -eq 1 ] || [ "$WEIGHT_SET" -eq 1 ]; then
     echo "error: selected launch flags are not supported for remote workers" >&2
     return 1
   fi
@@ -1783,9 +1783,9 @@ spawn_remote_worker() {
   if fm_brief_intent_address_line "$brief" >/dev/null; then echo "error: remote worker intent has a direct address" >&2; return 1; fi
   if [ -f "$CONFIG/crew-dispatch.json" ]; then
     [ -f "$DATA/$ID/dispatch-resolution.json" ] || { echo "error: remote worker requires dispatch resolution" >&2; return 1; }
-    if ! jq -e --arg id "$ID" --arg h "$harness" --arg m "$MODEL" --arg e "$EFFORT" --arg override "$DISPATCH_OVERRIDE" '
+    if ! jq -e --arg id "$ID" --arg h "$harness" --arg m "$MODEL" --arg e "$EFFORT" --arg a "$CLAUDE_ACCOUNT" --arg override "$DISPATCH_OVERRIDE" '
       .task == $id and (.status | IN("clear","ambiguous","escalate","error","off")) and
-      (if .status == "clear" and $override == "" then .profile.harness == $h and ((.profile.model // "") == "" or .profile.model == $m) and ((.profile.effort // "") == "" or .profile.effort == $e) else true end)
+      (if .status == "clear" and $override == "" then .profile.harness == $h and ((.profile.model // "") == "" or .profile.model == $m) and ((.profile.effort // "") == "" or .profile.effort == $e) and ((.profile.claude_account // "") == "" or .profile.claude_account == $a) else true end)
     ' "$DATA/$ID/dispatch-resolution.json" >/dev/null 2>&1; then
       echo "error: remote worker dispatch selection is invalid or does not match" >&2
       return 1
@@ -1835,6 +1835,18 @@ spawn_remote_worker() {
   fi
   out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh capabilities </dev/null) || return $?
   [ "$out" = fm-remote-worker-control.v2 ] || { echo "error: remote worker protocol v2 is unavailable (the remote code root is older than this home; update that host before dispatching workers to it)" >&2; return 1; }
+  if [ -n "$CLAUDE_ACCOUNT" ]; then
+    rc=0
+    out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh claude-account-check "$harness" "$model_arg" "$CLAUDE_ACCOUNT" </dev/null 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf '%s\n' "$out" >&2
+      case "$out" in
+        *'unknown remote worker command'*) echo "error: remote launch refused for task $ID: the host's code root is older than this home and cannot apply --claude-account $CLAUDE_ACCOUNT; update that host before dispatching to it, and nothing was published" >&2; return 1 ;;
+      esac
+      echo "error: remote launch refused for task $ID: the host cannot launch on Claude account $CLAUDE_ACCOUNT, and nothing was published" >&2
+      return 1
+    fi
+  fi
   rc=0
   out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh admit "$ID" "$project" </dev/null 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -1863,6 +1875,7 @@ spawn_remote_worker() {
     fi
     [ -z "$BASE_BRANCH" ] || printf 'base_branch=%s\n' "$BASE_BRANCH"
     [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+    [ -z "$CLAUDE_ACCOUNT" ] || printf 'claude_account=%s\n' "$CLAUDE_ACCOUNT"
     printf 'remote_host=%s\nremote_route=%s\nremote_root=%s\nremote_backend=%s\nremote_target=pending\n' "$host" "$route" "$root" "$backend"
   } > "$tmp"
   fm_backlog_atomic_transition publish "$tmp" "$meta" "task record" "$STATE" || { echo "error: cannot publish remote task record: $FM_BACKLOG_TRANSITION_ERROR" >&2; return 1; }
@@ -1872,7 +1885,9 @@ spawn_remote_worker() {
     return 1
   fi
   rc=0
-  out=$("$SCRIPT_DIR/fm-on.sh" --stdin "$route" fm-remote-worker-control.sh launch "$ID" "$project" "$KIND" "$mode_arg" "$yolo_arg" "$BRANCH_PREFIX" "$base_arg" "$harness" "$model_arg" "$effort_arg" "$backend" < "$brief" 2>&1) || rc=$?
+  launch_args=("$ID" "$project" "$KIND" "$mode_arg" "$yolo_arg" "$BRANCH_PREFIX" "$base_arg" "$harness" "$model_arg" "$effort_arg" "$backend")
+  [ -z "$CLAUDE_ACCOUNT" ] || launch_args+=("$CLAUDE_ACCOUNT")
+  out=$("$SCRIPT_DIR/fm-on.sh" --stdin "$route" fm-remote-worker-control.sh launch "${launch_args[@]}" < "$brief" 2>&1) || rc=$?
   if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$out" >&2
     echo "error: remote launch outcome is unconfirmed; task record and backlog are preserved" >&2
@@ -1884,8 +1899,9 @@ spawn_remote_worker() {
   remote_harness=$(printf '%s\n' "$out" | sed -n 's/^harness=//p')
   worktree=$(printf '%s\n' "$out" | sed -n 's/^worktree=//p')
   remote_project=$(printf '%s\n' "$out" | sed -n 's/^project=//p')
+  remote_account=$(printf '%s\n' "$out" | sed -n 's/^claude_account=//p')
   case "$target" in "$session":?*) ;; *) echo "error: remote launch returned an invalid target; record preserved" >&2; return 1 ;; esac
-  [ "$remote_session" = "$session" ] && [ "$remote_kind" = "$KIND" ] && [ "$remote_harness" = "$harness" ] || { echo "error: remote launch returned inconsistent identity; record preserved" >&2; return 1; }
+  [ "$remote_session" = "$session" ] && [ "$remote_kind" = "$KIND" ] && [ "$remote_harness" = "$harness" ] && [ "$remote_account" = "$CLAUDE_ACCOUNT" ] || { echo "error: remote launch returned inconsistent identity; record preserved" >&2; return 1; }
   case "$worktree:$remote_project" in /*:/*) ;; *) echo "error: remote launch returned invalid project paths; record preserved" >&2; return 1 ;; esac
   {
     printf 'window=remote:%s\nendpoint_task_id=%s\nworktree=%s\nproject=%s\n' "$ID" "$ID" "$worktree" "$remote_project"
@@ -1896,6 +1912,7 @@ spawn_remote_worker() {
     fi
     [ -z "$BASE_BRANCH" ] || printf 'base_branch=%s\n' "$BASE_BRANCH"
     [ -z "$DISPATCH_OVERRIDE" ] || printf 'dispatch_override=%s\n' "$DISPATCH_OVERRIDE"
+    [ -z "$CLAUDE_ACCOUNT" ] || printf 'claude_account=%s\n' "$CLAUDE_ACCOUNT"
     printf 'remote_host=%s\nremote_route=%s\nremote_root=%s\nremote_backend=%s\nremote_target=%s\nremote_herdr_session=%s\n' "$host" "$route" "$root" "$backend" "$target" "$session"
   } > "$tmp"
   if ! fm_backend_validate_task_endpoint "$tmp" "$ID"; then
@@ -1909,7 +1926,7 @@ spawn_remote_worker() {
     echo "error: remote worker $ID launched, but its status feed could not be armed; endpoint metadata is preserved" >&2
     return 1
   fi
-  printf 'spawned %s kind=%s window=remote:%s remote=%s\n' "$ID" "$KIND" "$ID" "$host"
+  printf 'spawned %s kind=%s window=remote:%s remote=%s%s\n' "$ID" "$KIND" "$ID" "$host" "${CLAUDE_ACCOUNT:+ claude_account=$CLAUDE_ACCOUNT}"
 }
 
 BACKEND=

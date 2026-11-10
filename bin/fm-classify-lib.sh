@@ -961,13 +961,36 @@ EOF
 # recovery and a fire-and-forget retry ring consult this set and leave a task
 # alone while it is non-empty.
 status_own_open_decisions() {  # <status-file>
+  status_open_decisions "$1" | _fm_open_set_own_rows
+}
+
+_fm_open_set_own_rows() {  # stdin: a folded open set
   local line prefix
-  status_open_decisions "$1" | while IFS= read -r line || [ -n "$line" ]; do
+  while IFS= read -r line || [ -n "$line" ]; do
     for prefix in ${FM_CLASSIFY_RESERVED_KEY_PREFIXES:-$FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT} remote-reply-continuity- captain-hold-; do
       case "$line" in "$prefix"*) continue 2 ;; esac
     done
     printf '%s\n' "$line"
   done
+}
+
+# The rows status_own_open_decisions prints, folding only the bytes appended
+# since the last call. It reads the timed cursor because the untimed one seeds
+# the drain's presentation offset.
+status_own_open_decisions_incremental() {  # <status-file>
+  local open line key rest verb
+  if ! open=$(status_open_decisions_incremental "$1" '' timed); then
+    status_own_open_decisions "$1"
+    return
+  fi
+  [ -n "$open" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    key=${line%%$'\t'*}; rest=${line#*$'\t'}
+    verb=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    printf '%s\t%s\t%s\n' "$key" "$verb" "${rest#*$'\t'}"
+  done <<EOF | _fm_open_set_own_rows
+$open
+EOF
 }
 
 # 0 when the fold above still holds at least one decision OPENED by
@@ -1186,7 +1209,7 @@ status_decision_opened_epoch() {  # <status-file> <key> -> epoch of the latest o
   local line verb key epoch latest=
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*) continue ;; esac
-    verb=$(status_line_verb "$line") || continue
+    status_line_verb "$line" verb
     case "$verb" in needs-decision|blocked) ;; *) continue ;; esac
     key=$(_fm_decision_key "$line") || continue
     [ "$key" = "$2" ] || continue
@@ -1217,7 +1240,7 @@ stalled_qa_sweep_markers() {  # <state> -> drop markers whose episode ended
       prefix=".stalled-q-$task--"
       case "$name" in "$prefix"*)
         key=${name#"$prefix"}
-        open=$(status_own_open_decisions "$f") || open=
+        open=$(status_own_open_decisions_incremental "$f") || open=
         while IFS=$(printf '\t') read -r okey overb line; do
           [ "$okey" = "$key" ] || continue
           case "$overb" in needs-decision|blocked) found=0 ;; esac
@@ -1264,7 +1287,7 @@ scan_stalled_qa() {  # <state> [now] -> one TAB-separated line per stall due for
     [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || continue
     [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task=${task%.status}
-    open=$(status_own_open_decisions "$f") || continue
+    open=$(status_own_open_decisions_incremental "$f") || continue
     [ -n "$open" ] || continue
     while IFS=$(printf '\t') read -r key verb note; do
       [ -n "$key" ] || continue
@@ -1423,7 +1446,7 @@ scan_wait_declarations() {  # <state> [now] -> one TAB-separated line per wait t
       _fm_wait_declaration_item "$marker" "$task" "$paused" \
         "$(status_line_note "$line")" "$line" "$now"
     fi
-    open=$(status_own_open_decisions "$f") || open=
+    open=$(status_own_open_decisions_incremental "$f") || open=
     while IFS=$'\t' read -r key verb note; do
       [ "$verb" = blocked ] || continue
       opened=$(status_decision_opened_epoch "$f" "$key") || opened=
