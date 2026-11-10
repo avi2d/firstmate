@@ -500,6 +500,26 @@ stop_watcher() {  # <home>
   FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" "$ROOT/bin/fm-watch-arm.sh" --stop >/dev/null 2>&1 || true
 }
 
+test_heavy_queue_depth_is_read_fresh_not_reported_without_orc() {
+  local home fakebin out
+  home=$(make_home heavy 1 0)
+  fakebin=$(make_probes "$TMP_ROOT/p-heavy" 0.50 60 8 20971520)
+  out=$(run_capacity "$home" "$fakebin")
+  assert_not_contains "$out" "Heavy queue" "a host without orc must print no heavy-queue line"
+  cat > "$fakebin/orc" <<'SH'
+#!/usr/bin/env bash
+[ "$*" = "heavy check --json" ] || exit 2
+echo '{"group":"heavy","parallel":1,"running":[{"id":7,"command":"bun test","ageMinutes":2}],"queued":[{"id":8,"command":"bun test a","ageMinutes":1},{"id":9,"command":"go test ./...","ageMinutes":0}],"bypass":0}'
+SH
+  chmod +x "$fakebin/orc"
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" "Heavy queue: 1 running, 2 queued." "the report must count running and queued heavy calls"
+  printf '#!/usr/bin/env bash\necho "the heavy group is missing" >&2\nexit 1\n' > "$fakebin/orc"
+  out=$(run_capacity "$home" "$fakebin")
+  assert_contains "$out" "Heavy queue: unreadable." "a failing check must read as unreadable, not as an empty queue"
+  pass "the report shows this host's heavy queue depth from a fresh orc check"
+}
+
 test_watcher_publishes_only_when_opted_in() {
   local on off i
   on=$(make_home watch-on 1 0)
@@ -526,6 +546,7 @@ test_watcher_publishes_only_when_opted_in() {
 
 test_no_target_prints_counts_only
 test_no_target_never_prints_constrained_line
+test_heavy_queue_depth_is_read_fresh_not_reported_without_orc
 test_target_yields_open_lanes_and_full
 test_host_constraints_close_lanes
 test_unavailable_probes_degrade
