@@ -83,6 +83,7 @@ test_overdue_raised_with_owner_and_time() {
   items=$(scan "$state") || fail "the scan failed on an overdue wait"
   text=$(reasons "$items")
   assert_contains "$text" "wait overdue: t paused waiting on daily-release workflow, recheck 2026-10-24 passed 1d 9h ago: release cut" "the overdue wait was not raised with its task, owner and overdue time"
+  dir=$(make_case wait-overdue-blocker); state="$dir/state"
   printf 'blocked [key=cred] [at=1792800000]: no token | owner=captain | recheck=2026-10-26T08:00Z\n' > "$state/t.status"
   items=$(scan "$state") || fail "the scan failed on an overdue blocker"
   assert_contains "$(reasons "$items")" "wait overdue: t blocked waiting on captain, recheck 2026-10-26T08:00Z passed 1h 0m ago: no token" "the overdue blocker was not raised"
@@ -121,6 +122,30 @@ test_raised_once_then_rearmed_by_redeclaration() {
     fail "a raised marker outlived its wait: $(ls -a "$state")"
   fi
   pass "a wait is raised once per declaration and its marker goes when the wait clears"
+}
+
+test_unchanged_log_is_not_folded_again() {
+  local dir state probe items appended
+  dir=$(make_case wait-unchanged); state="$dir/state"; probe="$dir/fold-probe"
+  {
+    printf 'working [at=1792700000]: setup\n'
+    printf 'blocked [key=cred] [at=1792800000]: no token | owner=captain | recheck=2026-10-26T08:00Z\n'
+  } > "$state/t.status"
+  items=$(FM_OPEN_DECISIONS_READ_PROBE="$probe" scan "$state") || fail "the first scan failed"
+  [ "$(cut -f2 "$probe")" = "$(wc -c < "$state/t.status" | tr -d ' ')" ] \
+    || fail "the first scan did not fold the whole log once: $(cat "$probe")"
+  : > "$probe"
+  items=$(FM_OPEN_DECISIONS_READ_PROBE="$probe" scan "$state") || fail "the second scan failed"
+  [ ! -s "$probe" ] || fail "a log with no new line was folded again: $(cat "$probe")"
+  assert_contains "$(reasons "$items")" "wait overdue: t blocked waiting on captain, recheck 2026-10-26T08:00Z passed 1h 0m ago: no token" \
+    "the open blocker was lost when its log was not folded again"
+  appended='resolved [key=cred] [at=1793000000]: token granted'
+  printf '%s\n' "$appended" >> "$state/t.status"
+  items=$(FM_OPEN_DECISIONS_READ_PROBE="$probe" scan "$state") || fail "the scan after an append failed"
+  [ "$(cut -f2 "$probe")" = "$(( ${#appended} + 1 ))" ] \
+    || fail "the scan after an append folded more than the appended line: $(cat "$probe")"
+  [ -z "$items" ] || fail "a blocker resolved by an appended line was still raised: $items"
+  pass "a scan folds only the lines appended since the last one"
 }
 
 test_older_line_flagged_once_and_still_read() {
@@ -172,6 +197,7 @@ test_refused_shape_flagged
 test_overdue_raised_with_owner_and_time
 test_cleared_wait_quiet
 test_raised_once_then_rearmed_by_redeclaration
+test_unchanged_log_is_not_folded_again
 test_older_line_flagged_once_and_still_read
 test_watcher_raises_overdue_wait
 test_daemon_flags_undated_wait
