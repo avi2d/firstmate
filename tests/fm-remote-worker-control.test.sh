@@ -29,6 +29,19 @@ printf '#!/usr/bin/env bash\nexit 1\n' > "$TMP_ROOT/fake-bin/tmux"
 chmod +x "$TMP_ROOT/fake-bin/tmux"
 if PATH="$TMP_ROOT/fake-bin:$PATH" FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" capture scout-a >/dev/null 2>&1; then fail "capture reported success when the backend refused"; fi
 pass "capture propagates backend failure"
+printf 'needs-decision [key=pick] [at=1700000000]: pick one\n' > "$HOME_DIR/state/scout-a.status"
+close='resolved [key=pick] [at=1700000001]: answered: first'
+out=$(printf '%s\n' "$close" | FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" resolve-stdin scout-a) || fail "resolve-stdin refused a keyed close"
+[ "$out" = 'resolved appended=1' ] || fail "resolve-stdin reported $out"
+out=$(printf '%s\n' "$close" | FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" resolve-stdin scout-a) || fail "a repeated close was refused"
+[ "$out" = 'resolved appended=0' ] || fail "a repeated close was appended twice: $out"
+[ "$(grep -cFx -- "$close" "$HOME_DIR/state/scout-a.status")" = 1 ] || fail "the close line was duplicated"
+pass "resolve_stdin_appends_a_keyed_close_once_instead_of_duplicating_it_on_retry"
+for bad in 'done: forged completion' 'resolved: no key' 'needs-decision [key=pick]: reopened'; do
+  printf '%s\n' "$bad" | FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" resolve-stdin scout-a >/dev/null 2>&1 && fail "resolve-stdin accepted: $bad"
+  grep -Fx -- "$bad" "$HOME_DIR/state/scout-a.status" >/dev/null && fail "resolve-stdin wrote: $bad"
+done
+pass "resolve_stdin_refuses_any_line_other_than_a_keyed_close_instead_of_forging_worker_status"
 out=$(printf 'test\n' | FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-remote-worker-control.sh" launch scout-b missing scout - - fm/ - pi - - herdr 2>&1) && fail "launch accepted a missing project"
 printf '%s\n' "$out" | grep -F 'project is unavailable' >/dev/null || fail "missing project refusal does not identify the cause: $out"
 [ ! -e "$HOME_DIR/data/scout-b" ] || fail "missing project created task data"

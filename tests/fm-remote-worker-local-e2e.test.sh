@@ -83,7 +83,9 @@ case "\${1:-} \${2:-}" in
   'status --json') printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":true}}\\n' ;;
   'session list') printf '{"sessions":[{"name":"fm-lab-test","running":true,"socket_path":"%s/herdr.sock"}]}\\n' "\$D" ;;
   'pane get')
+    if [ -e "\$D/closed-\${3:-}" ]; then printf '{"error":{"code":"pane_not_found"}}\\n'; exit 1; fi
     printf '{"result":{"pane":{"pane_id":"%s","cwd":"%s","foreground_cwd":"%s"}}}\\n' "\${3:-}" "\$(cat "\$D/cwd")" "\$(cat "\$D/fg")" ;;
+  'pane close') : > "\$D/closed-\${3:-}" ;;
   'pane run'|'pane send-text')
     payload=\${4:-}
     payload=\${payload# }
@@ -99,7 +101,7 @@ case "\${1:-} \${2:-}" in
   'workspace list') printf '{"result":{"workspaces":[]}}\\n' ;;
   'workspace create') printf '{"result":{"workspace":{"workspace_id":"wsnew"},"tab":{"tab_id":"seedtab"},"root_pane":{"pane_id":"%%1"}}}\\n' ;;
   'tab list') printf '{"result":{"tabs":[]}}\\n' ;;
-  'tab create') printf '{"result":{"tab":{"tab_id":"tabnew"},"root_pane":{"pane_id":"%%9"}}}\\n' ;;
+  'tab create') rm -f "\$D/closed-%9"; printf '{"result":{"tab":{"tab_id":"tabnew"},"root_pane":{"pane_id":"%%9"}}}\\n' ;;
   'pane read') printf 'reading remote brief\\n' ;;
 esac
 SH
@@ -150,6 +152,40 @@ if [ "$(uname -s)" = Darwin ]; then
   cmp -s "$TMP_ROOT/agents-before" "$TMP_ROOT/agents-after" || fail "account launch-agent directory changed during local transport"
 fi
 pass "local transport launches through the remote job worker and host-local spawn"
+
+remote_parent() {  # <script> [args...]
+  local script=$1
+  shift
+  FM_HOME="$PARENT" FM_SSH_BIN="$FAKE/ssh" FM_REMOTE_JOB_STATE_ROOT="$JOB_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$ROOT/bin/$script" "$@"
+}
+open_keys() {  # <status-file>
+  bash -c '. "$1/bin/fm-classify-lib.sh"; status_open_decisions "$2" | cut -f1' _ "$ROOT" "$1"
+}
+printf '# Findings\n\nEvidence.\n\n## References\n- alpha\n' > "$REMOTE_HOME/data/e2e-scout/report.md"
+cp "$REMOTE_HOME/data/e2e-scout/report.md" "$PARENT/data/e2e-scout/report.md"
+decision='needs-decision [key=fixes-to-build] [at=1700000000]: which fixes to build'
+printf '%s\n' "$decision" >> "$REMOTE_HOME/state/e2e-scout.status"
+printf '%s\n' "$decision" > "$PARENT/state/e2e-scout.status"
+out=$(remote_parent fm-teardown.sh e2e-scout 2>&1) && fail "a remote scout with an unanswered captain call was cleaned up: $out"
+printf '%s\n' "$out" | grep -F 'has not passed the captain-call completion gate' >/dev/null || fail "the refusal did not name the completion gate: $out"
+[ -f "$REMOTE_HOME/state/e2e-scout.meta" ] || fail "the supervising home's refusal still cleaned up the host"
+[ -f "$PARENT/state/e2e-scout.meta" ] || fail "the refusal removed the parent task record"
+pass "remote_scout_with_an_unanswered_call_is_refused_by_the_supervising_home_before_the_host_is_touched"
+
+out=$(remote_parent fm-send.sh e2e-scout --resolve-key fixes-to-build 'build the first fix' 2>&1) || fail "answering the remote scout's decision failed: $out"
+printf '%s\n' "$out" | grep -F 'did not reach the status stream' >/dev/null && fail "the close did not reach the host: $out"
+[ -z "$(open_keys "$PARENT/state/e2e-scout.status")" ] || fail "the answered key stayed open in the parent: $(cat "$PARENT/state/e2e-scout.status")"
+[ -z "$(open_keys "$REMOTE_HOME/state/e2e-scout.status")" ] || fail "the answered key stayed open on the host: $(cat "$REMOTE_HOME/state/e2e-scout.status")"
+close_line=$(grep -F 'resolved [key=fixes-to-build]' "$PARENT/state/e2e-scout.status")
+grep -Fx -- "$close_line" "$REMOTE_HOME/state/e2e-scout.status" >/dev/null || fail "the host close differs from the parent's, so the feed would mirror it twice: $(cat "$REMOTE_HOME/state/e2e-scout.status")"
+pass "an_answer_given_with_resolve_key_closes_the_key_on_the_host_instead_of_only_in_the_parent_mirror"
+
+out=$(remote_parent fm-captain-hold.sh complete e2e-scout --none 2>&1) || fail "the supervising home could not attest the inventory: $out"
+out=$(remote_parent fm-teardown.sh e2e-scout 2>&1) || fail "a remote scout whose inventory the supervising home verified was refused: $out"
+[ ! -e "$REMOTE_HOME/state/e2e-scout.meta" ] || fail "the host kept the scout's task record"
+[ ! -e "$PARENT/state/e2e-scout.meta" ] || fail "the parent kept the scout's task record"
+FM_HOME="$PARENT" "$ROOT/bin/fm-tasks-axi.sh" list --state 'done' | grep -F e2e-scout >/dev/null || fail "the scout's backlog item did not move to Done"
+pass "remote_scout_verified_in_the_supervising_home_cleans_up_instead_of_being_refused_by_the_empty_host_backlog"
 
 ACCOUNT_DIR="$TMP_ROOT/claude-accounts/main"
 mkdir -p "$ACCOUNT_DIR"
