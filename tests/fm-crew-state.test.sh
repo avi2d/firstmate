@@ -3489,6 +3489,23 @@ test_no_run_tmux_unreadable_reads_unreachable_not_gone() {
 # run-step, not the shell. The common case is a finished crew whose agent has
 # exited and closed its window (the normal gap between completion and teardown) -
 # it must still report its terminal run-step state (e.g. done), never unknown.
+test_missing_no_mistakes_database_is_no_run_not_an_unreadable_inventory() {
+  reset_fakes
+  local d; d=$(new_case nm-no-database)
+  make_repo_on_branch "$d/wt" fm/feat-nodb
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-nodb.meta" "window=fm:fm-feat-nodb" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="error: \"stat $NM_HOME/state.sqlite: no such file or directory\""
+  FM_FAKE_AXI_STATUS_ERROR=1
+  FM_FAKE_AXI_HOME="error: repo not initialized (run 'no-mistakes init' first)"
+  FM_FAKE_AXI_HOME_ERROR=1
+  FM_FAKE_TMUX_MISSING=1
+  local out; out=$(run_crew_state "$d" feat-nodb)
+  assert_contains "$out" "source: none" "no state database means no run to read"
+  assert_not_contains "$out" "run inventory unreadable" "a missing state database is not an unreadable inventory"
+  pass "a missing no-mistakes state database reads as no run"
+}
+
 test_dead_window_still_reports_terminal_run_step() {
   reset_fakes
   local d; d=$(new_case dead-window-done)
@@ -7068,6 +7085,7 @@ test_no_run_idle_pane_paused
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
 test_dead_window_ignores_stale_status_log
+test_missing_no_mistakes_database_is_no_run_not_an_unreadable_inventory
 test_gone_window_in_live_session_ignores_stale_status_log
 test_no_run_tmux_unreadable_reads_unreachable_not_gone
 test_dead_window_still_reports_terminal_run_step
