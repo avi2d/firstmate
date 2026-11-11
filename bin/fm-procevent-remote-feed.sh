@@ -347,11 +347,28 @@ EOF
 }
 safe_feed_doc_path() {
   local task=$1 pointer=$2 rest
-  case "$pointer" in data/"$task"/*.md) ;; *) return 1 ;; esac
+  case "$pointer" in
+    data/"$task"/*.md) ;;
+    data/"$task"/nm-*-findings*.txt) case "${pointer#data/"$task"/}" in */*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
   rest=${pointer#data/}
   case "/$rest/" in */../*|*/./*) return 1 ;; esac
   case "$pointer" in *'//'*|*$'\n'*|*$'\r'*|*$'\t'*) return 1 ;; esac
   return 0
+}
+
+# An absolute pointer names the execution host's own home, which this home cannot
+# resolve, so only its task-tree suffix is fetched relative to that home.
+home_relative_doc_pointer() {
+  local task=$1 pointer=$2 name
+  case "$pointer" in
+    /*/data/"$task"/*)
+      name=${pointer##*/data/"$task"/}
+      case "$name" in */*) printf '%s\n' "$pointer" ;; *) printf 'data/%s/%s\n' "$task" "$name" ;; esac
+      ;;
+    *) printf '%s\n' "$pointer" ;;
+  esac
 }
 
 process_document_pointers() {
@@ -369,16 +386,19 @@ process_document_pointers() {
     {
       rest = "\001" $0
       rewritten = ""
-      while (match(rest, /[^A-Za-z0-9._\/-]report=data\/[A-Za-z0-9._\/-]+[.]md/)) {
-        doc = substr(rest, RSTART + 8, RLENGTH - 8)
+      while (match(rest, /[^A-Za-z0-9._\/-](report|file)=[A-Za-z0-9._\/-]+/)) {
+        token = substr(rest, RSTART + 1, RLENGTH - 1)
+        keyword_length = index(token, "=")
+        keyword = substr(token, 1, keyword_length - 1)
+        doc = substr(token, keyword_length + 1)
         next_index = RSTART + RLENGTH
-        next_char = next_index <= length(rest) ? substr(rest, next_index, 1) : ""
-        if (next_char == "" || next_char !~ /[A-Za-z0-9._\/-]/) {
+        offered = keyword == "report" ? doc ~ /^data\/.*[.]md$/ : doc ~ /(^|\/)data\/[^\/]+\/nm-[^\/]*-findings[^\/]*[.]txt$/
+        if (offered) {
           if (mode == "extract") {
             if (!seen[doc]++) print doc
           } else {
             replacement = doc in replacements ? replacements[doc] : doc
-            rewritten = rewritten substr(rest, 1, RSTART + 7) replacement
+            rewritten = rewritten substr(rest, 1, RSTART + keyword_length) replacement
             rest = substr(rest, next_index)
             continue
           }
@@ -598,7 +618,7 @@ ingest_task_block() {
     [ -n "$doc" ] || continue
     fetch_rc=0
     local_doc=''
-    fetch_document "$route" "$task" "$doc" local_doc || fetch_rc=$?
+    fetch_document "$route" "$task" "$(home_relative_doc_pointer "$task" "$doc")" local_doc || fetch_rc=$?
     if [ "$fetch_rc" -eq 1 ]; then
       if [ -n "$undelivered" ]; then
         undelivered="$undelivered

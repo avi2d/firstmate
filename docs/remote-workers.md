@@ -21,7 +21,7 @@ A remote second mate is a different arrangement, where a whole supervising home 
 | Step | Command | What happens on the host |
 | --- | --- | --- |
 | Launch | `fm-spawn.sh` for a placed project | The host admits the task, creates its worktree, and opens one pane in the execution home's Herdr session |
-| Status | Automatic | One feed per execution home mirrors every task's status lines into this home's `state/<task>.status` |
+| Status | Automatic | One feed per execution home mirrors every task's status lines into this home's `state/<task>.status`, and copies the reports and review-question files those lines name into this home's `data/<task>/` |
 | Steer | `fm-send.sh <task> ...`, with `--resolve-key` when it answers a decision | The steer lands in the task's durable inbox on the host and rings the pane |
 | Lifecycle | `fm-control.sh <task> interrupt\|exit\|relaunch` | The host acts on its own pane and reports the endpoint back |
 | Current state | `fm-crew-state.sh <task>` | The host classifies its own pane |
