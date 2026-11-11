@@ -2480,12 +2480,13 @@ spawn_herdr_rebind_journal_retire() {  # <session>
 
 # Project one task endpoint into its own disposable presentation workspace in
 # <session>, opened in <cwd>, under the exact parent workspace of
-# <launcher-pane> (empty for a launcher outside Herdr). Sets HERDR_PROJECTED=1
+# <launcher-pane> (empty for a launcher outside Herdr, whose parent is the
+# home's labelled workspace if one exists, else none). Sets HERDR_PROJECTED=1
 # and the endpoint ids, or leaves HERDR_PROJECTED untouched after a warning when
 # the ordinary flat layout must be used instead. A hard failure exits.
 # Expects HERDR_LABEL_HOME, HERDR_PARENT_LABEL and HERDR_PRESENTATION_JOURNAL.
 spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
-  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace header_cwd execution_home projection_id projection_label home_id order_key
+  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace projection_id projection_label home_id order_key
   if ! fm_backend_herdr_server_ensure "$session"; then
     echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
     return 0
@@ -2505,7 +2506,9 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
   # The projected child is placed and bound UNDER this launcher's exact
   # parent workspace. A launcher with no herdr ancestry (a remote execution
   # home) has no pane to inherit, so its parent is the home's own labelled
-  # workspace, resolved or created on first use as a flat task would. A
+  # workspace when one already exists. None is created for it: a parent made
+  # only to head projected rows would hold nothing but Herdr's seeded idle
+  # shell, so without one the projected workspace stays top-level. A
   # claimed-but-broken identity refuses here rather than projecting under a
   # guessed parent.
   set +e
@@ -2515,19 +2518,10 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
   case "$launcher_status" in
   0) parent_workspace=$FM_BACKEND_HERDR_LAUNCHER_WORKSPACE_ID ;;
   2)
-    parent_workspace=
-    execution_home=0
-    if [ -f "$FM_HOME/.fm-exec-home" ] && [ ! -L "$FM_HOME/.fm-exec-home" ]; then
-      execution_home=1
-    fi
-    header_cwd=$cwd
-    [ "$execution_home" = 0 ] || header_cwd=$FM_HOME
-    if fm_backend_herdr_workspace_ensure "$session" "$header_cwd" >/dev/null; then
-      parent_workspace=$FM_BACKEND_HERDR_WS_ID
-      if [ "$execution_home" = 1 ] && [ -n "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID" ] &&
-        ! fm_backend_herdr_home_header_record "$STATE" "$session" "$parent_workspace" "$FM_BACKEND_HERDR_WS_SEEDED_TAB_ID"; then
-        echo "warning: herdr could not record the home workspace it created; it will stay after its last worker is cleaned up" >&2
-      fi
+    if ! parent_workspace=$(fm_backend_herdr_home_workspace_existing "$session"); then
+      echo "warning: herdr presentation parent is unreadable or ambiguous; using the ordinary flat layout without projection" >&2
+      spawn_herdr_presentation_order_lock_release
+      return 0
     fi
     ;;
   *)
@@ -2535,11 +2529,6 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
     exit 1
     ;;
   esac
-  if [ -z "$parent_workspace" ]; then
-    echo "warning: herdr presentation parent is absent or ambiguous; using the ordinary flat layout without projection" >&2
-    spawn_herdr_presentation_order_lock_release
-    return 0
-  fi
   projection_id=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
   projection_label=$(fm_backend_herdr_projection_workspace_label "$ID" "$projection_id")
   if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
@@ -2567,7 +2556,7 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
   order_key=
   [ -z "$project_path" ] || [ ! -e "$CONFIG/herdr-project-groups" ] || order_key=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
     "$SCRIPT_DIR/fm-herdr-groups.sh" order-key "$ID" "$project_path" 2>/dev/null) || order_key=
-  fm_backend_herdr_projection_order_best_effort \
+  [ -z "$parent_workspace" ] || fm_backend_herdr_projection_order_best_effort \
     "$HERDR_SES" "$HERDR_WORKSPACE_ID" "$HERDR_PARENT_LABEL" "$parent_workspace" "$order_key"
   home_id=$(fm_backend_herdr_projection_home_identity "$HERDR_LABEL_HOME" 2>/dev/null || true)
   if [ -n "$home_id" ] &&
