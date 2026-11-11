@@ -603,6 +603,7 @@ The captain's away words are the whole mandate:
 - It decides by its own judgment whether the event in front of it is the moment they name.
 - It acts on them only through the guarded scripts, never by analogy.
 - It holds with verdict captain on doubt.
+- A finished pull request the words authorise merging that conflicts with or is behind its base goes back to its worker to take the base in, rather than holding for the return.
 
 `bin/fm-branch-prompt.sh` "Postures" owns those execution rules.
 It requires every action taken under the words to open its outcome summary with "per your away instructions:".
@@ -659,6 +660,7 @@ The generated prompt includes the [scout-completion](../.agents/skills/scout-com
 `tests/fm-branch-supervision.test.sh` covers:
 
 - Prompt stability, including the landed-work cleanup instruction and the second-mate relay, signal-span, and stale-liveness rules.
+- The emitted away instruction that sends a finished, authorised pull request that conflicts with or is behind its base back to its worker rather than holding it for the return.
 - The emitted completed-scout cleanup instructions and verbatim completion policies, including incomplete-work boundaries and refusal reporting; these assertions verify prompt delivery, not a model's adherence.
 - Store append-only behavior, the captain cursor barrier, processed-marker sequence bounds and absent-marker safety, and captain-only recorded ages.
 - Leases, guards, and non-branch-home invariance.
