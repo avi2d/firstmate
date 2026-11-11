@@ -271,11 +271,13 @@ EXTENSION_HOST="$SCRIPT_DIR/fm-extension.mjs"
 EXTENSION_LIFECYCLE_LOCK="$REG/.extension-binding-lifecycle.lock"
 
 state_root_bind() {  # [create]
+  local resolved
   if [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
     [ "${1-}" = create ] || return 1
     (umask 077; mkdir -p "$STATE") || return 1
   fi
-  STATE=$(fm_procevent_state_root_resolve "$STATE") || return 1
+  resolved=$(fm_procevent_state_root_resolve "$STATE") || return 1
+  STATE=$resolved
   REG=$(fm_procevent_registry_dir "$STATE")
   EXTENSION_LIFECYCLE_LOCK="$REG/.extension-binding-lifecycle.lock"
   FM_STATE_OVERRIDE=$STATE
@@ -283,7 +285,7 @@ state_root_bind() {  # [create]
 }
 
 if [ -e "$STATE" ] || [ -L "$STATE" ]; then
-  state_root_bind || die "process-event state root is not a private directory"
+  state_root_bind || die "process-event state root is not a private directory: $STATE"
 fi
 
 adapter_script() { printf '%s/bin/fm-procevent-%s.sh\n' "$FM_ROOT" "$1"; }

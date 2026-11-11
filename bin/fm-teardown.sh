@@ -3248,11 +3248,20 @@ restore_firstmate_home_process_events() {
   if [ ! -f "$runner" ] || [ -L "$runner" ] || [ ! -x "$runner" ]; then
     runner="$SCRIPT_DIR/fm-procevent.sh"
   fi
-  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$FM_ROOT" "$runner" reconcile >/dev/null; then
+  if ! run_home_process_event_runner "$home" "$FM_ROOT" "$runner" reconcile >/dev/null; then
     echo "error: process-event restoration could not rearm $label $home; active waits may remain retired; recover registrations from $backup" >&2
     return "$TEARDOWN_PROCEVENT_RESTORE_FAILED"
   fi
   rm -rf -- "$backup"
+}
+
+# The caller's state, data, and config overrides name the teardown's own home,
+# which on a remote host is the parent route inside the home being retired.
+run_home_process_event_runner() {
+  local home=$1 code_root=$2 runner=$3
+  shift 3
+  env -u FM_STATE_OVERRIDE -u FM_DATA_OVERRIDE -u FM_CONFIG_OVERRIDE \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$code_root" "$runner" "$@"
 }
 
 cleanup_firstmate_home_process_events() {
@@ -3262,7 +3271,7 @@ cleanup_firstmate_home_process_events() {
     echo "REFUSED: $label $home has process-event state but no sweep-capable bin/fm-procevent.sh; restore the home script and rerun teardown" >&2
     return 1
   fi
-  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$runner" sweep-home; then
+  if ! run_home_process_event_runner "$home" "$home" "$runner" sweep-home; then
     echo "REFUSED: process-event cleanup is incomplete for $label $home; preserving the home, lease, and retirement records for retry" >&2
     return 1
   fi
@@ -3279,7 +3288,7 @@ preflight_firstmate_home_process_events() {
     echo "REFUSED: $label $home has process-event state but no sweep-capable bin/fm-procevent.sh; restore the home script and rerun teardown" >&2
     return 1
   fi
-  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$runner" sweep-home --preflight >/dev/null; then
+  if ! run_home_process_event_runner "$home" "$home" "$runner" sweep-home --preflight >/dev/null; then
     echo "REFUSED: process-event cleanup cannot safely proceed for $label $home; preserving the home, lease, and retirement records for retry" >&2
     return 1
   fi
