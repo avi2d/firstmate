@@ -798,8 +798,44 @@ test_secondmate_record_refuses_a_pr_watch() {
   pass "fm-pr-check refuses to record a PR or arm a merge watch on a secondmate record"
 }
 
-# With no forge-reported head (gh cannot supply one), the named head is the
-# worker copy's HEAD, and a HEAD that exists only there is refused.
+make_remote_head_case() {
+  local dir=$1 mode=$2
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=firstmate:fm-task-a" "endpoint_task_id=task-a" \
+    "worktree=$dir/remote-only/wt" "project=$dir/remote-only/project" \
+    "kind=ship" "mode=$mode" "remote_host=exec-host" "remote_route=exec-one"
+  printf '%s\n' "- exec-one - execution (host: exec-host; root: /remote/code; home: /remote/home; session: fm-remote; scope: workers; projects: example; added 2026-01-01)" \
+    > "$dir/home/data/remote-homes.md"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/root/bin/fm-remote-worker-control.sh"
+  chmod +x "$dir/root/bin/fm-remote-worker-control.sh"
+  git -C "$dir/root" init -q
+  git -C "$dir/root" add bin/fm-remote-worker-control.sh
+  cat > "$dir/fakebin/ssh" <<'SH'
+#!/usr/bin/env bash
+printf 'done-gate\n' >> "$FM_TEST_REMOTE_GATE_LOG"
+printf '%s\n' "${FM_TEST_REMOTE_GATE_REPLY:-refused: named head 0123456789abcdef0123456789abcdef01234567 is unreachable outside the worker copy}"
+SH
+  chmod +x "$dir/fakebin/ssh"
+}
+
+test_remote_no_mistakes_head_does_not_require_a_local_worker_copy() {
+  local dir expected
+  dir=$(make_case remote-forge-head)
+  make_remote_head_case "$dir" no-mistakes
+  expected=0123456789abcdef0123456789abcdef01234567
+  [ ! -e "$dir/remote-only/wt" ] || fail "remote worker directory exists locally"
+  FM_TEST_REMOTE_GATE_LOG="$dir/remote.log" FM_TEST_GH_HEAD=$expected \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/4 \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "forge-held remote pipeline head was refused: $(cat "$dir/stderr")"
+  grep -qxF "pr_head=$expected" "$dir/home/state/task-a.meta" \
+    || fail "forge-held head was not recorded exactly"
+  fm_pr_poll_artifacts_valid "$dir/home/state" task-a "$POLL" \
+    || fail "remote PR did not get an authenticated merge poll"
+  [ ! -e "$dir/remote.log" ] || fail "forge-held pipeline head fell back to worker refs"
+  pass "remote pipeline PR registration does not require a local worker copy"
+}
+
 test_unpushed_named_head_refuses_registration() {
   local dir sha
   dir=$(make_case unpushed-named-head)
@@ -4176,6 +4212,7 @@ SH
   pass "device re-record publication waits without rewriting its registration"
 }
 
+test_remote_no_mistakes_head_does_not_require_a_local_worker_copy
 test_parser_matrix
 test_github_enterprise_config_resolution
 test_github_enterprise_hosts
