@@ -3911,11 +3911,44 @@ if [ "$KIND" = secondmate ]; then
   fi
 fi
 
+# Succeeds only for a ship child whose agent is gone and whose copy, inside the
+# home, is clean and sits exactly on a branch the remote still holds, so
+# removing the home loses nothing that is not already pushed.
+child_copy_is_pushed_leftover() {  # <home> <child-meta>
+  local home=$1 child_meta=$2 kind wt abs_home abs_wt target backend branch upstream remote merge_ref head remote_head
+  kind=$(meta_value "$child_meta" kind)
+  [ "${kind:-ship}" = ship ] || return 1
+  target=$(fm_backend_target_of_meta "$child_meta")
+  if [ -n "$target" ]; then
+    backend=$(fm_backend_of_meta "$child_meta")
+    [ "$(fm_backend_agent_alive "$backend" "$target" 2>/dev/null)" = dead ] || return 1
+  fi
+  wt=$(meta_value "$child_meta" worktree)
+  inspectable_git_worktree "$wt" || return 1
+  abs_home=$(cd "$home" && pwd -P) || return 1
+  abs_wt=$(cd "$wt" && pwd -P) || return 1
+  path_is_ancestor_of "$abs_home" "$abs_wt" || return 1
+  git -C "$wt" status --porcelain >/dev/null 2>&1 || return 1
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=all 2>/dev/null)" ] || return 1
+  branch=$(git -C "$wt" symbolic-ref -q --short HEAD) || return 1
+  remote=$(git -C "$wt" config "branch.$branch.remote") || return 1
+  merge_ref=$(git -C "$wt" config "branch.$branch.merge") || return 1
+  case "$merge_ref" in refs/heads/?*) ;; *) return 1 ;; esac
+  upstream=$(git -C "$wt" ls-remote --exit-code "$remote" "$merge_ref" 2>/dev/null) || return 1
+  remote_head=${upstream%%[[:space:]]*}
+  head=$(git -C "$wt" rev-parse --verify -q HEAD) || return 1
+  [ "$head" = "$remote_head" ]
+}
+
 if [ "$KIND" = secondmate ] && [ "$FORCE" != "--force" ]; then
   SUB_STATE="$HOME_PATH/state"
   if [ -d "$SUB_STATE" ]; then
     for child_meta in "$SUB_STATE"/*.meta; do
       [ -e "$child_meta" ] || continue
+      if child_copy_is_pushed_leftover "$HOME_PATH" "$child_meta"; then
+        echo "note: secondmate $ID's $(basename "$child_meta" .meta) leaves only a clean copy equal to its pushed branch; removing it with the home." >&2
+        continue
+      fi
       echo "REFUSED: secondmate $ID still has in-flight work in $SUB_STATE." >&2
       echo "Found $(basename "$child_meta"). Let that home finish or explicitly discard with --force." >&2
       exit 1

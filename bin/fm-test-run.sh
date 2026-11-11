@@ -354,7 +354,7 @@ family_for_basename() {
     fm-remote-job-idle-forks.test.sh|fm-remote-job-settled-cadence.test.sh|\
     fm-remote-transport-lanes.test.sh|\
     fm-remote-reply.test.sh|fm-remote-secondmate-lifecycle-e2e.test.sh|\
-    fm-remote-secondmate-trace-context.test.sh|\
+    fm-remote-secondmate-trace-context.test.sh|fm-remote-secondmate-retire.test.sh|\
     fm-secondmate-harness.test.sh|fm-secondmate-lifecycle-e2e.test.sh|\
     fm-secondmate-liveness.test.sh|fm-secondmate-reconcile.test.sh|\
     fm-secondmate-restart.test.sh|fm-remote-secondmate-relaunch.test.sh|\
@@ -984,6 +984,7 @@ tests/fm-remote-secondmate-lifecycle-e2e.test.sh 1021468
 tests/fm-remote-secondmate-omp.test.sh 4638
 tests/fm-remote-secondmate-parent-binding.test.sh 42294
 tests/fm-remote-secondmate-relaunch.test.sh 1495
+tests/fm-remote-secondmate-retire.test.sh 13000
 tests/fm-remote-secondmate-trace-context.test.sh 178721
 tests/fm-remote-transport-lanes.test.sh 83977
 tests/fm-remote-worker-control.test.sh 3652
