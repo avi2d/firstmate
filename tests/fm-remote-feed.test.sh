@@ -216,6 +216,65 @@ test_documents_land_in_task_tree() {
   assert_grep 'remote document did not transfer for w1: data/other/report.md' "$PARENT/state/w1.status" "outside-tree pointer leaves no note"
   pass "task-tree documents land byte-identical and outside pointers leave a note"
 }
+DECIDER=orc-attention-queue-3-decider
+DECIDER_RUN=01M73PNWGWGVDQAE3R5YZE1442
+DECIDER_FINDINGS="data/$DECIDER/nm-$DECIDER_RUN-findings.txt"
+
+decider_question_round() {
+  local announced=$1 result=$2
+  rm -rf -- "$PARENT/data/$DECIDER" "$PARENT/state/remote-feeds/$ROUTE/$DECIDER".* \
+    "$PARENT/state/$DECIDER.status" "$PARENT/state/.remote-feed-mirrored-$DECIDER"
+  mkdir -p "$REMOTE/data/$DECIDER"
+  printf 'run: %s step: review\nfields: id,severity,file,action(authority),description\n    decider-answers-not-surfaced,warning,packages/run/src/dispatch/beat.ts,ask-user,"The user sees the decider answers afterwards."\n' \
+    "$DECIDER_RUN" > "$REMOTE/$DECIDER_FINDINGS"
+  printf 'remote_route=%s\n' "$ROUTE" > "$PARENT/state/$DECIDER.meta"
+  printf 'needs-decision [at=1794347608] [key=nm-%s-review]: ask-user findings=decider-answers-not-surfaced file=%s\n' \
+    "$DECIDER_RUN" "$announced" > "$REMOTE/state/$DECIDER.status"
+  (printf '%s %s %s\n' "$DECIDER" 0 "$(empty_hash)") | feed_result "$result"
+  remote_env "$ADAPTER" ingest "$ROUTE" "$result" >/dev/null \
+    || fail "review-question ingest failed for file=$announced"
+}
+
+test_home_relative_review_question_arrives_readable() {
+  decider_question_round "$DECIDER_FINDINGS" "$TMP_ROOT/decider-relative.result"
+  cmp "$REMOTE/$DECIDER_FINDINGS" "$PARENT/$DECIDER_FINDINGS" \
+    || fail "review question text stays on the execution host"
+  assert_grep "file=$DECIDER_FINDINGS" "$PARENT/state/$DECIDER.status" \
+    "mirrored review question loses its home-relative pointer"
+  rm -f -- "$PARENT/state/$DECIDER.meta"
+  pass "a home-relative review question file arrives readable in the supervising home"
+}
+
+test_absolute_review_question_pointer_still_arrives() {
+  decider_question_round "$REMOTE/$DECIDER_FINDINGS" "$TMP_ROOT/decider-absolute.result"
+  cmp "$REMOTE/$DECIDER_FINDINGS" "$PARENT/$DECIDER_FINDINGS" \
+    || fail "an absolute execution-host pointer leaves the question behind"
+  assert_grep "findings=decider-answers-not-surfaced file=$DECIDER_FINDINGS" "$PARENT/state/$DECIDER.status" \
+    "mirrored line still points at the execution host's absolute path"
+  rm -f -- "$PARENT/state/$DECIDER.meta"
+  pass "an absolute review question pointer is fetched and rewritten home-relative"
+}
+
+test_review_question_pointer_stays_confined() {
+  decider_question_round "data/other/nm-$DECIDER_RUN-findings.txt" "$TMP_ROOT/decider-foreign.result"
+  [ ! -e "$PARENT/data/other" ] || fail "a foreign task's question file transfers"
+  assert_grep "remote document did not transfer for $DECIDER: data/other/nm-$DECIDER_RUN-findings.txt" \
+    "$PARENT/state/$DECIDER.status" "foreign question pointer leaves no note"
+  decider_question_round "data/$DECIDER/notes.txt" "$TMP_ROOT/decider-other-txt.result"
+  [ ! -e "$PARENT/data/$DECIDER/notes.txt" ] || fail "a non-question text file transfers"
+  rm -f -- "$PARENT/state/$DECIDER.meta"
+  pass "only the task's own review question files transfer"
+}
+
+test_oversize_review_question_is_refused() {
+  FM_REMOTE_FEED_MAX_DOC_BYTES=64 decider_question_round "$DECIDER_FINDINGS" "$TMP_ROOT/decider-big.result"
+  [ ! -e "$PARENT/$DECIDER_FINDINGS" ] || fail "an oversize question file transfers past the size limit"
+  assert_grep "remote document did not transfer for $DECIDER: $DECIDER_FINDINGS" "$PARENT/state/$DECIDER.status" \
+    "oversize question leaves no note"
+  rm -f -- "$PARENT/state/$DECIDER.meta"
+  pass "a review question file over the size limit is refused with a note"
+}
+
 test_ensure_armed_is_idempotent() {
   remote_env "$ADAPTER" ensure-armed "$ROUTE" > "$TMP_ROOT/ensure1.out" || fail "ensure-armed failed"
   remote_env "$ADAPTER" ensure-armed "$ROUTE" > "$TMP_ROOT/ensure2.out" || fail "ensure-armed is not idempotent"
@@ -258,6 +317,10 @@ fm_test_run \
   test_ingest_appends_and_dedups \
   test_break_escalates_and_adopts \
   test_documents_land_in_task_tree \
+  test_home_relative_review_question_arrives_readable \
+  test_absolute_review_question_pointer_still_arrives \
+  test_review_question_pointer_stays_confined \
+  test_oversize_review_question_is_refused \
   test_vacated_task_leaves_no_record \
   test_ensure_armed_is_idempotent \
   test_runner_applies_one_window

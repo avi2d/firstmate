@@ -153,6 +153,22 @@ test_branch_prompt_routes_completed_scouts_through_guarded_cleanup() {
   pass "emitted branch prompt routes completed scouts through existing policies and leased cleanup, preserving unfinished work"
 }
 
+test_away_prompt_rejects_holding_a_conflicting_authorised_pr_for_return() {
+  local prompt
+  prompt=$(bash "$ROOT/bin/fm-branch-prompt.sh") || fail "branch prompt generator failed"
+
+  assert_contains "$prompt" \
+    "A finished pull request the words authorise merging that conflicts with or is behind its base is not held for the return: steer its worker to take the base in and push again, relaunching it through \`bin/fm-control.sh\` first when it has exited, and merge it under the same words once it is green at its new head." \
+    "away prompt still holds a conflicting or behind authorised PR for the return instead of sending it back to its worker"
+  assert_contains "$prompt" \
+    "Taking the base in is the step that merge needs, not a separate decision, so it needs no captain word beyond the words that authorised the merge; a conflict the worker cannot resolve without a product choice comes back as a decision like any other." \
+    "away prompt treats taking the base in as a captain decision, or lets the branch settle a product choice inside a conflict"
+  assert_contains "$prompt" \
+    "A red pull request, or one with a required check that has not reported, is never merged while away, whatever the words say" \
+    "away prompt lost the green-only merge limit"
+  pass "away prompt sends a conflicting or behind authorised PR back to its worker and keeps the green merge limit"
+}
+
 # --- append-only outcome store ------------------------------------------------
 
 test_outcome_store_is_append_only_with_cursor_reads() {
@@ -1866,6 +1882,7 @@ test_claim_refuses_the_other_actors_name_loudly
 test_release_actor_drops_only_that_actors_leases
 test_branch_cannot_force_teardown_or_directly_relaunch
 test_away_record_relocates_main_owned_actions_to_the_branch
+test_away_prompt_rejects_holding_a_conflicting_authorised_pr_for_return
 test_away_branch_spawn_requires_queued_dispatchable_work
 test_away_spend_cap_is_rechecked_under_the_task_set_lock
 test_quiet_record_never_caps_a_present_captains_spawn
