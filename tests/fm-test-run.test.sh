@@ -1485,8 +1485,8 @@ test_changed_shards_split_by_measured_weight_not_name_order() {
       2) want=tests/fm-spawn-dispatch-profile.test.sh ;;
       3) want=tests/fm-test-run.test.sh ;;
       4) want=tests/fm-lint.test.sh ;;
-      5) want=$(printf '%s\n' tests/fm-assertions.test.sh tests/fm-forge-detect.test.sh) ;;
-      6) want=$(printf '%s\n' tests/fm-brief.test.sh tests/fm-send-settle.test.sh) ;;
+      5) want=tests/fm-brief.test.sh ;;
+      6) want=$(printf '%s\n' tests/fm-assertions.test.sh tests/fm-forge-detect.test.sh tests/fm-send-settle.test.sh) ;;
     esac
     got=$(LC_ALL=C sort "$tmp/shard$shard")
     [ "$got" = "$want" ] \
