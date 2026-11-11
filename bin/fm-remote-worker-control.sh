@@ -239,7 +239,7 @@ admit_heavy_gates() {  # <id>
 }
 
 worker_admit() {  # <id> <project>
-  local id=$1 project=$2 config holders limit loadavg state meta kind pname sib
+  local id=$1 project=$2 config room_config holders limit loadavg state meta kind pname sib
   local -a states
   case "$id" in ''|*[!A-Za-z0-9._-]*|*..*) die "invalid task id" ;; esac
   case "$project" in ''|.|-*|*[!A-Za-z0-9._-]*|*..*) die "invalid project name" ;; esac
@@ -289,7 +289,9 @@ worker_admit() {  # <id> <project>
     return "$FM_MAC_LOAD_DEFER_EXIT"
   fi
   admit_heavy_gates "$id" || return $?
-  printf 'admit project=%s holders=%s load=%s\n' "$project" "${holders}${limit:+/$limit}" "$loadavg"
+  room_config=$(fm_project_capacity_config_dir "$TARGET_HOME" "$config") || die "the root home that declares host limits cannot be resolved"
+  fm_host_room "$TARGET_HOME/state" "$id" "$room_config" || die "host room cannot be read ($FM_HOST_ROOM_ERROR)"
+  printf 'admit project=%s holders=%s load=%s load_limit=%s heavy_free=%s\n' "$project" "${holders}${limit:+/$limit}" "$loadavg" "$FM_HOST_ROOM_LOAD_LIMIT" "$FM_HOST_ROOM_FREE"
 }
 
 route() {

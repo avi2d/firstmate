@@ -32,9 +32,10 @@ case "$*" in
     printf 'claude_account=%s\n' "$6" ;;
   *' admit '*)
     if [ "${FM_TEST_ADMIT_DEFER:-0}" = 1 ]; then printf 'defer: host already holds 6 alpha worker(s) at its declared limit 6\n'; exit 75; fi
-    printf 'admit project=alpha holders=0\n' ;;
+    printf 'admit project=alpha holders=0 load=%s load_limit=16 heavy_free=%s\n' "${FM_TEST_REMOTE_LOAD:-1.0}" "${FM_TEST_REMOTE_FREE:-6}" ;;
   *' launch '*)
     cat >/dev/null
+    [ "${FM_TEST_LAUNCH_DEFER:-0}" != 1 ] || { printf 'defer: host already holds 6 alpha worker(s) at its declared limit 6\n'; exit 75; }
     printf '%s\n' "$*" > "$FM_HOME/launch-args"
     account=${16:-}
     [ "${FM_TEST_DROP_ACCOUNT:-0}" != 1 ] || account=
@@ -140,3 +141,62 @@ out=$(remote_spawn acct-clear --claude-account main) || fail "remote launch refu
 assert_grep 'claude_account=main' "$HOME_DIR/state/acct-clear.meta" "the selected account was not recorded"
 rm "$HOME_DIR/config/crew-dispatch.json"
 pass "remote launch takes the clear dispatch profile line unchanged and refuses one missing its account"
+
+NOTMUX="$TMP_ROOT/no-tmux"
+mkdir -p "$NOTMUX"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$NOTMUX/tmux"
+chmod +x "$NOTMUX/tmux"
+choose_home() {  # <task-id>
+  local h="$TMP_ROOT/$1"
+  mkdir -p "$h/data/$1" "$h/state" "$h/config" "$h/projects/alpha"
+  printf '%s\n' '- alpha [direct-PR host=exec-one] - project' > "$h/data/projects.md"
+  cp "$HOME_DIR/data/remote-homes.md" "$h/data/remote-homes.md"
+  printf '# Task\n## Captain\x27s intent\nResearch.\n\n## Firstmate spec\nReport evidence.\n' > "$h/data/$1/brief.md"
+  FM_HOME="$h" "$ROOT/bin/fm-tasks-axi.sh" add "$1" 'Research alpha' --kind scout >/dev/null
+  printf '%s\n' "$h"
+}
+choose_run() {  # <home> <task-id> <local-load> <remote-load> <remote-free> [remote-defers]
+  local h=$1 id=$2
+  PATH="$NOTMUX:$PATH" FM_MAC_LOAD_MOCK_5MIN="$3" FM_TEST_REMOTE_LOAD="$4" FM_TEST_REMOTE_FREE="$5" FM_TEST_ADMIT_DEFER="${6:-0}" FM_TEST_LAUNCH_DEFER="${7:-0}" \
+    FM_ROOT_OVERRIDE="$FAKE_ROOT" FM_HOME="$h" FM_SPAWN_NO_GUARD=1 \
+    bash "$FAKE_ROOT/bin/fm-spawn.sh" "$id" "$h/projects/alpha" --scout --harness pi 2>&1
+}
+
+h=$(choose_home refused-here)
+out=$(choose_run "$h" refused-here 2.8 26 0 1) || true
+printf '%s\n' "$out" | grep -F 'machine: this machine picked' >/dev/null || fail "a host that refused on load took a launch while this machine had room: $out"
+[ ! -e "$h/launch-args" ] || fail "a launch was sent to a host that refused on load: $out"
+pass "a launch is not sent to a host that refused on load while this machine has room"
+
+h=$(choose_home more-room-there)
+out=$(choose_run "$h" more-room-there 2.8 1.0 99) || fail "a launch to the host with more room failed: $out"
+printf '%s\n' "$out" | grep -F 'machine: testhost picked' >/dev/null || fail "the host with more room was not picked: $out"
+assert_grep 'remote_host=testhost' "$h/state/more-room-there.meta" "the launch with more room did not land on that host"
+pass "a launch with more room on the host route is not kept on this machine"
+
+h=$(choose_home more-room-here)
+out=$(choose_run "$h" more-room-here 2.8 1.0 0) || true
+printf '%s\n' "$out" | grep -F 'machine: this machine picked' >/dev/null || fail "a launch went to a host with no free heavy slot: $out"
+[ ! -e "$h/launch-args" ] || fail "a launch was sent to a host with no free heavy slot: $out"
+pass "a launch is not sent to a host with no free heavy slot while this machine has room"
+
+h=$(choose_home refused-by-load-here)
+out=$(choose_run "$h" refused-by-load-here 20 1.0 6) || fail "the host with room did not take a launch this machine refused on load: $out"
+printf '%s\n' "$out" | grep -F 'machine: testhost picked' >/dev/null || fail "the host with room was not picked: $out"
+assert_grep 'remote_host=testhost' "$h/state/refused-by-load-here.meta" "the launch refused here did not land on the host with room"
+pass "a launch this machine refuses on load moves to the host that has room instead of deferring"
+
+h=$(choose_home no-room-anywhere)
+out=$(choose_run "$h" no-room-anywhere 20 26 0 1) || true
+printf '%s\n' "$out" | grep -F 'machine: this machine picked - neither machine has room' >/dev/null || fail "a launch with no room on either machine did not say so: $out"
+[ ! -e "$h/launch-args" ] && [ ! -e "$h/state/no-room-anywhere.meta" ] || fail "a launch with no room anywhere reached the host that refused: $out"
+pass "a launch with no room on either machine is not sent to the host that refused"
+
+h=$(choose_home launch-deferred)
+rc=0
+out=$(choose_run "$h" launch-deferred 2.8 1.0 99 0 1) || rc=$?
+printf '%s\n' "$out" | grep -F 'machine: testhost picked' >/dev/null || fail "the host with room was not chosen before its launch deferred: $out"
+printf '%s\n' "$out" | grep -F 'launching here' >/dev/null || fail "a launch the host deferred did not fall back to this machine: $out"
+[ "$rc" -ne 75 ] || fail "a launch the host deferred exited 75 without trying this machine: $out"
+! grep -qs 'remote_host=testhost' "$h/state/launch-deferred.meta" || fail "a launch the host deferred was recorded as launched there: $out"
+pass "a launch the host defers after the room check is handed back to this machine instead of exiting 75"

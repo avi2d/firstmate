@@ -1753,6 +1753,61 @@ spawn_remote_secondmate() {
   return 0
 }
 
+# Mirrors admit_heavy_gates: a machine that reports room is one its admit accepts.
+spawn_choose_machine() {  # <route> <host> <project>
+  local route=$1 host=$2 project=$3 room_config out rc rload rlimit rfree why pick
+  local lok=0 rok=0 rmeasured=0 use_remote=0
+  local lfree=0 lfrac=1 rfrac=1 lwhy='' rwhy=''
+  room_config=$(fm_project_capacity_config_dir "$FM_HOME" "$CONFIG") || return 1
+  if fm_host_room "$STATE" "$ID" "$room_config"; then
+    lfree=$FM_HOST_ROOM_FREE
+    lfrac=$(awk -v a="$FM_HOST_ROOM_LOAD" -v b="$FM_HOST_ROOM_LOAD_LIMIT" 'BEGIN { printf "%.2f", a / b }')
+    if [ "$lfree" -gt 0 ] && awk -v a="$FM_HOST_ROOM_LOAD" -v b="$FM_HOST_ROOM_LOAD_LIMIT" 'BEGIN { exit !(a < b) }'; then
+      lok=1
+    else
+      lwhy="load $FM_HOST_ROOM_LOAD of $FM_HOST_ROOM_LOAD_LIMIT, $lfree heavy slot(s) free"
+    fi
+  else
+    lwhy=$FM_HOST_ROOM_ERROR
+  fi
+  rc=0
+  out=$("$SCRIPT_DIR/fm-on.sh" "$route" fm-remote-worker-control.sh admit "$ID" "$project" </dev/null 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    rok=1
+    rload=$(printf '%s\n' "$out" | sed -n 's/.* load=\([^ ]*\).*/\1/p')
+    rlimit=$(printf '%s\n' "$out" | sed -n 's/.* load_limit=\([^ ]*\).*/\1/p')
+    rfree=$(printf '%s\n' "$out" | sed -n 's/.* heavy_free=\([0-9]*\).*/\1/p')
+    if [ -n "$rload" ] && [ -n "$rlimit" ] && [ -n "$rfree" ]; then
+      rmeasured=1
+      rfrac=$(awk -v a="$rload" -v b="$rlimit" 'BEGIN { printf "%.2f", a / b }')
+    fi
+  else
+    rwhy=$(printf '%s\n' "$out" | head -n 1)
+    rwhy=${rwhy:-no answer from $host}
+  fi
+  if [ "$lok" = 1 ] && [ "$rok" = 1 ] && [ "$rmeasured" = 1 ]; then
+    if [ "$rfree" -gt "$lfree" ] || { [ "$rfree" -eq "$lfree" ] && awk -v r="$rfrac" -v l="$lfrac" 'BEGIN { exit !(r < l) }'; }; then
+      use_remote=1
+      why="$host has more room: $rfree free heavy slot(s), load at $rfrac of its limit, against $lfree and $lfrac here"
+    else
+      why="this machine has more room: $lfree free heavy slot(s), load at $lfrac of its limit, against $rfree and $rfrac on $host"
+    fi
+  elif [ "$lok" = 1 ] && [ "$rok" = 1 ]; then
+    why="$host reported no room figures"
+  elif [ "$lok" = 1 ]; then
+    why="$host refused: $rwhy"
+  elif [ "$rok" = 1 ]; then
+    use_remote=1
+    why="this machine refused: $lwhy"
+  else
+    why="neither machine has room: this machine ($lwhy); $host ($rwhy)"
+  fi
+  pick="this machine"
+  [ "$use_remote" = 0 ] || pick=$host
+  printf 'machine: %s picked - %s\n' "$pick" "$why" >&2
+  [ "$use_remote" = 1 ]
+}
+
 spawn_remote_worker() {
   local route=$1 project=$2 host=$3 root home session harness backend brief meta tmp out rc target remote_kind remote_harness remote_session worktree remote_project
   local mode_arg yolo_arg base_arg model_arg effort_arg transition=0 started_row=0 contract token forge=none pr=auto standing_forge standing_pr brief_branch remote_spawn_gen remote_account
@@ -2762,9 +2817,19 @@ if [ "$KIND" != secondmate ] && [ "$RELAUNCH" -eq 0 ] && [ "$LOCAL_OVERRIDE" -eq
   if [ -n "$remote_placement" ]; then
     remote_host=$(secondmate_registry_field "$DATA/remote-homes.md" "$remote_placement" host 2>/dev/null || true)
     [ -n "$remote_host" ] || { echo "error: no execution-home route for $remote_placement" >&2; exit 1; }
-    spawn_remote_worker "$remote_placement" "$remote_project" "$remote_host"
-    exit $?
-
+    if [ -d "$PROJECTS/$remote_project" ] && ! spawn_choose_machine "$remote_placement" "$remote_host" "$remote_project"; then
+      remote_placement=
+    fi
+  fi
+  if [ -n "$remote_placement" ]; then
+    remote_rc=0
+    spawn_remote_worker "$remote_placement" "$remote_project" "$remote_host" || remote_rc=$?
+    [ "$remote_rc" -eq 75 ] && [ -d "$PROJECTS/$remote_project" ] || exit "$remote_rc"
+    if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
+      SPAWN_TASK_LOCK_HELD=0
+      fm_lock_release "$SPAWN_TASK_LOCK" || true
+    fi
+    echo "machine: this machine picked - $remote_host deferred the launch after the room check; launching here" >&2
   fi
 fi
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
