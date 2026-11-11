@@ -153,10 +153,12 @@ Firstmate running outside Herdr entirely has no launcher workspace to inherit, s
 That path needs the home label to identify exactly one workspace.
 Two workspaces sharing it are an unresolvable placement and refuse rather than adopting either.
 
-On a remote execution home with presentation spaces on, that labeled workspace is the header its worker rows hang under.
-When the home creates it, the header's idle shell opens in the execution home folder, and `state/herdr-home-header` records its exact workspace, tab, and pane.
-Cleaning up the last worker of that home in the session closes the recorded header, but only while it still carries the home label and holds nothing but its own idle shell.
-A labeled workspace the home found already present is never recorded and always stays.
+On a remote execution home with presentation spaces on, a projected worker row hangs under that labeled workspace only when it already exists.
+The home never creates it for projected rows, because a workspace made only to head them would hold nothing but Herdr's seeded idle shell.
+Without it each worker row is its own top-level workspace, and cleaning up the last one leaves the session empty.
+When the row is the session's only workspace, its task tab takes focus, because no prior focus exists to preserve.
+An existing labeled workspace is never removed, except one an earlier release created and recorded in `state/herdr-home-header` with its exact workspace, tab, and pane.
+Cleaning up the last worker of that home in the session closes such a recorded header, but only while it still carries the home label and holds nothing but its own idle shell.
 
 Avoid naming a personal workspace `firstmate` or `2ndmate-<id>` for that reason.
 Also avoid it because the adapter cannot distinguish that label collision from its own container.
@@ -265,7 +267,7 @@ That reclaim first retires a journal bound to exactly the gone endpoint, or an u
 Creation proceeds in this order:
 
 1. Firstmate atomically publishes a three-field version 1 journal containing a random 128-bit base64url token, before asking Herdr to create anything.
-2. After the new workspace converges to one exact task endpoint beneath one exact parent workspace id, the journal advances to a version 2 binding.
+2. After the new workspace converges to one exact task endpoint beneath one exact parent workspace id, or at the top level when there is no parent, the journal advances to a version 2 binding.
    That binding records the physical home, named session, endpoint, parent, and immutable expected labels.
 
 Another parent with the same presentation label does not prevent publication or participate in restart reclaim.
@@ -276,7 +278,7 @@ Neither token, title, nor journal authorizes send, capture, task ownership, Tree
 ### Owning parent and tabs
 
 The owning parent is the launcher's own exact workspace, resolved from the same identity the flat path uses.
-It falls back to a unique home-label lookup only for a Firstmate outside Herdr.
+It falls back to a unique home-label lookup only for a Firstmate outside Herdr, and when that finds none the projection has no parent: its binding records an empty parent id and ordering leaves it where Herdr created it.
 Projected children are never collapsed back into that parent.
 The parent is the placement and ordering reference the projection is bound under.
 
@@ -501,7 +503,7 @@ Any of these preserves the candidate and lets session startup continue with at m
 | Test | What it covers |
 | --- | --- |
 | `tests/fm-backend-herdr-presentation-e2e.test.sh` | Multi-home ordering, concurrency, lock contention, legacy coexistence, focus preservation, exact same-identity restart replacement, ambiguous bindings and tokens, and exact-pane cleanup through the guarded lab path. |
-| `tests/fm-remote-home-header-herdr-e2e.test.sh` | Proves through the real remote launch path that an execution home's header opens in the home folder, survives while a worker row remains, goes with the last one, and that a pre-existing labeled workspace stays. |
+| `tests/fm-remote-home-header-herdr-e2e.test.sh` | Proves through the real remote launch path that an execution home creates only its worker rows, that a pre-existing labeled workspace heads them and stays, and that a header recorded by an earlier release goes with its last row. |
 | `tests/fm-herdr-session-cleanup.test.sh` | Every discovery, ownership, topology, process, locking, revalidation, focus, retirement, and continue-on-error boundary. |
 | `tests/fm-herdr-session-cleanup-e2e.test.sh` | The restored-shell cleanup in a guarded non-default named lab. |
 | `tests/fm-backend-herdr-focus-flash-e2e.test.sh` | Reproduces the raw explicit-close focus steal on the installed release, and proves the focus-safe emptying-close plan removes a doomed workspace with no wrong-focus interval. |
