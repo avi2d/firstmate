@@ -22,6 +22,8 @@ The serial shards grew from thirteen to fourteen, packing the new total under th
 An existing live-capability skip is a portable-runner measurement, not a timing claim for the unavailable live integration.
 Observed maxima provide conservative packing weights, not an upper bound on future durations.
 
+The 2026-11-11 `tests/fm-herdr-timer-read-no-input-live-e2e.test.sh` serial hint is a provisional 38000 ms, above the slowest of three local samples of 27728 to 37912 ms on a Linux x86_64 host exercising Herdr 0.9.5 and Pi 1.5.1, until the next CI refresh replaces it with an Ubuntu timing-artifact maximum.
+
 Two serial-5 jobs were cancelled at their 30-minute cap and uploaded no artifact.
 Their completed log markers supplement the complete runs, but a cancelled job's wall time is only a lower bound and its unfinished or never-started scripts have no completed sample.
 A failed script's duration is excluded even when its lane uploaded an artifact.
