@@ -759,10 +759,10 @@ A missed native transition falls through to the composer verdict rather than rep
 
 ### Capture size
 
-`pane read --lines N` can return empty output when N is below the viewport height.
-The capture owner requests at least 200 lines from Herdr and trims locally to the caller's bound.
-This generous floor is required for the small bounded reads that remain: peek and watch tails, the rendered busy-footer read, and the shared steering-inbox pending-line read.
-The adapter's own composer reads are exempt because they read the visible viewport instead, which takes no line count (see [Claude composer proof](#claude-composer-proof)).
+The bounded capture reads the visible viewport and trims locally to the caller's bound, so it never returns a row above the viewport.
+A `pane read --source recent` longer than the viewport makes Herdr wheel-scroll an idle alternate-screen agent to harvest its history, and the agent redraws for every page, so no read that supervision issues on a timer uses that source.
+`bin/fm-peek.sh --scrollback` is the one read that reaches above the viewport, for a single deliberate look at a local pane.
+That read requests at least 200 lines from Herdr and trims locally, because `pane read --source recent --lines N` can return empty output when N is below the viewport height.
 
 ### Native idle state
 
@@ -1070,6 +1070,7 @@ tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh
 tests/fm-herdr-pi-stale-registration-live-e2e.test.sh
 tests/fm-herdr-pi-sandbox-live-e2e.test.sh
 tests/fm-herdr-pi-fullscreen-scrollbar-live-e2e.test.sh
+tests/fm-herdr-timer-read-no-input-live-e2e.test.sh
 tests/fm-herdr-restore-isolation-live-e2e.test.sh
 tests/fm-backend-herdr-eventwait-smoke.test.sh
 tests/fm-control-herdr-smoke.test.sh

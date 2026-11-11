@@ -1110,9 +1110,10 @@ SELECTED_RUN_ID=""
 # worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
   RUN_OUT=$(nm_run axi status)
-  if [ "$(strip_quotes "$(printf '%s\n' "$RUN_OUT" | sed -n 's/^error: //p')")" = "repo not initialized (run 'no-mistakes init' first)" ]; then
-    RUN_OUT=""
-  fi
+  case "$(strip_quotes "$(printf '%s\n' "$RUN_OUT" | sed -n 's/^error: //p')")" in
+    "repo not initialized (run 'no-mistakes init' first)") RUN_OUT="" ;;
+    "stat "*"/state.sqlite: no such file or directory") RUN_OUT="" ;;
+  esac
   if [ -n "$RUN_OUT" ]; then
     # The overview includes run ids and creation order, which the plain runs
     # listing omits. Keep the primary empty-call bound above: a nonresponding

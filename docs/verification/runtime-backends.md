@@ -1438,7 +1438,7 @@ The CLI matrix was checked directly:
 | Explicit session routing | `herdr <verb> ... --session <name>` | Reached the named session even while another server was running. |
 | Literal send | `herdr pane send-text <pane> <text> --session <name>` | Left text unsubmitted until Enter. |
 | Keys | `herdr pane send-keys <pane> enter|escape|ctrl+c --session <name>` | Enter and Escape worked; Ctrl-C interrupted foreground work. |
-| Capture | `herdr pane read <pane> --source recent --lines N` | Small N could return empty below viewport height; a 200-line request plus local trim was stable. |
+| Scrollback capture | `herdr pane read <pane> --source recent --lines N` | Small N could return empty below viewport height, and a 200-line request plus local trim was stable. Only `fm_backend_herdr_scrollback_capture` issues it, as "Recent reads wheel-scroll an idle fullscreen agent" below records. |
 | Viewport capture | `herdr pane read <pane> --source visible` | Verified on 2026-09-17 against Herdr 0.8.0 (protocol 19): `herdr pane read --help` documents `--source <SOURCE>` with `[possible values: visible, recent, recent-unwrapped, detection]`; `--source visible` exited 0 and returned 51 lines (the viewport) while `--source recent --lines 200` returned 200. This is the viewport-only read behind `fm_backend_herdr_visible_capture`, which Kimi's trust-dialog gate requires. |
 | Styled viewport capture | `herdr pane read <pane> --source visible --format ansi` | Verified on 2026-09-26 against Herdr 0.9.0 with Claude Code 2.1.283: the flag pair exited 0 and returned the viewport with SGR attributes intact, which is the styled read behind `fm_backend_herdr_visible_capture_ansi` that ghost/placeholder stripping needs (see "Claude exit behind the slash-command popup" below). |
 | Native state | `herdr agent get <pane>` | Working and done transitions were visible on some harnesses; live Claude Code 2.1.236 on Herdr 0.8.0 kept `agent_status=idle` for an entire landed turn, including a multi-second tool call, so submit confirmation falls through to the shared composer verdict. Native `busy` remains positive activity evidence, while native `idle` cannot close a turn and the adapter's semantic lifecycle decides worker state. |
@@ -2282,14 +2282,14 @@ ok - real herdr 0.9.3 + pi 1.0.3: a worker resumed by a server restart reads as 
 [`bin/fm-pane-hash-lib.sh`](../../bin/fm-pane-hash-lib.sh) owns the hash the watcher compares between polls, and [`tests/captures/pi-1.0.2-herdr-0.9.3/README.md`](../../tests/captures/pi-1.0.2-herdr-0.9.3/README.md) holds the replay captures behind its portable test.
 Measured 2026-10-05 on Darwin arm64 against Herdr 0.9.3 and Pi 1.0.2, in isolated `fm-lab-` sessions (`bin/fm-herdr-lab.sh`).
 
-A Herdr `pane read --source recent` longer than the viewport, which every `fm_backend_herdr_capture` issues, makes fullscreen Pi draw its scrollbar in the pane's last column for about one second once the transcript exceeds the viewport.
+A Herdr `pane read --source recent` longer than the viewport, which `fm_backend_herdr_scrollback_capture` issues, makes fullscreen Pi draw its scrollbar in the pane's last column for about one second once the transcript exceeds the viewport.
 The same read returns a varying number of rows from above the viewport.
 A `--source visible` read never triggers the scrollbar but shows one that another reader triggered.
 Regular mode never draws it.
 So the hash reads a Herdr Pi pane's viewport and strips the scrollbar column, and both halves are needed: a stripped 40-line tail still changed about one poll in ten on an unchanged pane, and an unstripped viewport changed whenever another reader had read the pane within the last second.
-The stripped viewport kept one digest across 120 one-second polls of an idle fullscreen pane, 59 of them mid-flash, with a 40-line read every third poll and another reader every 4 s.
+The stripped viewport kept one digest across 120 one-second polls of an idle fullscreen pane, 59 of them mid-flash, with a 200-line `--source recent` read every third poll and another reader every 4 s.
 
-The real `bin/fm-watch.sh`, with `FM_POLL=3` and `FM_STALE_ESCALATE_SECS=30`, watched an idle regular-mode worker and an idle fullscreen worker, both spawned by `bin/fm-spawn.sh` with a transcript longer than the viewport, while `bin/fm-peek.sh` read both panes every 4 s:
+The real `bin/fm-watch.sh`, with `FM_POLL=3` and `FM_STALE_ESCALATE_SECS=30`, watched an idle regular-mode worker and an idle fullscreen worker, both spawned by `bin/fm-spawn.sh` with a transcript longer than the viewport, while `bin/fm-peek.sh`, which then issued that `--source recent` read, read both panes every 4 s:
 
 ```text
 t+33s signal: fs4.turn-ended reg4.turn-ended
@@ -2319,12 +2319,55 @@ The live guard that refreshes this record runs by default wherever Herdr, Pi, jq
 tests/fm-herdr-pi-fullscreen-scrollbar-live-e2e.test.sh
 ```
 
-Observed 2026-10-05:
+Observed 2026-11-11 on Linux x86_64 against Herdr 0.9.5 and Pi 1.5.1:
 
 ```text
-# fullscreen pi 1.0.2 under herdr 0.9.3: scrollbar rows quiet 0, flash 34
-ok - real herdr 0.9.3 + pi 1.0.2: a fullscreen pane hashes the same with and without its transient scrollbar
-ok - real herdr 0.9.3 + pi 1.0.2: a regular-mode pane draws no scrollbar and hashes its viewport as the plain digest
+# fullscreen pi 1.5.1 under herdr 0.9.5: scrollbar rows quiet 0, flash 34
+ok - real herdr 0.9.5 + pi 1.5.1: a fullscreen pane hashes the same with and without its transient scrollbar
+ok - real herdr 0.9.5 + pi 1.5.1: a regular-mode pane draws no scrollbar and hashes its viewport as the plain digest
+```
+
+### Recent reads wheel-scroll an idle fullscreen agent
+
+Measured 2026-11-11 on Linux x86_64 against Herdr 0.9.5 and Pi 1.5.1, in isolated `fm-lab-` sessions from `bin/fm-herdr-lab.sh`, with a Pi extension appending every stdin chunk to a file.
+The pane held an idle fullscreen Pi whose transcript was longer than its 40-row viewport.
+
+| Read | Bytes written to Pi's stdin | Wheel-up reports | Wheel-down reports | Frames Pi drew |
+| --- | --- | --- | --- | --- |
+| None, for 3 s | 0 | 0 | 0 | 0 |
+| `herdr pane read <pane> --source visible` | 0 | 0 | 0 | 0 |
+| `herdr pane read <pane> --source recent --lines 200` | 564 | 12 | 35 | 8 |
+
+Herdr harvests the rows above an alternate-screen viewport by scrolling the agent itself, so every such read costs the agent a burst of redraws.
+The same `--source recent --lines 200` read against a raw-mode process that logs its stdin, started after 300 printed lines, shows which panes Herdr scrolls:
+
+| Pane | Bytes written to the process's stdin | Wheel-up reports | Wheel-down reports |
+| --- | --- | --- | --- |
+| Main screen, no reported agent | 0 | 0 | 0 |
+| Main screen, agent reported as `claude` | 0 | 0 | 0 |
+| Alternate screen with mouse reporting, no reported agent | 0 | 0 | 0 |
+| Alternate screen with mouse reporting, agent reported as `claude` | 108 | 3 | 6 |
+| Alternate screen with mouse reporting, agent reported as `codex` | 108 | 3 | 6 |
+| Alternate screen with mouse reporting, agent reported as `pi` | 108 | 3 | 6 |
+
+The agent was reported with `herdr pane report-agent <pane> --source lab-probe --agent <name> --state idle`.
+So the scroll does not depend on Pi: Herdr wheel-scrolls any alternate-screen pane whose agent it knows.
+On every alternate-screen pane `--source recent --lines 5` returned nothing, and on the main-screen panes it returned the pane's last rows.
+
+`fm_backend_herdr_capture` therefore reads the viewport, and `fm_backend_herdr_scrollback_capture`, reached only through `bin/fm-peek.sh --scrollback`, is the one `--source recent` read.
+
+The live guard that refreshes this record runs by default wherever Herdr, Pi, jq, and Perl are installed, spends no model token, and fails naming both versions:
+
+```sh
+tests/fm-herdr-timer-read-no-input-live-e2e.test.sh
+```
+
+Observed 2026-11-11:
+
+```text
+ok - real herdr 0.9.5 + pi 1.5.1: bounded captures, fm-peek, fm-crew-state, and the watcher's polling write nothing to an idle fullscreen pane
+# herdr 0.9.5: the scrollback read returned 55 rows past a 40-row viewport and wrote 564 bytes to pi's stdin
+ok - real herdr 0.9.5 + pi 1.5.1: fm-peek --scrollback reads above the viewport
 ```
 
 ### Fullscreen Pi workers and second mates
@@ -2339,7 +2382,7 @@ Every check below gave the same answer in both modes, for the scout and for the 
 - Composer state while empty, while holding typed text, after clearing, and after relaunch.
 - A `bin/fm-send.sh` steer read and moved to `handled/` when sent mid-turn, when idle, and after relaunch, and the doorbell skipped over a typed draft without touching it.
 - `bin/fm-control.sh` interrupt (`cancel=unconfirmed` in both), relaunch, and exit.
-- `bin/fm-peek.sh` showing the newest transcript row and the composer, and a 200-line read reaching the first transcript line.
+- `bin/fm-peek.sh` showing the newest transcript row and the composer, and a 200-line `--source recent` read reaching the first transcript line.
 
 The fullscreen worker drew 33 scrollbar rows after a long read, before and after relaunch, and the control drew none, so relaunch keeps the TUI mode.
 The stale and wedge hash is the one supervision read that needed a change, recorded under "Fullscreen Pi scrollbar and the stale hash" above.
