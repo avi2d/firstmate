@@ -27,7 +27,9 @@ Usage:
   fm-backlog-reclaim.sh <secondmate-id> [--dry-run] <item-key>...
 
 --all selects every Queued item in the second mate's backlog. In-flight and
-Done items are refused. --dry-run reads the second mate's backlog, rehearses
+Done items are refused. A blocked-by edge whose blocker is Done in the second
+mate's backlog or its done-archive.md is cleared there rather than stranding the
+move. --dry-run reads the second mate's backlog, rehearses
 the same move on scratch copies of both backlogs, and changes nothing.
 Rerunning after an interrupted reclaim finishes the staged set.
 EOF
@@ -91,7 +93,7 @@ rehearse_move() { # <source-copy> <keys...>
   else
     printf '## In flight\n\n## Queued\n\n## Done\n' > "$SCRATCH/main.md"
   fi
-  if ! out=$(tasks-axi mv "$@" --file "$source" --to "$SCRATCH/main.md" --backend markdown 2>&1); then
+  if ! out=$(fm_tasks_axi_mv_past_done_blockers "$source" "$SCRATCH/archive.md" "$SCRATCH/main.md" "$@"); then
     printf '%s\n' "$out" >&2
     die "the move would be refused; nothing was staged"
   fi
@@ -147,6 +149,13 @@ if [ -z "$STAGED_KEYS" ]; then
   rc=0
   remote fm-remote-file.sh get data/backlog.md "$MAX_BYTES" > "$SCRATCH/source.md" || rc=$?
   [ "$rc" -eq 0 ] || remote_failed "$rc" "reading the backlog"
+  rc=0
+  remote fm-remote-file.sh get data/done-archive.md "$MAX_BYTES" > "$SCRATCH/archive.md" 2>/dev/null || rc=$?
+  case "$rc" in
+    0) ;;
+    255) remote_failed "$rc" "reading the done archive" ;;
+    *) : > "$SCRATCH/archive.md" ;;
+  esac
   if [ "$ALL" -eq 1 ]; then
     while IFS= read -r key; do KEYS+=("$key"); done < <(queued_keys "$SCRATCH/source.md")
   fi

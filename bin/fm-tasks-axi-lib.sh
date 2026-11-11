@@ -260,3 +260,40 @@ fm_tasks_axi_backend_available() {
   fm_backlog_backend_manual "$config_dir" && return 1
   fm_tasks_axi_compatible
 }
+
+fm_tasks_axi_done_in() { # <backlog-or-archive> <key>
+  [ -f "$1" ] || return 1
+  awk -v key="$2" '
+    /^- \[x\] / {
+      rest=$0; sub(/^- \[x\] +/, "", rest); id=rest; sub(/[ \t].*/, "", id)
+      if (id == key) { found=1; exit }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+
+# tasks-axi mv strands any blocker left behind, Done or not, so an edge whose
+# blocker is Done in <source> or its <archive> is cleared from <source> before
+# the move. A cleared edge was already satisfied, so it stays cleared even when
+# the move is then refused for another reason.
+fm_tasks_axi_mv_past_done_blockers() { # <source> <archive> <dest> <keys...>
+  local source=$1 archive=$2 dest=$3 out item blocker last=
+  shift 3
+  while :; do
+    if out=$(tasks-axi mv "$@" --file "$source" --to "$dest" --backend markdown 2>&1); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    item='' blocker=''
+    read -r item blocker <<EOF || true
+$(printf '%s\n' "$out" | sed -n 's/^error: "Cannot move \\"\([^\\"]*\)\\": its blocker \\"\([^\\"]*\)\\" would be stranded.*/\1 \2/p' | head -1)
+EOF
+    if [ -z "$item" ] || [ -z "$blocker" ] || [ "$item $blocker" = "$last" ] \
+      || ! { fm_tasks_axi_done_in "$source" "$blocker" || fm_tasks_axi_done_in "$archive" "$blocker"; } \
+      || ! tasks-axi unblock "$item" --by "$blocker" --file "$source" --backend markdown >/dev/null 2>&1; then
+      printf '%s\n' "$out"
+      return 1
+    fi
+    last="$item $blocker"
+  done
+}

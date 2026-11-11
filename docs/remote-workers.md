@@ -51,6 +51,7 @@ A host refusal is relayed with its reason, and nothing local changes.
 Use it when retiring a remote second mate whose projects now run on an execution home.
 
 - In-flight and Done items are refused, and so is a blocker that the selected set would strand.
+- A blocked-by link whose blocker is Done in the second mate's backlog or its `data/done-archive.md` is already satisfied, so the second mate clears it rather than refusing the move.
 - `--dry-run` reads the second mate's backlog, rehearses the move on scratch copies of both backlogs, and changes nothing.
 - Notes, holds, `--until` dates, and blocked-by links travel with each item.
 

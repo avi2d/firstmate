@@ -111,7 +111,7 @@ sorted_key_set() { # <keys...>
 }
 
 reclaim_stage() { # <keys...>
-  local key section staged move_out
+  local key section staged move_out archive
   local -a refused=()
   [ "$#" -gt 0 ] || die "reclaim-stage requires at least one item key"
   for key in "$@"; do
@@ -132,10 +132,12 @@ reclaim_stage() { # <keys...>
   done
   [ "${#refused[@]}" -eq 0 ] || die "reclaim moves only Queued items; refusing: ${refused[*]}"
   fm_tasks_axi_compatible || die "a compatible tasks-axi is required for an atomic reclaim; run bin/fm-bootstrap.sh for the required version"
+  archive="$HOME_REAL/data/done-archive.md"
+  [ -f "$archive" ] && [ ! -L "$archive" ] || archive=
   printf '## In flight\n\n## Queued\n\n## Done\n' > "$RECLAIM_OUTBOX" || die "cannot create the reclaim outbox"
-  if ! move_out=$(tasks-axi mv "$@" --file "$SOURCE" --to "$RECLAIM_OUTBOX" --backend markdown 2>&1); then
+  if ! move_out=$(fm_tasks_axi_mv_past_done_blockers "$SOURCE" "$archive" "$RECLAIM_OUTBOX" "$@"); then
     if ! remove_dead_stale_lock "$SOURCE.lock" \
-        || ! move_out=$(tasks-axi mv "$@" --file "$SOURCE" --to "$RECLAIM_OUTBOX" --backend markdown 2>&1); then
+        || ! move_out=$(fm_tasks_axi_mv_past_done_blockers "$SOURCE" "$archive" "$RECLAIM_OUTBOX" "$@"); then
       rm -f -- "$RECLAIM_OUTBOX"
       [ -z "$move_out" ] || printf '%s\n' "$move_out" >&2
       die "atomic reclaim staging failed; nothing left this home's backlog"

@@ -128,6 +128,49 @@ out=$(reclaim ios q3 2>&1) || fail "rerunning after a lost release failed: $out"
 [ "$(grep -c '^- \[ \] q3 ' "$PARENT/data/backlog.md")" -eq 1 ] || fail "rerunning after a lost release duplicated q3"
 pass "a reclaim whose release reply was lost reconciles on rerun without duplicating"
 
+cat > "$REMOTE/data/backlog.md" <<'MD'
+## In flight
+
+## Queued
+
+- [ ] q4 - Waits on pruned work blocked-by: gone (kind: ship)
+- [ ] q5 - Waits on finished work blocked-by: old (kind: ship)
+
+## Done
+
+- [x] old - Finished item (kind: ship)
+MD
+printf '## Done\n\n- [x] gone - Pruned finished item (kind: ship)\n' > "$REMOTE/data/done-archive.md"
+cat > "$PARENT/data/backlog.md" <<'MD'
+## In flight
+
+## Queued
+
+## Done
+MD
+out=$(reclaim ios --dry-run --all 2>&1) || fail "dry run refused Queued items whose blockers are Done: $out"
+out=$(reclaim ios --all 2>&1) || fail "reclaim refused Queued items whose blockers are Done: $out"
+for key in q4 q5; do
+  [ "$(section_of "$PARENT/data/backlog.md" "$key")" = '## Queued' ] || fail "$key did not arrive Queued in the parent: $(cat "$PARENT/data/backlog.md")"
+  [ -z "$(section_of "$REMOTE/data/backlog.md" "$key")" ] || fail "$key is still in the second mate's backlog"
+done
+[ "$(section_of "$REMOTE/data/backlog.md" old)" = '## Done' ] || fail "the Done blocker left the second mate's backlog"
+pass "reclaim --all moves Queued items whose blockers are Done, pruned or not"
+
+cat > "$REMOTE/data/backlog.md" <<'MD'
+## In flight
+
+## Queued
+
+- [ ] q6 - Waits on unknown work blocked-by: nowhere (kind: ship)
+
+## Done
+MD
+before_remote=$(cat "$REMOTE/data/backlog.md")
+out=$(reclaim ios --all 2>&1) && fail "an item whose blocker exists nowhere was reclaimed: $out"
+[ "$(cat "$REMOTE/data/backlog.md")" = "$before_remote" ] || fail "a refused reclaim changed the second mate's backlog"
+pass "a blocker that is not Done anywhere still refuses the reclaim"
+
 printf '%s\n' "- ios - iOS delivery (scope: iOS work; projects: alpha; added 2026-08-02)" > "$PARENT/data/secondmates.md"
 out=$(reclaim ios --all 2>&1) && fail "a local second mate was routed as remote: $out"
 printf '%s\n' "$out" | grep -F 'not a registered remote second mate' >/dev/null || fail "local second mate refusal was unclear: $out"
