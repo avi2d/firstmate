@@ -4403,37 +4403,52 @@ test_normalize_key() {
 
 # --- capture / send_key / kill / current_path --------------------------------
 
-test_capture_calls_pane_read() {
+test_capture_reads_the_viewport_and_never_the_recent_source() {
   local dir log resp fb out
   dir="$TMP_ROOT/capture"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf 'line one\nline two\nline three\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
-  # Requesting 250 (already >= the 200 floor) passes straight through as the
-  # fetch bound; the adapter then trims to the caller's requested 250 lines
-  # locally, so all 3 fake lines survive.
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture default:w1:p2 250' "$ROOT" )
   [ "$out" = $'line one\nline two\nline three' ] || fail "capture did not pass through pane read output, got '$out'"
-  assert_contains "$(cat "$log")" "HERDR_SESSION=default"$'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2'$'\x1f''--source'$'\x1f''recent'$'\x1f''--lines'$'\x1f''250' \
-    "capture did not call pane read with the right pane id and line bound"
-  pass "fm_backend_herdr_capture: calls 'pane read <pane> --source recent --lines N' with the session set"
+  assert_contains "$(cat "$log")" "HERDR_SESSION=default"$'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2'$'\x1f''--source'$'\x1f''visible' \
+    "capture did not read the viewport of the right pane"
+  [ "$(grep -c $'\x1f''recent' "$log")" -eq 0 ] || fail "the bounded capture asked herdr for the recent source, which scrolls an idle agent"
+  [ "$(grep -c $'\x1f''--lines' "$log")" -eq 0 ] || fail "the bounded capture passed herdr a line count"
+  pass "fm_backend_herdr_capture: calls 'pane read <pane> --source visible' with the session set, never the recent source"
 }
 
-test_capture_works_around_small_lines_bug() {
+test_capture_trims_the_viewport_to_the_requested_lines() {
   local dir log resp fb out
-  # Verified herdr v0.7.1 bug (herdr-verification-p2.md): `pane read --lines N`
-  # for a small N (below the pane's viewport height) returns EMPTY, not the
-  # last N lines. The adapter must never ask herdr for a small --lines bound -
-  # it always fetches >= 200 and trims locally with tail.
   dir="$TMP_ROOT/capture-small"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf 'a\nb\nc\nd\ne\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_capture default:w1:p2 2' "$ROOT" )
-  [ "$out" = $'d\ne' ] || fail "a small --lines request should still return the last N lines (trimmed locally), got '$out'"
-  assert_contains "$(cat "$log")" $'\x1f''--lines'$'\x1f''200' \
-    "capture should request a generous fetch (>=200), never the caller's small N, from herdr's own --lines flag"
-  pass "fm_backend_herdr_capture: works around the verified small-N '--lines' bug by over-fetching and trimming locally"
+  [ "$out" = $'d\ne' ] || fail "a 2-line capture should return the last 2 viewport rows, got '$out'"
+  pass "fm_backend_herdr_capture: trims the viewport to the caller's line count locally"
+}
+
+test_scrollback_capture_never_asks_herdr_for_fewer_than_200_lines() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/scrollback-small"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf 'a\nb\nc\nd\ne\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_scrollback_capture herdr default:w1:p2 2' "$ROOT" )
+  [ "$out" = $'d\ne' ] || fail "a 2-line scrollback read should return the last 2 lines, got '$out'"
+  assert_contains "$(cat "$log")" "HERDR_SESSION=default"$'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2'$'\x1f''--source'$'\x1f''recent'$'\x1f''--lines'$'\x1f''200' \
+    "a 2-line scrollback read passed herdr the small count, which returns nothing below the viewport height"
+
+  dir="$TMP_ROOT/scrollback-large"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf 'line one\nline two\nline three\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_scrollback_capture herdr default:w1:p2 250' "$ROOT" )
+  [ "$out" = $'line one\nline two\nline three' ] || fail "a 250-line scrollback read did not pass through pane read output, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''--source'$'\x1f''recent'$'\x1f''--lines'$'\x1f''250' \
+    "a 250-line scrollback read did not ask herdr for 250 recent lines"
+  pass "fm_backend_scrollback_capture: reads herdr's recent source with at least 200 lines and trims locally"
 }
 
 test_capture_preserves_pane_read_failure() {
@@ -6208,8 +6223,23 @@ SH
     FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     "$ROOT/bin/fm-peek.sh" default:w1:p2 5 2>/dev/null )
   [ "$out" = "captured herdr pane" ] || fail "fm-peek did not capture through herdr for an explicit metadata-matched target, got '$out'"
-  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2' \
-    "fm-peek did not route the explicit stale target through herdr capture"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2'$'\x1f''--source'$'\x1f''visible' \
+    "fm-peek did not route the explicit stale target through the herdr viewport read"
+
+  : > "$log"; rm -f "$resp/.count"
+  out=$( PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    "$ROOT/bin/fm-peek.sh" default:w1:p2 5 --scrollback 2>/dev/null )
+  [ "$out" = "captured herdr pane" ] || fail "fm-peek --scrollback did not capture through herdr, got '$out'"
+  assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''read'$'\x1f''w1:p2'$'\x1f''--source'$'\x1f''recent' \
+    "fm-peek --scrollback did not read herdr's recent source"
+
+  : > "$log"
+  PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" \
+    FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    "$ROOT/bin/fm-peek.sh" default:w1:p2 --scrolback >/dev/null 2>&1
+  expect_code 2 $? "fm-peek should refuse an option it does not know"
+  [ ! -s "$log" ] || fail "fm-peek read the pane despite an option it does not know"
 
   : > "$log"
   PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$neutral" FM_HOME="$neutral" FM_STATE_OVERRIDE="$state" \
@@ -6960,8 +6990,9 @@ test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
 test_parse_target
 test_normalize_key
-test_capture_calls_pane_read
-test_capture_works_around_small_lines_bug
+test_capture_reads_the_viewport_and_never_the_recent_source
+test_capture_trims_the_viewport_to_the_requested_lines
+test_scrollback_capture_never_asks_herdr_for_fewer_than_200_lines
 test_capture_preserves_pane_read_failure
 test_reads_on_stopped_session_never_start_a_server
 test_send_key_normalizes_and_targets_pane

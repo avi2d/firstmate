@@ -1243,6 +1243,16 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
   esac
 }
 
+# Precondition: an operator asked for this read. On herdr it scrolls an idle
+# alternate-screen agent, so it never runs on a timer. Every other backend's
+# bounded capture already reaches its history.
+fm_backend_scrollback_capture() {  # <backend> <target> <lines> [expected-label]
+  [ "$1" = herdr ] || { fm_backend_capture "$@"; return; }
+  fm_backend_source herdr || return 1
+  shift
+  fm_backend_herdr_scrollback_capture "$@"
+}
+
 # FM_BACKEND_VISIBLE_CAPTURE: backends with a verified viewport-only read, each
 # implementing fm_backend_<name>_visible_capture. This one list answers both the
 # capability question and the dispatch, so they cannot disagree. cmux is absent

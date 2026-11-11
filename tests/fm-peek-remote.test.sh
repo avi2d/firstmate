@@ -104,7 +104,31 @@ test_remote_peek_unreachable_fails_loudly_without_death_claim() {
   pass "fm-peek remote: an unreachable host fails loudly without a false death claim"
 }
 
+test_remote_scrollback_peek_is_refused_instead_of_returning_the_viewport() {
+  local dir fb home touched rc out err
+  dir="$TMP_ROOT/peek-scrollback"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir")
+  home=$(setup_remote_home peek-scrollback)
+  touched="$dir/tmux-touched"; : > "$touched"
+
+  out=$(env PATH="$fb:$PATH" \
+    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_SSH_BIN="$fb/fake-ssh" FM_FAKE_SSH_RC=0 \
+    FM_FAKE_REMOTE_CAPTURE='● the remote viewport' \
+    FM_FAKE_TMUX_TOUCHED="$touched" \
+    "$PEEK" rsm 200 --scrollback 2>"$dir/err"); rc=$?
+  err=$(cat "$dir/err")
+  [ "$rc" -ne 0 ] || fail "a remote --scrollback peek must exit nonzero"
+  assert_not_contains "$out" "the remote viewport" \
+    "a remote --scrollback peek must not pass the remote viewport off as scrollback"
+  assert_contains "$err" "--scrollback cannot read the remote pane of rsm on remote-mac" \
+    "the refusal must name the flag, the remote mate, and the host"
+  [ ! -s "$touched" ] || fail "the local tmux adapter was consulted for a remote target"
+  pass "fm-peek remote: --scrollback is refused naming the mate and host"
+}
+
 test_remote_peek_reads_remote_pane
 test_remote_peek_unreachable_fails_loudly_without_death_claim
+test_remote_scrollback_peek_is_refused_instead_of_returning_the_viewport
 
 echo "all fm-peek-remote tests passed"

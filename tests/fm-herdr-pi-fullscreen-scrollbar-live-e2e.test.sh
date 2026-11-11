@@ -91,13 +91,13 @@ test_fullscreen_scrollbar_flash_hashes_like_the_quiet_pane() {
   sleep 3
   quiet=$(fm_backend_visible_capture herdr "$target")
   quiet_hash=$(fm_pane_stale_hash herdr pi "$target" '' "$quiet_tail") || version_fail "the stale hash could not read the fullscreen pane"
-  fm_backend_capture herdr "$target" 40 >/dev/null
+  fm_backend_scrollback_capture herdr "$target" 40 >/dev/null
   sleep 0.3
   flash_tail=$(fm_backend_capture herdr "$target" 40)
   flash=$(fm_backend_visible_capture herdr "$target")
   flash_hash=$(fm_pane_stale_hash herdr pi "$target" '' "$flash_tail") || version_fail "the stale hash could not read the fullscreen pane"
   [ "$(scrollbar_rows "$flash")" -gt "$(scrollbar_rows "$quiet")" ] && [ "$flash_tail" != "$quiet_tail" ] || version_fail \
-    "fullscreen pi drew no scrollbar after a long herdr read (scrollbar rows: quiet $(scrollbar_rows "$quiet"), flash $(scrollbar_rows "$flash")), so this guard no longer exercises the strip"
+    "fullscreen pi drew no scrollbar after a herdr scrollback read (scrollbar rows: quiet $(scrollbar_rows "$quiet"), flash $(scrollbar_rows "$flash")), so this guard no longer exercises the strip"
   [ "$quiet_hash" = "$flash_hash" ] || version_fail \
     "an unchanged idle fullscreen pi pane hashes differently with its scrollbar column; quiet:"$'\n'"$quiet"$'\n'"flash:"$'\n'"$flash"
   note "fullscreen pi $PI_VERSION under herdr $HERDR_VERSION: scrollbar rows quiet $(scrollbar_rows "$quiet"), flash $(scrollbar_rows "$flash")"
@@ -108,7 +108,7 @@ test_regular_pane_hashes_its_viewport_as_plain_digest() {
   local target viewport
   start_long_transcript regular
   target=$TARGET
-  fm_backend_capture herdr "$target" 40 >/dev/null
+  fm_backend_scrollback_capture herdr "$target" 40 >/dev/null
   sleep 0.3
   viewport=$(fm_backend_visible_capture herdr "$target")
   [ "$(scrollbar_rows "$viewport")" -eq 0 ] || version_fail "regular-mode pi drew a scrollbar column:"$'\n'"$viewport"
