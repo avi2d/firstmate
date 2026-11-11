@@ -22,7 +22,7 @@ A remote second mate is a different arrangement, where a whole supervising home 
 | --- | --- | --- |
 | Launch | `fm-spawn.sh` for a placed project | The host admits the task, creates its worktree, and opens one pane in the execution home's Herdr session |
 | Status | Automatic | One feed per execution home mirrors every task's status lines into this home's `state/<task>.status`, and copies the reports and review-question files those lines name into this home's `data/<task>/` |
-| Steer | `fm-send.sh <task> ...`, with `--resolve-key` when it answers a decision | The steer lands in the task's durable inbox on the host and rings the pane |
+| Steer | `fm-send.sh <task> ...`, with `--resolve-key` when it answers a decision | The steer lands in the task's durable inbox on the host and rings the pane. An answered key closes in the host's status stream as well as this home's |
 | Lifecycle | `fm-control.sh <task> interrupt\|exit\|relaunch` | The host acts on its own pane and reports the endpoint back |
 | Current state | `fm-crew-state.sh <task>` | The host classifies its own pane |
 | PR ready | The worker's `done:` line | The host runs the done gate against its own worktree |
@@ -37,7 +37,8 @@ The item then stays queued and is dispatched again at the next queue review.
 `fm-teardown.sh <task>` on a remote worker first asks the execution home to clean up its side.
 That host-side teardown applies the ordinary landed-work test, so unlanded work is refused there exactly as it is for a local worker.
 Only after the host confirms does this home archive the status stream, clear its task records, retire the task's feed cursor, and move the backlog item to Done with its PR link or scout report.
-A scout's report must already have reached this home through the status feed.
+A scout's report must already have reached this home through the status feed, and this home's captain-call completion gate, `fm-captain-hold.sh verify`, must pass before the host is asked to do anything.
+The execution home holds no backlog or captain-call inventory, so it skips that gate and relies on this home's verdict.
 
 An SSH exit 255 or a budget timeout means the host's completion is unknown.
 Every local record then stays as it was, and running the same teardown again reconciles it.

@@ -94,6 +94,28 @@ worker_send_stdin() {  # <id> [fire-and-forget]; message on stdin
   esac
 }
 
+worker_resolve_stdin() {  # <id>; resolved status lines on stdin
+  local id=$1 status line closes=() appended=0
+  worker_endpoint_require "$id"
+  # shellcheck source=bin/fm-classify-lib.sh
+  . "$SCRIPT_DIR/fm-classify-lib.sh"
+  status="$TARGET_HOME/state/$id.status"
+  [ ! -L "$status" ] || die "worker status log is a symlink"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[[:cntrl:]]*) die "resolved line carries a control character" ;; esac
+    [ "$(status_line_verb "$line")" = resolved ] && [ -n "$(_fm_decision_key "$line" '')" ] \
+      || die "only keyed resolved lines may be appended"
+    closes+=("$line")
+  done
+  [ "${#closes[@]}" -gt 0 ] || die "resolve-stdin requires at least one resolved line"
+  for line in "${closes[@]}"; do
+    if [ -f "$status" ] && grep -Fqx -- "$line" "$status"; then continue; fi
+    printf '%s\n' "$line" >> "$status" || die "cannot append to worker status log"
+    appended=$((appended + 1))
+  done
+  printf 'resolved appended=%s\n' "$appended"
+}
+
 worker_key() {  # <id> <key>
   worker_endpoint_require "$1"
   FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-send.sh" "$1" --key "$2"
@@ -428,6 +450,10 @@ case "${1:-}" in
   send-stdin)
     [ "$#" -ge 2 ] && [ "$#" -le 3 ] || die "send-stdin requires a task id and optional delivery mode"
     worker_send_stdin "$2" "${3:-}"
+    ;;
+  resolve-stdin)
+    [ "$#" -eq 2 ] || die "resolve-stdin requires a task id"
+    worker_resolve_stdin "$2"
     ;;
   key)
     [ "$#" -eq 3 ] || die "key requires a task id and key"
