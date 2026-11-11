@@ -115,7 +115,7 @@ printf '%s\n' "- exec-one - execution (host: testhost; root: $REMOTE_ROOT; home:
 parent() {
   env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_SESSION \
     FM_HOME="$PARENT" FM_SPAWN_NO_GUARD=1 FM_SSH_BIN="$FAKE/ssh" \
-    FM_REMOTE_JOB_STATE_ROOT="$JOB_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$@"
+    FM_REMOTE_JOB_STATE_ROOT="$JOB_STATE" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_MAC_LOAD_MOCK_5MIN=1000 "$@"
 }
 
 launch() {  # <task-id>
@@ -143,34 +143,46 @@ clean_up() {  # <task-id>
 
 HEADER_RECORD="$EXEC_HOME/state/herdr-home-header"
 
+workspace_ids() {
+  lab workspace list 2>/dev/null | jq -r '[.result.workspaces[]?.workspace_id] | join(" ")' 2>/dev/null
+}
+
+task_row_of() {  # <task-id>
+  lab workspace list 2>/dev/null \
+    | jq -r --arg t "$1" '[.result.workspaces[]? | select(.label | startswith("└ " + $t + " · p:")) | .workspace_id] | join(" ")' 2>/dev/null
+}
+
+tab_labels_of_workspace() {  # <workspace_id>
+  lab tab list --workspace "$1" 2>/dev/null | jq -r '[.result.tabs[]?.label] | join(" ")' 2>/dev/null
+}
+
 # --- 1. one launch and cleanup ----------------------------------------------
 
-[ -z "$(workspaces_labelled firstmate)" ] || fail "the fresh lab already holds a home header"
+[ -z "$(workspace_ids)" ] || fail "the fresh lab already holds a workspace"
 launch solo1
-HEADER=$(workspaces_labelled firstmate)
-[ -n "$HEADER" ] && [ "${HEADER#* }" = "$HEADER" ] || fail "launch did not create exactly one home header: '$HEADER'"
-[ "$(pane_cwds_of_workspace "$HEADER")" = "$EXEC_HOME" ] \
-  || fail "the home header's idle shell is not in the execution home folder: $(pane_cwds_of_workspace "$HEADER")"
-[ -f "$HEADER_RECORD" ] || fail "the created home header was not recorded"
-pass "real herdr E2E: a remote launch creates the home header with its idle shell in the execution home folder"
+ROW=$(task_row_of solo1)
+[ -n "$ROW" ] && [ "${ROW#* }" = "$ROW" ] || fail "launch did not create exactly one task row: '$ROW'"
+[ "$(workspace_ids)" = "$ROW" ] || fail "launch created a workspace besides its task row: $(workspace_ids)"
+[ "$(tab_labels_of_workspace "$ROW")" = fm-solo1 ] || fail "the task row holds more than its task tab: $(tab_labels_of_workspace "$ROW")"
+[ ! -e "$HEADER_RECORD" ] || fail "a launch that created no home workspace recorded one"
+pass "real herdr E2E: a remote launch creates only its task row, with no empty home workspace"
 
 clean_up solo1
-[ -z "$(workspaces_labelled firstmate)" ] || fail "the home header outlived its last worker row"
-[ ! -e "$HEADER_RECORD" ] || fail "the retired home header's record was left behind"
-pass "real herdr E2E: cleaning up the last remote worker removes the home header it created"
+[ -z "$(workspace_ids)" ] || fail "cleanup left a workspace behind: $(workspace_ids)"
+pass "real herdr E2E: cleaning up the only remote worker leaves the session empty"
 
 # --- 2. two workers ---------------------------------------------------------
 
 launch pair1
 launch pair2
-HEADER=$(workspaces_labelled firstmate)
-[ -n "$HEADER" ] || fail "the second launch round created no home header"
+[ -z "$(workspaces_labelled firstmate)" ] || fail "a second launch created a home workspace"
+[ "$(workspace_ids)" = "$(task_row_of pair1) $(task_row_of pair2)" ] \
+  || fail "two launches did not leave exactly their two task rows: $(workspace_ids)"
 clean_up pair1
-[ "$(workspaces_labelled firstmate)" = "$HEADER" ] || fail "the home header was removed while a worker row remained"
-pass "real herdr E2E: the home header stays while another worker row remains"
+[ "$(workspace_ids)" = "$(task_row_of pair2)" ] || fail "cleanup of one worker disturbed the other row: $(workspace_ids)"
 clean_up pair2
-[ -z "$(workspaces_labelled firstmate)" ] || fail "the home header outlived its last worker row"
-pass "real herdr E2E: the home header goes with the last of several worker rows"
+[ -z "$(workspace_ids)" ] || fail "cleanup of the last worker left a workspace behind: $(workspace_ids)"
+pass "real herdr E2E: several remote workers each get only their own task row"
 
 # --- 3. a home-labelled workspace that existed before the launch ------------
 
@@ -178,10 +190,30 @@ ADOPTED=$(lab workspace create --cwd "$TMP_ROOT" --label firstmate --no-focus 2>
   | jq -r '.result.workspace.workspace_id // empty')
 [ -n "$ADOPTED" ] || fail "could not create a pre-existing home-labelled workspace"
 launch adopt1
+[ "$(workspace_ids)" = "$ADOPTED $(task_row_of adopt1)" ] \
+  || fail "the task row was not placed under the existing home workspace: $(workspace_ids)"
 [ ! -e "$HEADER_RECORD" ] || fail "an adopted workspace was recorded as one this home created"
 clean_up adopt1
 [ "$(workspaces_labelled firstmate)" = "$ADOPTED" ] || fail "cleanup removed a home-labelled workspace this home did not create"
-pass "real herdr E2E: a pre-existing home-labelled workspace is left in place"
+pass "real herdr E2E: a pre-existing home-labelled workspace heads the task row and is left in place"
+lab workspace close "$ADOPTED" >/dev/null 2>&1 || fail "could not close the adopted workspace"
+
+# --- 4. a recorded home workspace an earlier launch created -----------------
+
+OLD=$(lab workspace create --cwd "$EXEC_HOME" --label firstmate --no-focus 2>/dev/null) \
+  || fail "could not create a recorded home workspace"
+OLD_WS=$(printf '%s' "$OLD" | jq -r '.result.workspace.workspace_id // empty')
+OLD_TAB=$(printf '%s' "$OLD" | jq -r '.result.tab.tab_id // empty')
+OLD_PANE=$(printf '%s' "$OLD" | jq -r '.result.root_pane.pane_id // empty')
+[ -n "$OLD_WS" ] && [ -n "$OLD_TAB" ] && [ -n "$OLD_PANE" ] || fail "the recorded home workspace returned incomplete ids"
+printf 'session=%s\nworkspace_id=%s\ntab_id=%s\npane_id=%s\n' "$HERDR_LAB_SESSION" "$OLD_WS" "$OLD_TAB" "$OLD_PANE" > "$HEADER_RECORD"
+launch legacy1
+[ "$(workspace_ids)" = "$OLD_WS $(task_row_of legacy1)" ] \
+  || fail "the task row was not placed under the recorded home workspace: $(workspace_ids)"
+clean_up legacy1
+[ -z "$(workspace_ids)" ] || fail "the recorded home workspace outlived its last worker row: $(workspace_ids)"
+[ ! -e "$HEADER_RECORD" ] || fail "the retired home workspace's record was left behind"
+pass "real herdr E2E: a home workspace recorded by an earlier launch heads new rows and goes with the last one"
 
 cleanup_all || { printf 'not ok - isolated lab teardown failed\n' >&2; exit 1; }
 pass "real herdr E2E: isolated lab session removed and default fleet session unchanged"
