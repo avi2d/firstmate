@@ -684,6 +684,36 @@ test_reserved_pending_reply_key_closes_through_resolve_key() {
   pass "fm-send --resolve-key: a reserved pending-reply key actually closes through the operator path"
 }
 
+# An operator --resolve-key on a reserved pending-reply key closes the decision
+# line; the escalated record behind it must settle too, or a non-forced
+# secondmate retirement keeps refusing on a reply the operator already answered.
+test_resolve_key_settles_escalated_record_not_left_escalated() {
+  local dir fb log home rc key corr rec
+  dir="$TMP_ROOT/reserved-record"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); log="$dir/send.log"
+  home=$(setup_home reserved-record)
+  corr=0123456789abcdef
+  key="pending-reply-$corr"
+  fm_write_meta "$home/state/mate.meta" "window=sess:fm-mate" "kind=ship"
+  printf 'blocked [key=%s]: pending-reply-missed: task=mate pending-reply-id=%s request=ship it\n' \
+    "$key" "$corr" > "$home/state/mate.status"
+  mkdir -p "$home/state/pending-replies"
+  rec="$home/state/pending-replies/$corr"
+  printf '%s\n' "corr_id=$corr" "task_id=mate" "parent_home=$home" \
+    "parent_status=$home/state/mate.status" "delivered_epoch=1" "phase=escalated" \
+    "escalated_epoch=2" "resolved_epoch=" "resolved_via=" > "$rec"
+
+  run_send "$fb" "$home" "$log" mate --resolve-key "$key" "ack, false escalation"; rc=$?
+  expect_code 0 "$rc" "closing an escalated pending-reply key via --resolve-key should succeed"
+  grep -qx 'phase=resolved' "$rec" \
+    || fail "the escalated record stayed open after --resolve-key:"$'\n'"$(cat "$rec")"
+  grep -qx 'resolved_via=operator-resolve-key' "$rec" \
+    || fail "the settled record does not name the operator close:"$'\n'"$(cat "$rec")"
+  grep -qE '^escalation_closed_epoch=[0-9]+$' "$rec" \
+    || fail "the settled record left its escalation unclosed:"$'\n'"$(cat "$rec")"
+  pass "fm-send --resolve-key: an escalated pending-reply record settles with its decision"
+}
+
 test_unrelated_writer_cannot_close_or_hijack_reserved_key() {
   local dir fb log home rc out key corr
   dir="$TMP_ROOT/reserved-guard"; mkdir -p "$dir"
@@ -1191,6 +1221,7 @@ test_remote_reply_corr_tag_does_not_block_resolve_key
 test_remote_transport_failure_does_not_close
 test_flag_misuse_refuses
 test_reserved_pending_reply_key_closes_through_resolve_key
+test_resolve_key_settles_escalated_record_not_left_escalated
 test_unrelated_writer_cannot_close_or_hijack_reserved_key
 test_unclosable_reserved_key_refuses_before_send
 test_long_decision_key_refuses_before_send

@@ -876,6 +876,19 @@ fm_send_close_resolved_keys() { # <answer-text>
     esac
     i=$((i + 1))
   done
+  fm_send_settle_resolved_pending_replies
+}
+
+# The decision line is already closed, so a record that cannot settle warns
+# rather than fails: a failed send invites a second answer.
+fm_send_settle_resolved_pending_replies() {
+  local k
+  for k in $RESOLVE_STATUS_KEYS; do
+    case "$k" in pending-reply-*) ;; *) continue ;; esac
+    fm_pending_reply_resolve_by_operator "$STATE" "${k#pending-reply-}" "$RESOLVE_TASK_ID" operator-resolve-key \
+      || echo "warning: decision key '$k' closed, but its pending-reply record in $STATE/pending-replies could not be settled; do not resend the answer." >&2
+  done
+  return 0
 }
 
 # The status feed copies host lines here and never back, so a close written
