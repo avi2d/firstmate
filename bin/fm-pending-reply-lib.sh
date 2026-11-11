@@ -1140,6 +1140,34 @@ fm_pending_reply_close_note_for_key() {  # <key> <task-id> <via> [extra]
   esac
 }
 
+# Settle <corr_id>'s record after an operator closed its reserved decision key.
+# Refuses a record owned by another task, so a key typed against the wrong
+# target cannot settle someone else's expectation.
+fm_pending_reply_resolve_by_operator() {  # <state-dir> <corr_id> <task_id> <via>
+  local state=$1 corr=$2 lock rc=0
+  local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
+  STATE=$state
+  lock="$state/.pending-reply-$corr.lock"
+  . "$_FM_PENDING_REPLY_LIB_DIR/fm-wake-lib.sh"
+  fm_lock_acquire_wait "$lock" || return 1
+  _fm_pending_reply_resolve_by_operator_locked "$@" || rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
+}
+
+_fm_pending_reply_resolve_by_operator_locked() {  # <state-dir> <corr_id> <task_id> <via>
+  local state=$1 corr=$2 task_id=$3 via=$4 rec
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  [ -f "$rec" ] || return 0
+  [ "$(fm_pending_reply_get "$rec" task_id)" = "$task_id" ] || return 1
+  if [ "$(fm_pending_reply_get "$rec" phase)" != resolved ]; then
+    fm_pending_reply_set "$rec" phase resolved || return 1
+    fm_pending_reply_set "$rec" resolved_epoch "$(fm_pending_reply_now)" || return 1
+    fm_pending_reply_set "$rec" resolved_via "$via" || return 1
+  fi
+  _fm_pending_reply_close_escalation_locked "$state" "$corr"
+}
+
 fm_pending_reply_escalation_payload() {  # <record-path> <kind>
   local rec=$1 kind=$2 task_id corr summary outcome token
   task_id=$(fm_pending_reply_get "$rec" task_id)

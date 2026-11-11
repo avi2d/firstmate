@@ -245,7 +245,7 @@ An empty queue is healthy and does not trigger teardown.
 Run `bin/fm-teardown.sh <id>` for `kind=secondmate` only when the captain or main firstmate explicitly decides to retire that persistent second mate.
 
 The safety check is the secondmate's own home.
-Teardown refuses while its `state/*.meta` contains in-flight work.
+Teardown refuses while its `state/*.meta` contains in-flight work, except a ship whose agent is gone and whose copy inside the home is clean and equal to the branch its remote still holds.
 Non-forced retirement also refuses while any parent pending-reply for that id is still unresolved.
 A remote route delegates the in-flight guard to its configured host and additionally refuses while the primary has a pending handoff outbox.
 Before retiring a remote second mate whose projects move to an execution home, run `bin/fm-backlog-reclaim.sh <id> --dry-run --all`, then the same command without `--dry-run`, so its Queued items return to this home's backlog with their notes, holds, and blocked-by links.
