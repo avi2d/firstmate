@@ -846,14 +846,16 @@ fi
 # without a matching watcher seen marker; any concurrent foreign status bytes,
 # or a worker line the fold read but never listed, leave the watcher's wake
 # path untouched.
+RESOLVE_CLOSE_LINES=()
 fm_send_close_resolved_keys() { # <answer-text>
   local note=$1 k close_note append_rc still manual_close_cmd close_lines=() i=0
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_STATUS_KEYS; do
     close_note=$(fm_send_resolve_close_note "$k" "$note")
     fm_cap_line_var "resolved [key=$k]: $close_note" "$RESOLVE_CLOSE_MAX"
-    close_lines+=("$FM_LINE_CAP_LINE")
+    close_lines+=("$(status_stamp_line "$FM_LINE_CAP_LINE")")
   done
+  RESOLVE_CLOSE_LINES=(${close_lines[@]+"${close_lines[@]}"})
   [ "${#close_lines[@]}" -gt 0 ] || return 0
   append_rc=0
   fm_wake_status_append_self_announced "$STATE" "$RESOLVE_STATUS_FILE" "${close_lines[@]}" || append_rc=$?
@@ -874,6 +876,27 @@ fm_send_close_resolved_keys() { # <answer-text>
     esac
     i=$((i + 1))
   done
+}
+
+# The status feed copies host lines here and never back, so a close written
+# only here stays open on the host. Host and feed both skip an identical line,
+# so one retry after an unknown outcome is safe. A failed mirror warns rather
+# than fails, because a failed send invites a second answer.
+fm_send_mirror_closes_to_host() {
+  local rc=0
+  [ "${#RESOLVE_CLOSE_LINES[@]}" -gt 0 ] || return 0
+  printf '%s\n' "${RESOLVE_CLOSE_LINES[@]}" | fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" --stdin \
+    "$TARGET_REMOTE_FM_ON_ROUTE" "$TARGET_REMOTE_CONTROL" resolve-stdin "$TARGET_REMOTE_ID" >/dev/null || rc=$?
+  case "$rc" in
+  124|255)
+    rc=0
+    printf '%s\n' "${RESOLVE_CLOSE_LINES[@]}" | fm_run_timed "$FM_SEND_REMOTE_BUDGET" "$SCRIPT_DIR/fm-on.sh" --stdin \
+      "$TARGET_REMOTE_FM_ON_ROUTE" "$TARGET_REMOTE_CONTROL" resolve-stdin "$TARGET_REMOTE_ID" >/dev/null || rc=$?
+    ;;
+  esac
+  [ "$rc" -eq 0 ] && return 0
+  echo "warning: the answer was delivered and decision key(s) '$RESOLVE_STATUS_KEYS' closed in $RESOLVE_STATUS_FILE, but the close did not reach the status stream on $TARGET_REMOTE_FM_ON_ROUTE (exit $rc); do not resend the answer." >&2
+  return 0
 }
 
 # Feed the answered captain-held tasks to the ONE keyed-answer intake, as keyed
@@ -1151,6 +1174,7 @@ else
     if [ -n "$RESOLVE_KEYS" ]; then
       fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
       fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
+      [ "$TARGET_REMOTE_NOUN" != worker ] || fm_send_mirror_closes_to_host
     fi
     exit 0
   fi

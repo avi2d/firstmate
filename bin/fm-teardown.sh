@@ -1208,6 +1208,20 @@ remove_pr_poll_artifacts() {
     "$state_dir/$id.merge-authority" "$state_dir/$id.check-trust" || return 1
 }
 
+scout_captain_gate_verify() {
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null && return 0
+  echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2
+  echo "Inventory its report and any visual review through bin/fm-captain-hold.sh before teardown." >&2
+  return 1
+}
+
+# An execution home holds no backlog and no captain-call inventory: the
+# supervising home verifies the gate before it asks this home to clean up.
+home_is_execution_home() {
+  [ -f "$FM_HOME/.fm-exec-home" ] && [ ! -L "$FM_HOME/.fm-exec-home" ]
+}
+
 # The host-side teardown owns the landed-work test, the slot return, and the
 # pane close. A 255 or 124 leaves its completion unknown, so nothing local changes.
 remote_worker_teardown() {
@@ -1237,6 +1251,7 @@ remote_worker_teardown() {
       echo "REFUSED: scout task $ID's report has not reached this home at $DATA/$ID/report.md; wait for its status feed, or use --force after explicit discard approval" >&2
       return 1
     fi
+    [ "$FORCE" = --force ] || scout_captain_gate_verify || return 1
   elif [ "$mode" = local-only ]; then
     done_args=(--note "local main")
   elif [ -n "$pr_url" ]; then
@@ -3954,12 +3969,7 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
     echo "Add a \"## References\" heading listing the sources the findings rely on, then run teardown again." >&2
     exit 1
   fi
-  if ! FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
-      FM_CONFIG_OVERRIDE="$CONFIG" "$SCRIPT_DIR/fm-captain-hold.sh" verify "$ID" >/dev/null; then
-    echo "REFUSED: scout task $ID has not passed the captain-call completion gate." >&2
-    echo "Inventory its report and any visual review through bin/fm-captain-hold.sh before teardown." >&2
-    exit 1
-  fi
+  home_is_execution_home || scout_captain_gate_verify || exit 1
 fi
 
 # A public commitment is not kept until its final reply lands in the ORIGINAL
