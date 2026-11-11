@@ -90,5 +90,28 @@ test_unprivate_state_root_refusal_names_the_folder() {
   pass "a non-private process-event state folder refuses with its path instead of an unnamed folder"
 }
 
+test_unread_round_refusal_lists_each_round_and_its_text() {
+  local home rc=0 out inbox
+  home=$(make_home unread-round)
+  add_home_source "$home" board-review
+  sed -i.bak 's/^kind=persistent$/kind=task-owned/' "$home/state/procevent/board-review.source"
+  rm -f "$home/state/procevent/board-review.source.bak"
+  printf 'owner_task=ship1\n' >> "$home/state/procevent/board-review.source"
+  inbox="$home/state/procevent-inbox"
+  mkdir -p "$inbox"
+  chmod 700 "$inbox"
+  printf 'Approve the layout, but tighten the header spacing\n' > "$inbox/board-review.1.result"
+  printf 'Second pass: ship it\n' > "$inbox/board-review.2.result"
+  out=$(retire "$home" 2>&1) || rc=$?
+  expect_code 1 "$rc" "retirement accepted a home with unread captured rounds"
+  assert_contains "$out" "board-review sequence 1" "the refusal did not name the first unread round"
+  assert_contains "$out" "Approve the layout, but tighten the header spacing" "the refusal did not show the first round's text"
+  assert_contains "$out" "board-review sequence 2" "the refusal did not name the second unread round"
+  assert_contains "$out" "Second pass: ship it" "the refusal did not show the second round's text"
+  assert_present "$home/state/procevent/board-review.source" "a refused retirement dropped the source"
+  pass "an unread captured round refuses retirement with each round and its text instead of an unnamed failure"
+}
+
 test_retire_sweeps_the_home_process_events_not_the_parent_route
+test_unread_round_refusal_lists_each_round_and_its_text
 test_unprivate_state_root_refusal_names_the_folder

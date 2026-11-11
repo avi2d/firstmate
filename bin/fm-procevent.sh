@@ -267,6 +267,7 @@ case "${1-}" in ''|-h|--help|help) usage ;; esac
 
 REG=$(fm_procevent_registry_dir "$STATE")
 MAX_OUTPUT_BYTES=${FM_PROCEVENT_MAX_OUTPUT_BYTES:-1048576}
+SWEEP_UNREAD_TEXT_MAX=4000
 EXTENSION_HOST="$SCRIPT_DIR/fm-extension.mjs"
 EXTENSION_LIFECYCLE_LOCK="$REG/.extension-binding-lifecycle.lock"
 
@@ -2393,9 +2394,29 @@ sweep_relevant_state() {
   return 1
 }
 
+# Output a sweep refuses on must name what is unread, so each round's text is
+# shown bounded and stripped of terminal control bytes.
+sweep_print_unread_rounds_locked() {  # <source-id>
+  local id=$1 task result seq
+  task=$(source_owner_task "$id" 2>/dev/null || true)
+  while IFS= read -r result; do
+    [ -n "$result" ] || continue
+    seq=${result%.result}; seq=${seq##*.}
+    printf 'unread: %s sequence %s for task %s (%s):\n' "$id" "$seq" "${task:-unknown}" "$result" >&2
+    head -c "$SWEEP_UNREAD_TEXT_MAX" -- "$result" | LC_ALL=C tr -d '\000-\010\013-\037\177' | sed 's/^/  | /' >&2
+    printf '\n' >&2
+  done <<< "$(source_pending "$id")"
+}
+
 sweep_source_preflight() {
   local id=$1 state
   fm_procevent_source_lock_acquire "$id" || return 1
+  if source_retirement_blocked_locked "$id"; then
+    sweep_print_unread_rounds_locked "$id"
+    SWEEP_UNREAD_SOURCES=$((SWEEP_UNREAD_SOURCES + 1))
+    fm_procevent_source_lock_release "$id"
+    return 1
+  fi
   if [ -e "$(fm_procevent_claim_path "$id")" ] || [ -L "$(fm_procevent_claim_path "$id")" ]; then
     if ! fm_procevent_claim_load_locked "$id" 2>/dev/null; then
       fm_procevent_source_lock_release "$id"
@@ -2439,6 +2460,7 @@ cmd_sweep_home() {
   local preflight_only=${1-} path id owner attempted=0 failed=0
   [ -z "$preflight_only" ] || [ "$preflight_only" = --preflight ] || usage
   SWEEP_IDS=$'\n'
+  SWEEP_UNREAD_SOURCES=0
   for path in "$REG"/*.source; do
     if [ -e "$path" ] || [ -L "$path" ]; then
       id=${path##*/}; id=${id%.source}
@@ -2487,6 +2509,9 @@ cmd_sweep_home() {
     [ -n "$id" ] || continue
     sweep_source_preflight "$id" || failed=$((failed + 1))
   done <<< "$SWEEP_IDS"
+  if [ "$SWEEP_UNREAD_SOURCES" -ne 0 ]; then
+    printf 'error: process-event home sweep refused: %s source(s) hold the unread captured rounds listed above; the owning task acknowledges each with bin/fm-procevent.sh handled <source> <sequence>\n' "$SWEEP_UNREAD_SOURCES" >&2
+  fi
   if [ "$failed" -ne 0 ]; then
     printf 'error: process-event home sweep preflight failed: attempted=0 failed=%s\n' "$failed" >&2
     return 1
