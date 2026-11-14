@@ -435,7 +435,7 @@ EOF
 # because on gerrit, and under pr=manual (the `no-ci` argument), the ci step is
 # skipped and the drive call never reports a green PR.
 fm_nm_driving_block() {  # <forge|no-ci>
-  local pr_return_line='' pr_reattach_clause=';' drive_block wait_cfg
+  local pr_return_line='' pr_reattach_clause=';' drive_block
   if [ "$1" != gerrit ] && [ "$1" != no-ci ]; then
     pr_return_line="Only a drive call's return reports the green PR: \`no-mistakes axi status\` shows progress but never reports \`checks-passed\` while the ci step is still monitoring the PR for merge, so never wait on a status poll for the next gate or outcome.
 "
@@ -443,8 +443,7 @@ fm_nm_driving_block() {  # <forge|no-ci>
   fi
   # config/wait-no-turns selects the foreground drive. Absent, the text matches
   # the backgrounded drive a home had before that flag.
-  wait_cfg=${CONFIG:-${FM_CONFIG_OVERRIDE:-${FM_HOME:-}/config}}
-  if [ -e "$wait_cfg/wait-no-turns" ]; then
+  if [ -e "$(fm_dod_config_dir)/wait-no-turns" ]; then
     drive_block="Drive the run with ONE foreground \`no-mistakes axi run\` and let it block.
 It bounds its own hold for you: \`--wait\` (default 8m) exists precisely so a harness with a ten-minute command cap gets a structured return instead of being killed mid-hold.
 Declare that wait using the brief's status-reporting rule before the foreground drive call.
@@ -507,6 +506,23 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
+fm_dod_config_dir() {
+  printf '%s\n' "${CONFIG:-${FM_CONFIG_OVERRIDE:-${FM_HOME:-}/config}}"
+}
+
+fm_local_tests_off() {
+  [ -e "$(fm_dod_config_dir)/no-local-tests" ]
+}
+
+fm_local_tests_section() {
+  cat <<'EOF'
+# Local tests
+No test command runs on this machine, in any repository: not the full suite, not changed or targeted tests, and not a single test file, whether you start it by hand, through a script, or through a pipeline step.
+Build, lint, and typecheck commands may still run.
+CI on the pull request is the only test run.
+EOF
+}
+
 fm_pr_title_lint_line() {
   printf '%s\n' "Before you open the PR or change its title, check the title against the repository's own commitlint rules when it has them - a commitlint config, or a CI step that lints the pull request title - by running that check on it from this worktree, for example by piping the title to the repository's commitlint or running that CI step's command with the title in its environment, and fix the title until it passes."
 }
@@ -519,13 +535,18 @@ fm_pr_title_lint_line() {
 # checks itself. Shaped like the gerrit block: skip flags, the shared driving
 # block, then what to do once the run passes. Callers are fm_dod_block only.
 fm_dod_manual_pr_block() {  # <branch> <forge-cli> <draft-check> <contract-suffix> <nm-base> <pr-base>
-  local branch=$1 forge_cli=$2 draft_check=$3 suffix=$4 nm_base=$5 pr_base=$6
+  local branch=$1 forge_cli=$2 draft_check=$3 suffix=$4 nm_base=$5 pr_base=$6 skip=pr,ci
+  local skip_line="Pass \`--skip pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, \`lint\`, and \`push\` still run, and \`ci\` has no pipeline-opened PR to watch."
+  if fm_local_tests_off; then
+    skip=test,pr,ci
+    skip_line="Pass \`--skip test,pr,ci\` on every \`no-mistakes axi run\` for this task: \`review\`, \`document\`, \`lint\`, and \`push\` still run, \`test\` is skipped because no test runs on this machine, and \`ci\` has no pipeline-opened PR to watch."
+  fi
   cat <<EOF
 # Definition of done
 Delivery contract: mode=no-mistakes$suffix pr=manual
 Ship branch: $branch
 This project's pull-request text is written by hand: the pipeline's \`pr\` step would rewrite the title and body you write on every validated push, so **no-mistakes runs here as a validation pass that pushes the branch**, and you then open the PR yourself.
-Pass \`--skip pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, \`lint\`, and \`push\` still run, and \`ci\` has no pipeline-opened PR to watch.
+$skip_line
 The task is complete only when committed on your branch.
 When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and push.
@@ -539,7 +560,7 @@ When the run's outcome is passed, passed-with-skips, or passed-with-override, wr
 1. Write the PR body to a file of your own under the scratch location rule 2 names, and verify it with \`head\` before using it. Match the title and body style of the project's recent merged PRs and its contribution guide, in plain English for a reviewer who lacks your context, with no direct address, and keep any issue reference the captain's intent names. $(fm_pr_title_lint_line)
 2. Find the PR for your branch first (\`$forge_cli pr list --head <branch>\`). If one exists, update its title and body with \`$forge_cli pr edit <number> --title '<title>' --body-file <path>\`. Otherwise open it with \`$forge_cli pr create\` from the branch the run pushed, ready for review, not a draft$pr_base.
 3. Never post a comment or review on the PR or on any other thread, and never rely on the pipeline for the PR text: it is yours on every push.
-4. Wait for the PR's checks with \`$forge_cli pr checks <number> --watch\`, under the ten-minute command limit as the driving block bounds its waits, and run the same command again whenever it returns with checks still pending. \`$forge_cli pr checks\` exits 1 when the project reports no checks at all: that is not a failed check and needs no fix. If a check fails, commit the fix, drive a new run with the same \`--skip pr,ci\`, and update the PR text if the change affects it.
+4. Wait for the PR's checks with \`$forge_cli pr checks <number> --watch\`, under the ten-minute command limit as the driving block bounds its waits, and run the same command again whenever it returns with checks still pending. \`$forge_cli pr checks\` exits 1 when the project reports no checks at all: that is not a failed check and needs no fix. If a check fails, commit the fix, drive a new run with the same \`--skip $skip\`, and update the PR text if the change affects it.
 Then read the PR back from the forge and confirm it is not a draft $draft_check
 A draft cannot be merged, so a done report on one leaves the merge unasked.
 Then append \`done [at=<epoch>]: PR {url} checks green\` and stop. You are finished.
@@ -551,6 +572,15 @@ EOF
 fm_dod_block() {  # <mode> <task-id> [branch] [<forge>] [<base>] [<consent>] [<pr>]
   local mode=$1 id=$2 forge=${4:-none} base=${5:-} consent=${6:-} pr=${7:-auto}
   local branch=${3:-fm/$id} pr_base='' nm_base='' base_q contract_forge='' contract_consent='' forge_cli=gh-axi draft_check adapter
+  local nm_skip_line='' gerrit_skip_lines
+  gerrit_skip_lines="Pass \`--skip push,pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, and \`lint\` are the whole point of the run.
+Those three are the only steps that reach a forge, and skipping them is a supported outcome, not a degraded one."
+  if fm_local_tests_off; then
+    nm_skip_line="Pass \`--skip test\` on every \`no-mistakes axi run\` that starts a run for this task: no test runs on this machine, and CI on the PR is the test run.
+"
+    gerrit_skip_lines="Pass \`--skip test,push,pr,ci\` on every \`no-mistakes axi run\` for this task: \`review\`, \`document\`, and \`lint\` are the whole point of the run, and \`test\` is skipped because no test runs on this machine.
+\`push\`, \`pr\`, and \`ci\` are the only steps that reach a forge, and skipping them is a supported outcome, not a degraded one."
+  fi
   fm_forge_valid_for_mode "$forge" "$mode" fm_dod_block || return 1
   fm_base_branch_valid "$base" "$mode" "$forge" fm_dod_block || return 1
   fm_pr_text_valid "$pr" "$mode" "$forge" fm_dod_block || return 1
@@ -595,8 +625,7 @@ EOF
 Delivery contract: mode=no-mistakes forge=gerrit shape=squash$contract_consent
 Ship branch: $branch
 This project's review server is Gerrit: it has no pull requests and no forge CI the pipeline can watch, so **no-mistakes runs here as a review pass that ends at a ready branch**, and you then publish that branch as one change.
-Pass \`--skip push,pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else: \`review\`, \`test\`, \`document\`, and \`lint\` are the whole point of the run.
-Those three are the only steps that reach a forge, and skipping them is a supported outcome, not a degraded one.
+$gerrit_skip_lines
 The task is complete only when the validated branch is published as one ready change.
 After committing, immediately start \`/no-mistakes\`; do not report the committed step as \`done:\` or wait for a firstmate instruction.
 
@@ -693,7 +722,7 @@ Ship branch: $branch
 The task is complete only when the PR is open and its checks are green.
 After committing, immediately start \`/no-mistakes\`; do not report the committed step as \`done:\` or wait for a firstmate instruction.
 The pipeline owns the push, so do not push from this copy.
-${nm_base}
+${nm_skip_line}${nm_base}
 EOF
       fm_nm_driving_block "$forge"
       cat <<EOF

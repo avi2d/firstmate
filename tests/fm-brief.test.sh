@@ -1405,6 +1405,67 @@ test_wait_no_turns_absent_keeps_the_previous_brief() {
   pass "fm-brief: without config/wait-no-turns the brief and drive text stay as they were"
 }
 
+scaffold_local_tests_variants() {  # <home>
+  local home=$1
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lt-nm some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "no-mistakes ship scaffold exited non-zero"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lt-manual some-proj --mode no-mistakes --pr manual >/dev/null 2>&1 \
+    || fail "pr=manual ship scaffold exited non-zero"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lt-gerrit some-proj --mode no-mistakes --forge gerrit >/dev/null 2>&1 \
+    || fail "gerrit ship scaffold exited non-zero"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lt-direct some-proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "direct-PR ship scaffold exited non-zero"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lt-local some-proj --mode local-only >/dev/null 2>&1 \
+    || fail "local-only ship scaffold exited non-zero"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" lt-scout some-proj --scout >/dev/null 2>&1 \
+    || fail "scout scaffold exited non-zero"
+}
+
+test_no_local_tests_skips_test_step_instead_of_running_suites() {
+  local home id brief
+  home="$TMP_ROOT/no-local-tests-on"
+  mkdir -p "$home/data" "$home/config"
+  : > "$home/config/no-local-tests"
+  scaffold_local_tests_variants "$home"
+  for id in lt-nm lt-manual lt-gerrit lt-direct lt-local lt-scout; do
+    brief="$home/data/$id/brief.md"
+    assert_grep '# Local tests' "$brief" "$id: the flag left out the local tests section"
+    assert_grep 'No test command runs on this machine, in any repository' "$brief" \
+      "$id: the local tests section does not forbid every test command"
+    assert_grep 'Build, lint, and typecheck commands may still run.' "$brief" \
+      "$id: the local tests section does not allow build, lint, and typecheck"
+    assert_no_grep 'skip nothing else' "$brief" "$id: a drive instruction still tells the worker to skip nothing else"
+  done
+  assert_grep "Pass \`--skip test\` on every \`no-mistakes axi run\` that starts a run" "$home/data/lt-nm/brief.md" \
+    "the plain no-mistakes run does not skip the test step"
+  assert_grep "Pass \`--skip test,pr,ci\` on every \`no-mistakes axi run\`" "$home/data/lt-manual/brief.md" \
+    "the pr=manual run does not skip the test step"
+  assert_grep "drive a new run with the same \`--skip test,pr,ci\`" "$home/data/lt-manual/brief.md" \
+    "the pr=manual rerun after a failed check drops the test skip"
+  assert_no_grep "\`--skip pr,ci\`" "$home/data/lt-manual/brief.md" "the pr=manual brief still names a skip list without test"
+  assert_grep "Pass \`--skip test,push,pr,ci\` on every \`no-mistakes axi run\`" "$home/data/lt-gerrit/brief.md" \
+    "the gerrit run does not skip the test step"
+  assert_no_grep "\`--skip push,pr,ci\`" "$home/data/lt-gerrit/brief.md" "the gerrit brief still names a skip list without test"
+  pass "fm-brief: config/no-local-tests forbids local test commands and skips the pipeline test step"
+}
+
+test_absent_no_local_tests_keeps_the_test_step_running() {
+  local home id brief
+  home="$TMP_ROOT/no-local-tests-off"
+  mkdir -p "$home/data"
+  scaffold_local_tests_variants "$home"
+  for id in lt-nm lt-manual lt-gerrit lt-direct lt-local lt-scout; do
+    brief="$home/data/$id/brief.md"
+    assert_no_grep '# Local tests' "$brief" "$id: an absent flag still added the local tests section"
+    assert_no_grep 'skip test' "$brief" "$id: an absent flag still skips the test step"
+  done
+  assert_grep "Pass \`--skip pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else" \
+    "$home/data/lt-manual/brief.md" "an absent flag changed the pr=manual skip list"
+  assert_grep "Pass \`--skip push,pr,ci\` on every \`no-mistakes axi run\` for this task, and skip nothing else" \
+    "$home/data/lt-gerrit/brief.md" "an absent flag changed the gerrit skip list"
+  pass "fm-brief: without config/no-local-tests the briefs keep the pipeline test step"
+}
+
 test_inbox_guidance_explains_marked_body_terminator() {
   local home brief kind id
   home="$TMP_ROOT/inbox-guidance"
@@ -1900,6 +1961,8 @@ test_scout_board_address_rejects_the_remote_forward_for_local_boards
 test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
+test_no_local_tests_skips_test_step_instead_of_running_suites
+test_absent_no_local_tests_keeps_the_test_step_running
 test_inbox_guidance_explains_marked_body_terminator
 test_home_brief_include_is_appended_last
 test_base_branch_is_rendered_and_bounded
