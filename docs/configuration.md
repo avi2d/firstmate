@@ -840,6 +840,17 @@ With it present, ship and scout briefs gain the `# Waiting` section and the fore
 With the file absent, generated briefs omit the waiting section and the no-poll inbox line, the drive text backgrounds the call, recovery sends during an open decision, and a fire-and-forget steer is not owed a retry ring.
 The flag is a home-local preference and is not inherited by secondmate homes.
 
+## No local tests
+
+The optional local, gitignored `config/no-local-tests` presence flag makes CI on the pull request the only test run for this home's workers.
+With it present, every ship and scout brief gains a `# Local tests` section saying that no test command runs on the worker machine in any repository, while build, lint, and typecheck commands may still run.
+That section outranks a `config/brief-include.md` instruction about local tests, because the include defers to every other brief section.
+Every no-mistakes drive instruction also adds `test` to its skip list: `--skip test` on an ordinary run, `--skip test,pr,ci` under `pr=manual`, and `--skip test,push,pr,ci` on Gerrit.
+With the file absent, generated briefs carry no such section and the pipeline's test step runs.
+The flag is read when a brief or a scout promotion is rendered, so a worker already under way keeps its brief.
+`bin/fm-dod-lib.sh` owns the section and the drive text.
+The flag is a home-local preference and is not inherited by secondmate homes.
+
 ## PR health monitor (config/pr-health-monitor)
 
 The optional local, gitignored `config/pr-health-monitor` presence flag opts this home into a mechanical monitor of the pull requests it owns.

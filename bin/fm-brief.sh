@@ -516,6 +516,10 @@ WAIT_BLOCK=
 if [ -e "$CONFIG/wait-no-turns" ]; then
   WAIT_BLOCK="$WAIT_SECTION"$'\n\n'
 fi
+LOCAL_TESTS_BLOCK=
+if fm_local_tests_off; then
+  LOCAL_TESTS_BLOCK="$(fm_local_tests_section)"$'\n\n'
+fi
 
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
@@ -787,7 +791,7 @@ $CREWMATE_PAUSE_INSTRUCTIONS
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
 
-$WAIT_BLOCK$INBOX_SECTION
+$WAIT_BLOCK$LOCAL_TESTS_BLOCK$INBOX_SECTION
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
@@ -874,7 +878,7 @@ $ASK_USER_BLOCK
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
 
-$WAIT_BLOCK$INBOX_SECTION
+$WAIT_BLOCK$LOCAL_TESTS_BLOCK$INBOX_SECTION
 
 # Project memory
 A project's \`AGENTS.md\` or \`CLAUDE.md\` is loaded into every agent session in that project, so edit it only to correct information that is factually wrong - including information your own change made wrong - and never to add knowledge because it is missing.
