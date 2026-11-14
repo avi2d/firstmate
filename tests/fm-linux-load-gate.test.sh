@@ -166,6 +166,31 @@ assert_nothing_created() {  # <case-dir> <home> <id> <calls> <worktrees>
     [ "$(row_state "$home" "$id")" = queued ] || fail "a deferred spawn moved $id out of queued"
   fi
 }
+write_remote_live() {  # <home> <id> <project-dir>
+  fm_write_meta "$1/state/$2.meta" \
+    "project=$3" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "remote_host=winwsl"
+}
+
+test_remote_records_across_homes_hold_no_heavy_place() {
+  local case_dir home_a out rc=0
+  case_dir=$(make_case remote task-c)
+  home_a="$case_dir/home-a"
+  printf '%s\n' "$case_dir/home-b" >> "$home_a/config/linux-load-siblings"
+  printf '%s\n' '@heavy-limit 2' > "$home_a/config/project-capacity"
+  write_live "$home_a" live-a1 "$case_dir/project"
+  write_remote_live "$case_dir/home-b" remote-b1 "$case_dir/project"
+  write_remote_live "$case_dir/home-b" remote-b2 "$case_dir/project"
+  out=$(spawn_ship_load 1.0 "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "sibling remote_host records held the shared heavy place: $out"
+  assert_contains "$out" "spawned task-c" "the shared start did not launch"
+  pass "remote_host records in a sibling home hold no shared heavy place"
+}
+
 test_six_across_two_homes_defer_a_seventh_then_release_admits() {
   local case_dir home_a out rc=0 before worktrees
   case_dir=$(make_case six task-c)
@@ -263,6 +288,7 @@ test_waiting_holders_free_shared_places_then_resume_retakes_them() {
   pass "waiting holders free shared heavy places across homes, and resuming retakes them"
 }
 
+test_remote_records_across_homes_hold_no_heavy_place
 test_six_across_two_homes_defer_a_seventh_then_release_admits
 test_waiting_holders_free_shared_places_then_resume_retakes_them
 test_load_sixteen_defers_then_clear_admits

@@ -156,8 +156,9 @@ fm_heavy_holder_waiting() {  # <state-dir> <task-id>
   return 1
 }
 
-# Every ship or scout holds a place, except one that is only waiting or a
-# cloud-claude worker; the record this start replaces does not.
+# Every ship or scout on this machine holds a place, except one that is only
+# waiting, a cloud-claude worker, or a remote_host worker on another host; the
+# record this start replaces does not.
 fm_mac_heavy_count() {  # <first-state> <own-id>
   local first=$1 self=$2 state meta kind id label
   FM_MAC_HEAVY_COUNT=0
@@ -186,6 +187,7 @@ fm_mac_heavy_count() {  # <first-state> <own-id>
       id=$(basename "$meta" .meta)
       label=$id
       [ "$state" = "$first" ] || label="$id in $(dirname "$state")"
+      [ -z "$(fm_meta_get "$meta" remote_host)" ] || continue
       fm_heavy_holder_waiting "$state" "$id" && continue
       FM_MAC_HEAVY_COUNT=$((FM_MAC_HEAVY_COUNT + 1))
       FM_MAC_HEAVY_IDS="${FM_MAC_HEAVY_IDS:+$FM_MAC_HEAVY_IDS, }$label"
@@ -270,8 +272,9 @@ fm_linux_sibling_homes() {  # <config-dir>
   done < "$file"
 }
 
-# Every ship or scout holds a place across the sibling homes, except one that is
-# only waiting or a cloud-claude worker; the record this start replaces does not.
+# Every ship or scout on this machine holds a place across the sibling homes,
+# except one that is only waiting, a cloud-claude worker, or a remote_host worker
+# on another host; the record this start replaces does not.
 fm_linux_heavy_count() {  # <first-state> <own-id> <config-dir>
   local first=$1 self=$2 config=${3:-} state meta kind id label
   local saved_home sib sib_state known existing
@@ -331,6 +334,7 @@ fm_linux_heavy_count() {  # <first-state> <own-id> <config-dir>
       id=$(basename "$meta" .meta)
       label=$id
       [ "$state" = "$first" ] || label="$id in $(dirname "$state")"
+      [ -z "$(fm_meta_get "$meta" remote_host)" ] || continue
       fm_heavy_holder_waiting "$state" "$id" && continue
       FM_LINUX_HEAVY_COUNT=$((FM_LINUX_HEAVY_COUNT + 1))
       FM_LINUX_HEAVY_IDS="${FM_LINUX_HEAVY_IDS:+$FM_LINUX_HEAVY_IDS, }$label"

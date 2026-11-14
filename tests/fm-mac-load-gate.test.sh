@@ -359,9 +359,49 @@ test_cloud_records_do_not_lift_the_load_gate() {
   pass "a local start still defers under high load while a cloud worker runs"
 }
 
+write_remote_live() {  # <home> <id> <project-dir>
+  fm_write_meta "$1/state/$2.meta" \
+    "project=$3" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "yolo=off" \
+    "remote_host=winwsl"
+}
+
+test_remote_records_hold_no_heavy_place() {
+  local case_dir home out rc=0 i=0
+  case_dir=$(make_case remotecount task-c)
+  home="$case_dir/home"
+  while [ "$i" -lt "$GATE_FULL" ]; do
+    i=$((i + 1))
+    write_remote_live "$home" "remote-$i" "$case_dir/project"
+  done
+  out=$(spawn_ship_load 1.0 "$case_dir" task-c) || rc=$?
+  expect_code 0 "$rc" "remote_host records held the heavy cap against a local start: $out"
+  assert_contains "$out" "spawned task-c" "the local start did not launch"
+  pass "remote_host records hold no heavy place on this machine"
+}
+
+test_local_record_still_counts_beside_remote_records() {
+  local case_dir home out rc=0
+  case_dir=$(make_case remotemix task-c)
+  home="$case_dir/home"
+  printf '%s\n' '@heavy-limit 1' > "$home/config/project-capacity"
+  write_remote_live "$home" remote-a "$case_dir/project"
+  write_remote_live "$home" remote-b "$case_dir/project"
+  write_live "$home" live-a "$case_dir/project"
+  out=$(spawn_ship_load 1.0 "$case_dir" task-c "$case_dir/unused") || rc=$?
+  expect_code "$DEFER_EXIT" "$rc" "a local running record did not hold the one heavy place: $out"
+  assert_contains "$out" "1 heavy worker(s) already run on this machine (limit 1" "the deferral counted the remote records or missed the local one"
+  pass "a local running record still holds a heavy place beside remote records"
+}
+
 test_high_average_defers_then_clear_admits
 test_full_heavy_cap_defers_one_more_then_release_admits
 test_waiting_holders_free_heavy_places_then_resume_retakes_them
+test_remote_records_hold_no_heavy_place
+test_local_record_still_counts_beside_remote_records
 test_cloud_records_hold_no_heavy_place
 test_cloud_records_do_not_lift_the_load_gate
 test_handed_off_and_secondmate_records_do_not_count
