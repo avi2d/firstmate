@@ -1460,12 +1460,22 @@ security_path_hits() {
   done
 }
 
+# Prints one compact JSON object per changed file: its names (both sides of a
+# rename), whether it was renamed, and its patch, or null when the forge sent none.
 # A page that is not a JSON array fails the read, so an error is never taken for an empty diff.
-pr_changed_paths() {
+pr_changed_files() {
   local page=1 body count names filter encoded
   case "$PROVIDER" in
-    github|forgejo) filter='.[] | .filename, (.previous_filename // empty)' ;;
-    gitlab) filter='.[] | .old_path, .new_path' ;;
+    github|forgejo)
+      filter='.[] | {names: [.filename, (.previous_filename // empty)],
+        renamed: (.status == "renamed" or ((.previous_filename // .filename) != .filename)),
+        patch: (.patch // null)}'
+      ;;
+    gitlab)
+      filter='.[] | {names: [.old_path, .new_path],
+        renamed: ((.renamed_file // false) or .old_path != .new_path),
+        patch: (if (.too_large // false) or (.collapsed // false) then null else (.diff // null) end)}'
+      ;;
     *) return 1 ;;
   esac
   while :; do
@@ -1485,35 +1495,165 @@ pr_changed_paths() {
     esac || return 1
     count=$(printf '%s' "$body" | jq -e 'if type == "array" then length else error("not a list") end' 2>/dev/null) || return 1
     [ "$count" -gt 0 ] || break
-    names=$(printf '%s' "$body" | jq -r "$filter" 2>/dev/null) || return 1
+    names=$(printf '%s' "$body" | jq -c "$filter" 2>/dev/null) || return 1
     printf '%s\n' "$names"
     page=$((page + 1))
   done
 }
 
+# Matching these exact list lines is what makes a hit a workflow hit; a path
+# any other line also matches stays a plain security hit.
+WORKFLOW_SECURITY_PATTERNS='^\.(github|forgejo)/(workflows|actions)/
+^\.gitlab-ci\.yml$'
+
+security_paths_without_workflow_patterns() {
+  local list=$1 pattern
+  while IFS= read -r pattern || [ -n "$pattern" ]; do
+    printf '%s\n' "$WORKFLOW_SECURITY_PATTERNS" | grep -qxF -- "$pattern" || printf '%s\n' "$pattern"
+  done < "$list"
+}
+
+workflow_owners_file() {
+  printf '%s\n' "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/workflow-owners"
+}
+
+# Prints the lowercased owners whose actions a workflow may add, space-separated.
+workflow_owners() {
+  local file owners
+  file=$(workflow_owners_file)
+  if [ ! -e "$file" ]; then
+    printf '%s\n' "${PR_OWNER:-${PR_PATH%%/*}}" | tr '[:upper:]' '[:lower:]'
+    return 0
+  fi
+  [ -r "$file" ] || return 1
+  owners=$(grep -v -E '^[[:space:]]*(#|$)' "$file" | tr -d '[:blank:]\r' | tr '[:upper:]' '[:lower:]' | tr '\n' ' ') || return 1
+  [ -n "${owners// /}" ] || return 1
+  printf '%s\n' "$owners"
+}
+
+# Reads one patch on stdin and prints each changed line that touches
+# permissions, secrets or tokens, or adds an action from outside <owners>.
+workflow_patch_findings() {
+  local owners=$1
+  LC_ALL=C awk -v owners=" $owners " '
+    function lead(s) { match(s, /^[ \t]*/); return RLENGTH }
+    function finding(why) { printf "  %s: %s\n", why, $0 }
+    /^@@/ { inblock = 0; next }
+    /^\\/ { next }
+    {
+      mark = substr($0, 1, 1)
+      body = substr($0, 2)
+      low = " " tolower(body)
+      if (low ~ /^[ \t]*(#|$)/) next
+      indent = lead(body)
+      if (inblock && indent <= blockindent) inblock = 0
+      key = (low ~ /[^a-z0-9_-]permissions["\047]?[ \t]*:/)
+      if (key) {
+        blockindent = indent
+        rest = low
+        sub(/.*permissions["\047]?[ \t]*:[ \t]*/, "", rest)
+        inblock = (rest == "" || rest ~ /^#/)
+      }
+      if (mark != "+" && mark != "-") next
+      if (key || (inblock && indent > blockindent) || low ~ /(read|write)-all/ \
+          || low ~ /^[ \t]*(-[ \t]+)?(actions|attestations|checks|contents|deployments|discussions|id-token|issues|models|packages|pages|pull-requests|repository-projects|security-events|statuses)["\047]?[ \t]*:[ \t]*["\047]?(read|write|none)/) {
+        finding("touches permissions")
+        next
+      }
+      if (low ~ /[^a-z0-9_-]secrets([^a-z0-9_-]|$)/ || low ~ /github_token|github\.token|id-token/ \
+          || low ~ /token["\047]?[ \t]*:/) {
+        finding("references secrets or a token")
+        next
+      }
+      if (mark != "+" || !match(low, /[^a-z0-9_-]uses[ \t]*:[ \t]*/)) next
+      ref = substr(low, RSTART + RLENGTH)
+      sub(/^["\047]/, "", ref)
+      sub(/["\047 \t#,}].*/, "", ref)
+      if (ref ~ /^\.\//) next
+      owner = ref
+      if (index(owner, "/") == 0 || owner ~ /^docker:/) {
+        finding("adds an action from outside the owner list")
+        next
+      }
+      sub(/\/.*/, "", owner)
+      if (owner == "" || index(owners, " " owner " ") == 0) finding("adds an action from outside the owner list")
+    }
+  '
+}
+
+# Prints why the workflow files among <hits> cannot merge on their own, and
+# prints nothing only when every one of them was read and is free of them.
+workflow_change_findings() {
+  local files=$1 hits=$2 owners entry name renamed patch findings
+  if ! owners=$(workflow_owners); then
+    printf '  %s cannot be read or has no owners\n' "$(workflow_owners_file)"
+    return 0
+  fi
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    if ! name=$(printf '%s' "$entry" | jq -r --arg hits "$hits" '
+        ($hits | split("\n")) as $h | [.names[] | select(. as $n | any($h[]; . == $n))] | first // empty') \
+      || ! renamed=$(printf '%s' "$entry" | jq -r '.renamed') \
+      || ! patch=$(printf '%s' "$entry" | jq -r '.patch // empty'); then
+      printf '  a changed file could not be read: %s\n' "$entry"
+      continue
+    fi
+    [ -n "$name" ] || continue
+    if [ "$renamed" != false ]; then
+      printf '  %s: renamed, so its whole content is not in the diff\n' "$name"
+    elif [ -z "$patch" ]; then
+      printf '  %s: its diff could not be read\n' "$name"
+    elif ! findings=$(printf '%s\n' "$patch" | workflow_patch_findings "$owners"); then
+      printf '  %s: its diff could not be checked\n' "$name"
+    elif [ -n "$findings" ]; then
+      printf '%s:\n%s\n' "$name" "$findings"
+    fi
+  done <<FILES
+$files
+FILES
+}
+
 # Must run after the head is verified, so the merge binds to the head whose paths were judged.
 autonomous_security_path_gate() {
-  local list changed hits
+  local list files changed hits other_list other_hits findings status=0
   [ "$ATTENDED_OVERRIDE" = false ] || return 0
   list=$(security_paths_file)
   if [ ! -r "$list" ] || ! grep -q -v -E '^[[:space:]]*(#|$)' "$list"; then
     echo "error: PR merge refused - the security path list $list cannot be read or has no entries; nothing was merged" >&2
     return 1
   fi
-  if ! changed=$(pr_changed_paths); then
+  if ! files=$(pr_changed_files) || ! changed=$(printf '%s\n' "$files" | jq -r '.names[]' 2>/dev/null); then
     echo "error: PR merge refused - the changed files of $URL could not be read to check for security-sensitive paths; nothing was merged" >&2
     return 1
   fi
-  if ! hits=$(printf '%s\n' "$changed" | security_path_hits "$list"); then
+  if ! other_list=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge-security-paths.XXXXXX"); then
+    echo "error: PR merge refused - a temporary file for the security path check could not be created; nothing was merged" >&2
+    return 1
+  fi
+  security_paths_without_workflow_patterns "$list" > "$other_list" || status=1
+  if [ "$status" -eq 0 ]; then
+    hits=$(printf '%s\n' "$changed" | security_path_hits "$list") || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    other_hits=$(printf '%s\n' "$changed" | security_path_hits "$other_list") || status=1
+  fi
+  rm -f "$other_list"
+  if [ "$status" -ne 0 ]; then
     echo "error: PR merge refused - the security path list $list has a pattern that does not compile; nothing was merged" >&2
     return 1
   fi
-  if [ -n "$hits" ]; then
+  [ -n "$hits" ] || return 0
+  if [ -z "$other_hits" ]; then
+    findings=$(workflow_change_findings "$files" "$hits")
+    [ -n "$findings" ] || return 0
+    echo "error: PR merge refused - $URL changes security-sensitive paths: workflow lines that touch permissions, secrets or tokens, or add an outside action:" >&2
+    printf '%s\n' "$findings" >&2
+  else
     echo "error: PR merge refused - $URL changes security-sensitive paths:" >&2
     printf '%s\n' "$hits" | sed 's/^/  /' >&2
-    echo "error: this needs the captain's explicit word, so nothing was merged; merge attended with --attended-override only after the captain names it" >&2
-    return 1
   fi
+  echo "error: this needs the captain's explicit word, so nothing was merged; merge attended with --attended-override only after the captain names it" >&2
+  return 1
 }
 
 record_pr_metadata() {
