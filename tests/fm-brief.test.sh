@@ -1430,8 +1430,8 @@ test_no_local_tests_skips_test_step_instead_of_running_suites() {
   for id in lt-nm lt-manual lt-gerrit lt-direct lt-local lt-scout; do
     brief="$home/data/$id/brief.md"
     assert_grep '# Local tests' "$brief" "$id: the flag left out the local tests section"
-    assert_grep 'No test command runs on this machine, in any repository' "$brief" \
-      "$id: the local tests section does not forbid every test command"
+    assert_grep "The repository's own tests never run on this machine, in any repository" "$brief" \
+      "$id: the local tests section does not forbid the repository's tests"
     assert_grep 'Build, lint, and typecheck commands may still run.' "$brief" \
       "$id: the local tests section does not allow build, lint, and typecheck"
     assert_no_grep 'skip nothing else' "$brief" "$id: a drive instruction still tells the worker to skip nothing else"
@@ -1446,7 +1446,39 @@ test_no_local_tests_skips_test_step_instead_of_running_suites() {
   assert_grep "Pass \`--skip test,push,pr,ci\` on every \`no-mistakes axi run\`" "$home/data/lt-gerrit/brief.md" \
     "the gerrit run does not skip the test step"
   assert_no_grep "\`--skip push,pr,ci\`" "$home/data/lt-gerrit/brief.md" "the gerrit brief still names a skip list without test"
-  pass "fm-brief: config/no-local-tests forbids local test commands and skips the pipeline test step"
+  pass "fm-brief: config/no-local-tests forbids the repository's tests, keeps throwaway checks, and skips the pipeline test step"
+}
+
+test_no_local_tests_rejects_a_brief_that_drops_the_throwaway_check_allowance() {
+  local home id brief
+  home="$TMP_ROOT/no-local-tests-throwaway"
+  mkdir -p "$home/data" "$home/config"
+  : > "$home/config/no-local-tests"
+  scaffold_local_tests_variants "$home"
+  for id in lt-nm lt-manual lt-gerrit lt-direct lt-local lt-scout; do
+    brief="$home/data/$id/brief.md"
+    assert_grep "A throwaway check is allowed: a small script you write in your temporary folder outside the repository and run once to see one behavior, such as running the built CLI once, calling a local server, or trying a snippet." "$brief" \
+      "$id: the local tests section drops the throwaway check allowance"
+    assert_grep "A throwaway check is never committed, never uses the repository's test setup, finishes in about a minute, and starts no browser, simulator, or App." "$brief" \
+      "$id: the local tests section drops the throwaway check bounds"
+  done
+  pass "fm-brief: config/no-local-tests keeps the throwaway check allowance"
+}
+
+test_no_local_tests_rejects_a_brief_that_allows_a_package_json_test_script() {
+  local home id brief
+  home="$TMP_ROOT/no-local-tests-package-json"
+  mkdir -p "$home/data" "$home/config"
+  : > "$home/config/no-local-tests"
+  scaffold_local_tests_variants "$home"
+  for id in lt-nm lt-manual lt-gerrit lt-direct lt-local lt-scout; do
+    brief="$home/data/$id/brief.md"
+    assert_grep "and not a \`package.json\` test script such as \`test\`, \`e2e\`, \`pixel\`, \`browser\`, or \`mutation\`." "$brief" \
+      "$id: the local tests section allows a package.json test script"
+    assert_grep "Do not run any test runner, such as \`bun test\`, \`vitest\`, or \`playwright\`, on any file" "$brief" \
+      "$id: the local tests section allows a test runner on some file"
+  done
+  pass "fm-brief: config/no-local-tests forbids package.json test scripts and test runners"
 }
 
 test_absent_no_local_tests_keeps_the_test_step_running() {
@@ -1962,6 +1994,8 @@ test_inbox_listing_command_is_safe_on_empty_inbox
 test_workers_wait_without_spending_turns
 test_wait_no_turns_absent_keeps_the_previous_brief
 test_no_local_tests_skips_test_step_instead_of_running_suites
+test_no_local_tests_rejects_a_brief_that_drops_the_throwaway_check_allowance
+test_no_local_tests_rejects_a_brief_that_allows_a_package_json_test_script
 test_absent_no_local_tests_keeps_the_test_step_running
 test_inbox_guidance_explains_marked_body_terminator
 test_home_brief_include_is_appended_last

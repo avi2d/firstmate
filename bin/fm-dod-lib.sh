@@ -517,7 +517,10 @@ fm_local_tests_off() {
 fm_local_tests_section() {
   cat <<'EOF'
 # Local tests
-No test command runs on this machine, in any repository: not the full suite, not changed or targeted tests, and not a single test file, whether you start it by hand, through a script, or through a pipeline step.
+The repository's own tests never run on this machine, in any repository: not the full suite, not changed or targeted tests, not a single test file started by hand, through a script, or through a pipeline step, and not a `package.json` test script such as `test`, `e2e`, `pixel`, `browser`, or `mutation`.
+Do not run any test runner, such as `bun test`, `vitest`, or `playwright`, on any file, and do not run any file in the repository's test folders, including tests you just wrote.
+A throwaway check is allowed: a small script you write in your temporary folder outside the repository and run once to see one behavior, such as running the built CLI once, calling a local server, or trying a snippet.
+A throwaway check is never committed, never uses the repository's test setup, finishes in about a minute, and starts no browser, simulator, or App.
 Build, lint, and typecheck commands may still run.
 CI on the pull request is the only test run.
 EOF
