@@ -2612,6 +2612,20 @@ Those paths need the captain's explicit word.
 A missing or empty list, an unreadable changed-file list, or a pattern that does not compile refuses the merge.
 It never passes.
 
+Workflow files are the one exception.
+When every matched path matches only the list lines `^\.(github|forgejo)/(workflows|actions)/` or `^\.gitlab-ci\.yml$`, the merge reads the diff of those files instead.
+It merges on its own unless an added or removed line touches a `permissions:` key or its block, references secrets, a `GITHUB_TOKEN`, a `token:` input or an `id-token` setting, or an added line has a `uses:` whose owner is not on the workflow owner list.
+A local `./` action is never outside the list.
+A renamed workflow file, a diff the forge did not send, or a path matched by any other line keeps the refusal, and the refusal names each line or file that caused it.
+
+### Workflow owners: config/workflow-owners
+
+`config/workflow-owners` is an optional local, gitignored file listing the owners whose actions a workflow change may add without the captain's word.
+It holds one GitHub account or organisation name per line, compared without regard to case.
+Blank lines and `#` lines are ignored.
+Without the file, the list is the pull request's own repository owner.
+A file that is present but unreadable or has no names refuses every workflow merge.
+
 ## External review tool (config/external-review.md, config/external-review-url, config/external-review-backup)
 
 These optional local, gitignored files configure a home's `forge=external` projects; a home with no such project needs none of them.

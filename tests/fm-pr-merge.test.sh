@@ -6519,6 +6519,147 @@ test_forgejo_security_path_diff_is_refused() {
   pass "a Forgejo pull request touching a security-sensitive path is refused before tea merges it"
 }
 
+# Writes the files list of one modified <path> whose patch is read from stdin.
+write_workflow_files_json() {  # <file> <path>
+  jq -n --arg path "$2" --rawfile patch /dev/stdin '[{filename: $path, status: "modified", patch: $patch}]' > "$1"
+}
+
+run_workflow_merge() {  # <case-dir> <pr-number>
+  set +e
+  run_pr_merge "$1" task-x1 "https://github.com/example/repo/pull/$2" \
+    > "$1/stdout" 2> "$1/stderr"
+  WORKFLOW_MERGE_RC=$?
+  set -e
+}
+
+test_plain_workflow_edit_is_not_held_for_the_captain() {
+  local case_dir
+  case_dir=$(make_case workflow-plain-edit)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  write_workflow_files_json "$case_dir/github-files.json" .github/workflows/ci.yml <<'PATCH'
+@@ -10,4 +10,5 @@ jobs:
+     steps:
+       - uses: ./.github/actions/setup
+-      - run: make test
++      - run: make test-all
++        timeout-minutes: 30
+PATCH
+
+  run_workflow_merge "$case_dir" 60
+
+  expect_code 0 "$WORKFLOW_MERGE_RC" "workflow-plain-edit: a workflow edit with no sensitive line should merge"
+  [ -n "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "workflow-plain-edit: the merge never reached the forge"
+  pass "a workflow edit with no permissions, secrets, tokens or outside action merges on its own"
+}
+
+test_workflow_edit_adding_secrets_still_needs_the_captain() {
+  local case_dir
+  case_dir=$(make_case workflow-secrets)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  write_workflow_files_json "$case_dir/github-files.json" .github/workflows/deploy.yml <<'PATCH'
+@@ -3,2 +3,4 @@
+     steps:
+       - run: ./deploy.sh
++        env:
++          KEY: ${{ secrets.DEPLOY_KEY }}
+PATCH
+
+  run_workflow_merge "$case_dir" 61
+
+  expect_code 1 "$WORKFLOW_MERGE_RC" "workflow-secrets: a workflow edit adding secrets. must not merge on its own"
+  assert_grep "needs the captain's explicit word" "$case_dir/stderr" \
+    "workflow-secrets: the refusal did not say the captain's word is needed"
+  assert_grep 'secrets.DEPLOY_KEY' "$case_dir/stderr" \
+    "workflow-secrets: the refusal did not name the line that caused it"
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "workflow-secrets: gh was asked to merge"
+  pass "a workflow edit that adds a secrets. reference is refused, naming the line"
+}
+
+test_workflow_edit_adding_an_outside_action_still_needs_the_captain() {
+  local case_dir
+  case_dir=$(make_case workflow-outside-action)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  write_workflow_files_json "$case_dir/github-files.json" .github/workflows/ci.yml <<'PATCH'
+@@ -5,2 +5,3 @@
+     steps:
++      - uses: stranger/scan-action@v2
+       - run: make test
+PATCH
+
+  run_workflow_merge "$case_dir" 62
+
+  expect_code 1 "$WORKFLOW_MERGE_RC" "workflow-outside-action: an added action from another owner must not merge on its own"
+  assert_grep 'stranger/scan-action@v2' "$case_dir/stderr" \
+    "workflow-outside-action: the refusal did not name the line that caused it"
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "workflow-outside-action: gh was asked to merge"
+  pass "a workflow edit that adds an action from an outside owner is refused, naming the line"
+}
+
+test_workflow_edit_adding_the_repository_owners_action_is_not_held() {
+  local case_dir
+  case_dir=$(make_case workflow-own-action)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  write_workflow_files_json "$case_dir/github-files.json" .github/workflows/ci.yml <<'PATCH'
+@@ -5,2 +5,3 @@
+     steps:
++      - uses: Example/shared-actions/lint@v1
+       - run: make test
+PATCH
+
+  run_workflow_merge "$case_dir" 63
+
+  expect_code 0 "$WORKFLOW_MERGE_RC" "workflow-own-action: an added action from the repository's own owner should merge"
+  [ -n "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "workflow-own-action: the merge never reached the forge"
+  pass "a workflow edit that adds an action from the repository's own owner merges on its own"
+}
+
+test_workflow_owners_config_replaces_the_repository_owner() {
+  local case_dir
+  case_dir=$(make_case workflow-owners-config)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  printf '%s\n' '# owners whose actions may merge on their own' avi2d azalialaw > "$case_dir/home/config/workflow-owners"
+  write_workflow_files_json "$case_dir/github-files.json" .github/workflows/ci.yml <<'PATCH'
+@@ -5,2 +5,4 @@
+     steps:
++      - uses: azalialaw/tools/setup@v3
++      - uses: example/shared-actions/lint@v1
+       - run: make test
+PATCH
+
+  run_workflow_merge "$case_dir" 64
+
+  expect_code 1 "$WORKFLOW_MERGE_RC" "workflow-owners-config: an owner missing from config/workflow-owners must not merge on its own"
+  assert_grep 'example/shared-actions/lint@v1' "$case_dir/stderr" \
+    "workflow-owners-config: the refusal did not name the action from the unlisted owner"
+  if grep -q 'azalialaw/tools/setup@v3' "$case_dir/stderr"; then
+    fail "workflow-owners-config: an action from a listed owner was named as outside"
+  fi
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "workflow-owners-config: gh was asked to merge"
+  pass "config/workflow-owners replaces the repository owner as the list of owners whose actions may merge"
+}
+
+test_workflow_edit_beside_another_security_path_still_needs_the_captain() {
+  local case_dir
+  case_dir=$(make_case workflow-and-auth)
+  add_gh_mocks "$case_dir" 1010101010101010101010101010101010101010
+  jq -n '[{filename: ".github/workflows/ci.yml", status: "modified", patch: "@@ -1 +1 @@\n-      - run: a\n+      - run: b"},
+    {filename: "bin/auth.sh", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b"}]' > "$case_dir/github-files.json"
+
+  run_workflow_merge "$case_dir" 65
+
+  expect_code 1 "$WORKFLOW_MERGE_RC" "workflow-and-auth: a non-workflow security path must keep the refusal"
+  assert_grep 'bin/auth.sh' "$case_dir/stderr" \
+    "workflow-and-auth: the refusal did not name the non-workflow security path"
+  [ -z "$(grep '^pr merge ' "$case_dir/gh.log" || true)" ] \
+    || fail "workflow-and-auth: gh was asked to merge"
+  pass "a clean workflow edit beside another security-sensitive path is still refused"
+}
+
 test_yolo_merge_refuses_a_security_path_diff
 test_yolo_merge_proceeds_when_no_path_is_security_sensitive
 test_attended_override_merges_a_security_path_diff
@@ -6528,6 +6669,12 @@ test_uncompilable_security_path_pattern_fails_closed
 test_config_security_paths_replace_the_default_list
 test_gitlab_security_path_diff_is_refused
 test_forgejo_security_path_diff_is_refused
+test_plain_workflow_edit_is_not_held_for_the_captain
+test_workflow_edit_adding_secrets_still_needs_the_captain
+test_workflow_edit_adding_an_outside_action_still_needs_the_captain
+test_workflow_edit_adding_the_repository_owners_action_is_not_held
+test_workflow_owners_config_replaces_the_repository_owner
+test_workflow_edit_beside_another_security_path_still_needs_the_captain
 
 test_stacked_bottom_is_not_left_to_the_refused_legacy_merge() {
   local case_dir rc request_sha request_method request_action
