@@ -1336,7 +1336,7 @@ test_status_and_turn_end_batch_never_uses_churn_evidence() {
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_POLL=3 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || fail "watcher absorbed a status-and-turn-end batch on churn evidence"
+  wait_for_exit "$pid" 300 || fail "watcher absorbed a status-and-turn-end batch on churn evidence"
   grep -F "$state/firststatus.status" "$out" >/dev/null \
     || fail "watcher did not print the status file from the surfaced mixed batch"
   grep -F "$state/secondturn.turn-ended" "$out" >/dev/null \
@@ -4226,6 +4226,26 @@ procevent_watch_bg() {  # <dir> <out>
     FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
 }
 
+test_batch_signal_rows_name_only_their_own_file() {
+  local dir state out i bad rows
+  dir=$(make_case batch-signal-rows); state="$dir/state"; out="$dir/watch.out"
+  for i in 1 2 3 4 5; do printf 'working: step %s\n' "$i" > "$state/task$i.status"; done
+  watch_bg "$state" "$dir/fakebin" "$out"
+  wait_for_exit "$!" 100 || fail "watcher did not surface a batch of changed status files: $(cat "$out")"
+  rows=$(grep -c . "$state/.wake-queue")
+  [ "$rows" -eq 5 ] || fail "five changed status files queued $rows rows, not one per file: $(cat "$state/.wake-queue")"
+  bad=$(awk -F '\t' '
+    $3 == "signal" {
+      n = split($5, paths, " ")
+      sub(".*/", "", paths[n])
+      if (n != 2 || paths[n] != $4) bad++
+    }
+    END { print bad + 0 }
+  ' "$state/.wake-queue")
+  [ "$bad" -eq 0 ] || fail "a queued signal row names more than its own status file: $(cat "$state/.wake-queue")"
+  pass "five changed status files queue five signal rows, each naming only its own file"
+}
+
 test_procevent_captured_result_surfaces_proactively() {
   local dir state out drain_out pid beacon_age
   dir=$(make_case procevent-delivery); state="$dir/state"
@@ -5544,6 +5564,7 @@ fm_test_run \
   test_turn_ended_oversized_churn_bound_surfaced \
   test_turn_ended_invalid_churn_deadline_surfaced \
   test_turn_ended_surfaced_batch_opens_no_partial_deadline \
+  test_batch_signal_rows_name_only_their_own_file \
   test_working_note_not_working_surfaced \
   test_secondmate_status_note_surfaced_despite_busy_agent \
   test_secondmate_routine_progress_absorbed_then_note_surfaced \

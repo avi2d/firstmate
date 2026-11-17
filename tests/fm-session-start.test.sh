@@ -1286,6 +1286,31 @@ EOF
   pass "status tail lines are capped with a truncation marker while the full log stays reachable"
 }
 
+test_wake_queue_rows_capped_in_digest_whole_in_queue() {
+  local rec root home fakebin payload out row_line drained
+  rec=$(new_world wake-row-cap)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_tmux "$fakebin" "fm-sess:live"
+
+  payload=$(awk 'BEGIN { s = "signal:"; for (i = 0; i < 12; i++) s = s " /padding/state/task-wake.status"; print s }')
+  append_wake "$home/state" signal task-wake.status "$payload"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  row_line=$(printf '%s\n' "$out" | grep -F "$(printf '\tsignal\ttask-wake.status\t')" | head -n 1)
+  [ -n "$row_line" ] || fail "the digest printed no wake-queue row for the queued signal: $out"
+  [ "${#row_line}" -le 220 ] || fail "a wake-queue row ran ${#row_line} characters past the 220-character cap: $row_line"
+  case "$row_line" in *" [truncated]") ;; *) fail "a capped wake-queue row lacks the truncation marker: $row_line" ;; esac
+
+  assert_grep "$payload" "$home/state/.wake-queue" "the queue lost the whole row the digest capped"
+  drained=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$ROOT/bin/fm-wake-drain.sh" 2>"$home/drain.err") || fail "the drain failed after the digest: $(cat "$home/drain.err")"
+  case "$drained" in *"$payload"*) ;; *) fail "the drain output does not carry the whole queued row" ;; esac
+  pass "the digest caps each wake-queue row with a truncation marker while the queue and drain keep it whole"
+}
+
 test_orphan_status_logs_are_printed() {
   local rec root home fakebin out matched_count orphan_count
   rec=$(new_world orphan-status)
@@ -3302,6 +3327,7 @@ test_session_start_preserves_proven_bare_shell_recovery
 test_session_start_relaunches_herdr_husk_secondmate
 test_status_tail_bounding
 test_status_tail_line_cap
+test_wake_queue_rows_capped_in_digest_whole_in_queue
 test_orphan_status_logs_are_printed
 test_endpoint_liveness_tmux
 test_endpoint_liveness_herdr
