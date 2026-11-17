@@ -850,7 +850,16 @@ else
   fi
   DRAIN_OUT=$("$SCRIPT_DIR/fm-wake-drain.sh" 2>&1)
   if [ -n "$DRAIN_OUT" ]; then
-    printf '%s\n' "$DRAIN_OUT"
+    while IFS= read -r drain_line; do
+      if [[ $drain_line =~ ^[0-9]+$'\t'[0-9]+$'\t' ]]; then
+        fm_cap_line_var "$drain_line"
+        printf '%s\n' "$FM_LINE_CAP_LINE"
+      else
+        printf '%s\n' "$drain_line"
+      fi
+    done <<EOF
+$DRAIN_OUT
+EOF
   else
     printf '(no queued wakes)\n'
   fi
