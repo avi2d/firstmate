@@ -3361,6 +3361,25 @@ fm_wait_tmp_cleanup() {
   WATCHER_WAIT_TMP=
 }
 
+# One queued signal row per distinct file in a <sentinel>\t<sig>\t<file> list,
+# its payload naming only that file. The payload prefix is "needs-decision:"
+# for a file in FM_SIGNAL_NEEDS_DECISION_FILES and "signal:" otherwise; the Pi
+# branch dispatcher (fm-branch-dispatch.ts, fm-primary-pi-watch.ts) and the
+# away daemon's handle_wake (bin/fm-supervise-daemon.sh) branch on that prefix.
+queue_signal_rows() {  # <pending-list>
+  local pending=$1 sf f payload queued=" "
+  while IFS=$(printf '\t') read -r sf _ f; do
+    [ -n "$sf" ] || continue
+    case "$queued" in *" $f "*) continue ;; esac
+    queued="$queued$f "
+    payload="signal: $f"
+    case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) payload="needs-decision: $f" ;; esac
+    fm_wake_append signal "$(basename "$f")" "$payload" || return 1
+  done <<EOF
+$pending
+EOF
+}
+
 # 0 when any signaled status file carries a captain-relevant event in the bytes
 # appended since this watcher last classified it. The start offset is the
 # classified-position field in that file's .seen-* marker, and fm-classify-lib.sh's
@@ -4318,30 +4337,10 @@ EOF
     # shellcheck disable=SC2086  # $files is a space-separated status-path list (ids carry no spaces)
     signal_files_actionable $files
     signal_actionable=$?
-    # A decision-owned file's queued row payload is marked "needs-decision:"
-    # instead of the ordinary "signal:" below (other files in the same batch
-    # keep the ordinary payload). The wake reason line itself, and every
-    # harness-arm consumer that pattern-matches it, stays byte-identical -
-    # only the per-row payload changes. Two readers branch on that payload:
-    # docs/pi-supervision-branch.md's Pi-only branch dispatcher, to keep a
-    # decision-owned row off the supervision branch (fm-branch-dispatch.ts,
-    # fm-primary-pi-watch.ts), and the away daemon, whose handle_durable_wakes
-    # passes it to handle_wake (see the comment above handle_wake in
-    # bin/fm-supervise-daemon.sh).
     # shellcheck disable=SC2086  # same space-separated status-path list
     if afk_present || [ "$signal_actionable" -eq 0 ] \
       || { ! signal_crew_provably_working $files && ! signal_turnend_panes_churned $files; }; then
-      appended_files=" "
-      while IFS=$(printf '\t') read -r sf sig f; do
-        [ -n "$sf" ] || continue
-        case "$appended_files" in *" $f "*) continue ;; esac
-        appended_files="$appended_files$f "
-        file_reason="signal: $f"
-        case " $FM_SIGNAL_NEEDS_DECISION_FILES " in *" $f "*) file_reason="needs-decision: $f" ;; esac
-        fm_wake_append signal "$(basename "$f")" "$file_reason" || exit 1
-      done <<EOF
-$pending
-EOF
+      queue_signal_rows "$pending" || exit 1
       # The wake signature advances for every file in this batch, including one
       # whose span could not be classified: it has now been reported, and this is
       # what bounds an unreadable log to one report per distinct file state. Only
@@ -4383,12 +4382,7 @@ EOF
 $FM_SIGNAL_SURFACE_ENDPOINTS
 EOF
       if [ "$signal_commit_error" -ne 0 ]; then
-        while IFS=$(printf '\t') read -r sf sig f; do
-          [ -n "$sf" ] || continue
-          fm_wake_append signal "$(basename "$f")" "$reason" || exit 1
-        done <<EOF
-$pending
-EOF
+        queue_signal_rows "$pending" || exit 1
         wake "$reason"
       fi
       triage_log "absorbed benign $reason"

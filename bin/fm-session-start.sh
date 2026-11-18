@@ -469,9 +469,14 @@ MANUAL_KEEP_RE='[(]hold|blocked-by:'
 
 print_backlog_manual_compact() {
   local path=$1 reason=$2
-  printf 'compact backlog listing (%s; done rows omitted; every in-flight, held, and blocked title line kept; other queued bounded to %s; indented task bodies omitted)\n' \
-    "$reason" "$QUEUED_LIMIT"
-  awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" '
+  if [ "$REEMIT" -eq 1 ]; then
+    printf 'context re-emit backlog summary (%s; done rows omitted; held and blocked title lines counted, not listed; other queued bounded to %s; indented task bodies omitted)\n' \
+      "$reason" "$QUEUED_LIMIT"
+  else
+    printf 'compact backlog listing (%s; done rows omitted; every in-flight, held, and blocked title line kept; other queued bounded to %s; indented task bodies omitted)\n' \
+      "$reason" "$QUEUED_LIMIT"
+  fi
+  awk -v max="$QUEUED_LIMIT" -v keep_re="$MANUAL_KEEP_RE" -v list_gated="$((1 - REEMIT))" '
     function state_for_heading(line, heading) {
       heading = line
       sub(/^##[[:space:]]+/, "", heading)
@@ -487,11 +492,16 @@ print_backlog_manual_compact() {
       if (state != "" && state != "done") print $0
       next
     }
-    state == "in_flight" && /^[-*][[:space:]]+/ { in_flight++; print $0; next }
+    state == "in_flight" && /^[-*][[:space:]]+/ {
+      in_flight++
+      if ($0 ~ keep_re) in_flight_gated++
+      if (list_gated || $0 !~ keep_re) print $0
+      next
+    }
     state == "done" && /^[-*][[:space:]]+/ { done_total++; next }
     state == "queued" && /^[-*][[:space:]]+/ {
       queued_total++
-      if ($0 ~ keep_re) { gated++; print $0; next }
+      if ($0 ~ keep_re) { gated++; if (list_gated) print $0; next }
       if (plain_shown < max) { plain_shown++; print $0 }
       next
     }
@@ -500,8 +510,13 @@ print_backlog_manual_compact() {
       if (in_flight + queued_total + done_total == 0) {
         print "(no backlog item title lines found)"
       } else {
-        printf "(shown %d in-flight, %d held or blocked queued, %d of %d other queued title line(s); %d done row(s) omitted)\n", \
-          in_flight, gated, plain_shown, plain_total, done_total
+        if (list_gated) {
+          printf "(shown %d in-flight, %d held or blocked queued, %d of %d other queued title line(s); %d done row(s) omitted)\n", \
+            in_flight, gated, plain_shown, plain_total, done_total
+        } else {
+          printf "(counts: %d in-flight, %d of them held or blocked and not listed; %d held or blocked queued, not listed; shown %d of %d other queued title line(s); %d done row(s) omitted)\n", \
+            in_flight, in_flight_gated, gated, plain_shown, plain_total, done_total
+        }
         if (plain_total > plain_shown) {
           printf "(%d more queued - raise FM_SESSION_START_QUEUED_LIMIT or read data/backlog.md for the rest)\n", plain_total - plain_shown
         }
@@ -545,9 +560,35 @@ print_ready_queued_bounded() {
   '
 }
 
+# tasks-axi listing header: count: <n>
+listing_count() {
+  printf '%s\n' "$1" | sed -n 's/^count: //p' | head -n 1
+}
+
+# <in-flight listing with --fields held>: the rows whose trailing held field is no.
+print_in_flight_not_held() {
+  printf '%s\n' "$1" | strip_axi_help | awk '/^[[:space:]]/ && /,no$/ { sub(/,no$/, ""); print }'
+}
+
+print_backlog_reemit_groups() {
+  local in_flight=$1 held=$2 blocked=$3 open_rows
+  open_rows=$(print_in_flight_not_held "$in_flight")
+  printf 'context re-emit backlog summary (tasks-axi; done rows omitted; held and blocked rows counted, not listed; ready queued bounded to %s; task bodies omitted)\n' \
+    "$QUEUED_LIMIT"
+  printf 'counts: in flight %s, held %s (in-flight items included), blocked queued %s; list them with bin/fm-tasks-axi.sh list --state held, or --state queued --blocked\n' \
+    "$(listing_count "$in_flight")" "$(listing_count "$held")" "$(listing_count "$blocked")"
+  printf '\nin flight, not held {id,state,kind,repo,title}:\n'
+  if [ -n "$open_rows" ]; then
+    printf '%s\n' "$open_rows"
+  else
+    printf '(none)\n'
+  fi
+}
+
 print_backlog_tasks_axi_compact() {
-  local path=$1 in_flight held blocked ready err
-  if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$BACKLOG_FIELDS" 2>&1); then
+  local path=$1 in_flight_fields=$BACKLOG_FIELDS in_flight held blocked ready err
+  [ "$REEMIT" -eq 0 ] || in_flight_fields=held
+  if ! in_flight=$(tasks-axi list --file "$path" --state in_flight --fields "$in_flight_fields" 2>&1); then
     err=$in_flight
   elif ! held=$(tasks-axi list --file "$path" --state held --fields "$BACKLOG_FIELDS" 2>&1); then
     err=$held
@@ -556,14 +597,18 @@ print_backlog_tasks_axi_compact() {
   elif ! ready=$(tasks-axi ready --file "$path" 2>&1); then
     err=$ready
   else
-    printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to %s; task bodies omitted)\n' \
-      "$QUEUED_LIMIT"
-    printf '\nin flight:\n'
-    printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help
-    printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
-    printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help
-    printf '\nblocked queued:\n'
-    printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
+    if [ "$REEMIT" -eq 1 ]; then
+      print_backlog_reemit_groups "$in_flight" "$held" "$blocked"
+    else
+      printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to %s; task bodies omitted)\n' \
+        "$QUEUED_LIMIT"
+      printf '\nin flight:\n'
+      printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help
+      printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
+      printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help
+      printf '\nblocked queued:\n'
+      printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
+    fi
     printf '\nready queued (dispatchable now):\n'
     if fm_project_tiers_read "$CONFIG" 2>&1 && [ -n "$FM_PROJECT_TIERS" ]; then
       printf '(higher project tier first, per %s)\n' "$FM_PROJECT_TIERS_FILE"
@@ -596,6 +641,15 @@ print_backlog_compact() {
   else
     printf 'ABSENT\n'
   fi
+}
+
+# One capped line for a task on context re-emit: <id> [<kind> <mode>]: <last status line>.
+print_meta_reemit_line() {
+  local meta=$1 id=$2 kind mode last
+  kind=$(fm_meta_get "$meta" kind)
+  mode=$(fm_meta_get "$meta" mode)
+  last=$(awk 'NF { line = $0 } END { print line }' "$STATE/$id.status" 2>/dev/null)
+  fm_cap_line "$id [${kind:-unknown kind}${mode:+ $mode}]: ${last:-(no status yet)}"
 }
 
 print_status_tail() {
@@ -962,9 +1016,15 @@ EOF
 if [ "$REEMIT" -eq 1 ]; then
   cat <<'EOF'
 
-On this context re-emit the CONTEXT section below is a manifest (path, byte
-size, hash) rather than full bodies, so the "printed in full" line above
-does not cover it: read a file's body only when this turn needs its content.
+On this context re-emit the "printed in full" line above does not hold for
+the CONTEXT section or the FLEET STATE backlog and work-under-way listings:
+  - CONTEXT is a manifest (path, byte size, hash) rather than full bodies;
+  - the backlog shows counts, the in-flight rows that are not held, and the
+    bounded ready queue, but not held or blocked rows;
+  - work under way is one line per state/*.meta task (id, kind, mode, last
+    status line), with no meta body, endpoint check, or status tail.
+Read a source, list held or blocked rows, or run bin/fm-crew-state.sh <id>
+only when this turn needs its content.
 EOF
 fi
 
@@ -975,12 +1035,20 @@ stage fleet-state
 section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
 
-subsection "Work under way (state/*.meta)"
+if [ "$REEMIT" -eq 1 ]; then
+  subsection "Work under way (state/*.meta; one line per task: id [kind mode]: last status line, capped at $FM_LINE_CAP_DEFAULT characters - wake-EVENT history, not current state)"
+else
+  subsection "Work under way (state/*.meta)"
+fi
 META_FOUND=0
 for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] || continue
   META_FOUND=1
   id=$(basename "$meta" .meta)
+  if [ "$REEMIT" -eq 1 ]; then
+    print_meta_reemit_line "$meta" "$id"
+    continue
+  fi
   printf '\n--- %s ---\n' "$id"
   cat "$meta"
 
