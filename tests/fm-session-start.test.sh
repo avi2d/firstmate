@@ -185,6 +185,11 @@ case "${1:-}" in
         printf '%s\n' 'startup recovery must never list done rows' >&2
         exit 9
         ;;
+      *'--state in_flight'*'--fields held'*)
+        printf 'count: 2\ntasks[2]{id,state,kind,repo,title,held}:\n'
+        printf '%s\n' '  compact-startup,in_flight,ship,firstmate,Compact startup digest,yes'
+        printf '%s\n' '  open-work,in_flight,ship,firstmate,"Open work, not held",no'
+        ;;
       *'--state in_flight'*)
         task_header 1
         printf '%s\n' '  compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending'
@@ -2656,11 +2661,9 @@ $rec
 EOF
   make_fake_toolchain "$fakebin"
   make_fake_ps_claude "$fakebin"
-  make_fake_tmux "$fakebin" "fm-sess:live"
   make_fake_tasks_axi_compact "$fakebin"
   printf '%s\n' '# Backlog' > "$home/data/backlog.md"
-  printf 'window=fm-sess:live\nkind=ship\n' > "$home/state/task-a.meta"
-  printf 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n' > "$home/state/task-a.status"
+  printf 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n' > "$home/state/orphan-a.status"
 
   startup=$(FM_FAKE_TASKS_AXI_READY=12 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$startup" "line 3" "true startup tail (5 lines) missing an expected recent line"
@@ -2680,6 +2683,76 @@ EOF
   assert_contains "$explicit" "line 1" "an explicit status-tail setting did not win over the re-emit default"
 
   pass "--reemit tails and queued rows default tighter while explicit settings still win"
+}
+
+test_reemit_fleet_state_lists_open_work_and_one_line_per_task() {
+  local rec root home fakebin startup reemit long_line
+  rec=$(new_world reemit-fleet-summary)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  write_long_body_backlog "$home/data/backlog.md"
+  printf 'window=fm-sess:compact\nkind=ship\nmode=no-mistakes\nMETA-BODY-CANARY=1\n' > "$home/state/compact-startup.meta"
+  printf 'working: OLDER-STATUS-LINE\npaused [at=1]: LATEST-STATUS-LINE | owner=firstmate | recheck=2026-01-01\n\n' \
+    > "$home/state/compact-startup.status"
+  printf 'window=fm-sess:scout\nkind=scout\n' > "$home/state/long-scout.meta"
+  awk 'BEGIN { printf "working: "; for (i = 0; i < 400; i++) printf "x"; printf "\n" }' > "$home/state/long-scout.status"
+
+  startup=$(FM_FAKE_TASKS_AXI_READY=3 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$startup" "held-queued,queued,ship,firstmate,Held queued work" "true startup dropped a held row"
+  assert_contains "$startup" "blocked-followup,queued,scout,firstmate" "true startup dropped a blocked row"
+  assert_contains "$startup" "META-BODY-CANARY=1" "true startup dropped the meta body"
+  assert_contains "$startup" "OLDER-STATUS-LINE" "true startup dropped the status tail"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_FAKE_TASKS_AXI_READY=3 "$SESSION_START" --reemit)
+  assert_contains "$reemit" "counts: in flight 2, held 1 (in-flight items included), blocked queued 1" \
+    "re-emit did not count the backlog groups"
+  assert_contains "$reemit" 'open-work,in_flight,ship,firstmate,"Open work, not held"' \
+    "re-emit dropped an in-flight row that is not held"
+  assert_not_contains "$reemit" "compact-startup,in_flight" "re-emit listed a held in-flight row"
+  assert_not_contains "$reemit" "held-queued" "re-emit listed a held queued row"
+  assert_not_contains "$reemit" "blocked-followup" "re-emit listed a blocked queued row"
+  assert_contains "$reemit" "ready-3,queued,ship,firstmate,Ready item 3" "re-emit dropped the ready queue"
+  assert_contains "$reemit" "compact-startup [ship no-mistakes]: paused [at=1]: LATEST-STATUS-LINE | owner=firstmate | recheck=2026-01-01" \
+    "re-emit did not print one line with the task's kind, mode, and last status line"
+  assert_not_contains "$reemit" "OLDER-STATUS-LINE" "re-emit printed more than the last status line"
+  assert_not_contains "$reemit" "META-BODY-CANARY=1" "re-emit printed the full meta body"
+  assert_not_contains "$reemit" "endpoint:" "re-emit still probed every task endpoint"
+  long_line=$(printf '%s\n' "$reemit" | grep '^long-scout \[scout\]: working: x')
+  [ -n "$long_line" ] || fail "re-emit dropped the line for a task without a delivery mode"
+  [ "${#long_line}" -le 220 ] || fail "re-emit did not cap a long task line: ${#long_line} characters"
+  assert_contains "$reemit" "but not held or blocked rows" "the read-once contract does not say re-emit omits held and blocked rows"
+
+  pass "--reemit lists counts, open in-flight rows, the ready queue, and one capped line per task while a true startup keeps the full listing"
+}
+
+test_reemit_manual_backlog_counts_held_and_blocked_lines() {
+  local rec root home fakebin reemit
+  rec=$(new_world reemit-manual-backlog)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  write_long_body_backlog "$home/data/backlog.md"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+
+  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    "$SESSION_START" --reemit)
+  assert_contains "$reemit" "(counts: 1 in-flight, 1 of them held or blocked and not listed; 2 held or blocked queued, not listed; shown 10 of 25 other queued title line(s); 1 done row(s) omitted)" \
+    "manual re-emit did not count the held and blocked title lines"
+  assert_not_contains "$reemit" "- [ ] compact-startup" "manual re-emit listed a held in-flight title line"
+  assert_not_contains "$reemit" "held-queued" "manual re-emit listed a held queued title line"
+  assert_not_contains "$reemit" "blocked-followup" "manual re-emit listed a blocked queued title line"
+  assert_contains "$reemit" "plain-10 - Plain queued item 10" "manual re-emit dropped a plain queued line inside its bound"
+
+  pass "--reemit on a manual backlog counts held and blocked title lines instead of listing them"
 }
 
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact() {
@@ -3369,6 +3442,8 @@ test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
 test_reemit_cue_survives_the_hook_output_preview
 test_reemit_context_manifest_names_every_source_without_bodies
 test_reemit_defaults_bound_tighter_than_startup
+test_reemit_fleet_state_lists_open_work_and_one_line_per_task
+test_reemit_manual_backlog_counts_held_and_blocked_lines
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
 test_read_only_pi_compact_refreshes_against_its_own_session_identity
 test_codex_unreachable_reset_sources_do_not_claim_instruction_refresh
