@@ -294,6 +294,9 @@ For `session_start`, the extension does the following:
 Replacement or shutdown stops the matching process group.
 Stale generations cannot deliver into the active session.
 
+Pi compaction keeps its most recent entries, so the digest delivered after an earlier compaction can survive beside the newest one.
+The extension's `context` handler therefore sends the model only the newest session-start message, while the session file keeps every delivery.
+
 An eligible native failure or empty result settles before the extension returns the existing exact manual instruction.
 So native and manual startup never run concurrently.
 

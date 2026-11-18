@@ -910,6 +910,75 @@ JS
   pass "Pi reload shutdown releases its exit listener and stale startup generation"
 }
 
+test_pi_context_sends_only_the_newest_sessionstart_digest() {
+  local fixture out status=0
+  command -v node >/dev/null 2>&1 || {
+    echo "skip: node not found for Pi session-start context test"
+    return 0
+  }
+  fixture="$TMP_ROOT/pi-context-newest-digest"
+  mkdir -p "$fixture/.pi/extensions/lib" "$fixture/bin" "$fixture/state"
+  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$fixture/.pi/extensions/"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" \
+    "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$fixture/.pi/extensions/lib/"
+  cp "$ROOT/bin/fm-operational-input.sh" "$fixture/bin/"
+
+  out=$(EXT="$fixture/.pi/extensions/fm-primary-turnend-guard.ts" \
+    FM_HOME="$fixture" FM_ROOT_OVERRIDE="$fixture" \
+    node --input-type=module 2>&1 <<'JS'
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+const pi = {
+  on(event, handler) { handlers.set(event, handler); },
+  sendMessage() {},
+};
+const extension = await import(`${pathToFileURL(process.env.EXT).href}?context=${Date.now()}`);
+extension.default(pi);
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+const context = handlers.get("context");
+assert(typeof context === "function", "the extension registered no context handler");
+
+const digest = (label) => ({
+  role: "custom",
+  customType: "firstmate-sessionstart-nudge",
+  content: label,
+  display: false,
+  timestamp: 0,
+});
+const user = (text) => ({ role: "user", content: text, timestamp: 0 });
+const otherCustom = { role: "custom", customType: "another-extension", content: "kept", display: false, timestamp: 0 };
+
+const compacted = [
+  user("summary"),
+  digest("DIGEST_BEFORE_LAST_COMPACTION"),
+  user("kept turn"),
+  otherCustom,
+  digest("DIGEST_AFTER_THIS_COMPACTION"),
+  user("next prompt"),
+];
+const result = await context({ type: "context", messages: compacted });
+const sent = result?.messages ?? compacted;
+const digests = sent.filter((message) => message.customType === "firstmate-sessionstart-nudge");
+assert(digests.length === 1 && digests[0].content === "DIGEST_AFTER_THIS_COMPACTION",
+  `the model received ${digests.length} session-start digests: ${digests.map((m) => m.content).join(", ")}`);
+assert(sent.length === compacted.length - 1, "the context handler dropped a message that was not an older digest");
+assert(sent.includes(otherCustom), "the context handler dropped another extension's custom message");
+assert(sent[sent.length - 1].content === "next prompt", "the context handler reordered the conversation");
+
+assert((await context({ type: "context", messages: [user("a"), digest("ONLY_DIGEST"), user("b")] })) === undefined,
+  "a context with a single digest was rewritten");
+assert((await context({ type: "context", messages: [user("a")] })) === undefined,
+  "a context with no digest was rewritten");
+JS
+  ) || status=$?
+  [ -z "$out" ] || fail "Pi session-start context filter printed output: $out"
+  expect_code 0 "$status" "Pi session-start context filter"
+  pass "Pi sends the model only the newest session-start digest when compaction kept an older one"
+}
+
 test_pi_large_sessionstart_digest_is_delivered_loudly() {
   local fixture out status=0
   command -v node >/dev/null 2>&1 || {
@@ -1119,4 +1188,5 @@ test_run_reports_a_failed_session_start_as_digest_text
 test_pi_startup_classifies_cli_continuations
 test_pi_sessionstart_generation_prerequisite
 test_pi_reload_releases_sessionstart_exit_listener
+test_pi_context_sends_only_the_newest_sessionstart_digest
 test_pi_large_sessionstart_digest_is_delivered_loudly

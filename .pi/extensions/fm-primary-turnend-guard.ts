@@ -148,8 +148,9 @@ type SessionstartSource = "startup" | "clear" | "resume" | "fork" | "compact";
 type SessionstartResult =
   | { kind: "ready"; raw: string }
   | { kind: "empty" | "failed" | "ineligible" | "cancelled" };
+const sessionstartCustomType = "firstmate-sessionstart-nudge";
 type SessionstartMessage = {
-  customType: "firstmate-sessionstart-nudge";
+  customType: typeof sessionstartCustomType;
   content: string;
   display: false;
   details: { kind: "session-start" };
@@ -458,7 +459,7 @@ function sessionstartMessage(
       ? raw
       : encodeFirstmateOperationalInput("session-start", raw);
     return {
-      customType: "firstmate-sessionstart-nudge",
+      customType: sessionstartCustomType,
       content,
       display: false,
       details: { kind: "session-start" },
@@ -466,6 +467,23 @@ function sessionstartMessage(
   } catch {
     return undefined;
   }
+}
+
+function isSessionstartMessage(message: { role?: string; customType?: string }): boolean {
+  return message.role === "custom" && message.customType === sessionstartCustomType;
+}
+
+// Compaction keeps its most recent entries, so the digest delivered after the
+// previous compaction survives beside the one delivered after this one. Only
+// the newest digest describes the current fleet.
+function withLatestSessionstartOnly<M extends { role?: string; customType?: string }>(
+  messages: M[],
+): M[] | undefined {
+  let latest = messages.length - 1;
+  while (latest >= 0 && !isSessionstartMessage(messages[latest])) latest -= 1;
+  if (latest < 0) return undefined;
+  const kept = messages.filter((message, index) => index === latest || !isSessionstartMessage(message));
+  return kept.length === messages.length ? undefined : kept;
 }
 
 async function claimSessionstartMessage(
@@ -636,6 +654,11 @@ export default function (pi: ExtensionAPI) {
     } catch {
       generation.delivered = false;
     }
+  });
+
+  pi.on?.("context", (event) => {
+    const messages = withLatestSessionstartOnly(event.messages ?? []);
+    return messages ? { messages } : undefined;
   });
 
   pi.on?.("session_shutdown", async () => {
