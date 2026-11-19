@@ -9,15 +9,11 @@ metadata:
 # Session-start recovery
 
 The digest itself makes no external-network call and never waits for one.
-Every network check a session start owes - GitHub auth, secondmate recovery, secondmate convergence, pending handoff delivery, and project clone refresh - runs off the digest's blocking path in a bounded worker owned by `bin/fm-startup-network.sh` and is reported in the digest's own `NETWORK CHECKS` section.
 The locked startup inactive-outcome scan joins that worker so a slow local current-state read cannot block the digest; its findings use the ordinary durable wake queue.
 
 1. **Lock** - acquires the per-home session lock first, before anything mutates shared state, then starts the deferred startup stage above.
 2. **Bootstrap** - detect-only checks (tool/version problems, the worktree-tangle check, harness override, dispatch-profile validation, backlog-backend status) always run, but routine confirmations stay silent by default.
    When the lock could not be acquired, the worktree-tangle check uses read-only advisory wording without a checkout repair command.
-   Home-local stale Herdr projection cleanup and the six bootstrap MUTATING sweeps - same-home backlog reconciliation, fleet sync, secondmate convergence, secondmate liveness, pending remote handoff retry, and Relay artifact writes - run only when this session actually holds the lock from step 1; the four network ones among them run in the deferred stage rather than in this section.
-   The secondmate liveness sweep accounts for every registered secondmate and reports skipped or failed recovery as `SECONDMATE_LIVENESS:` lines.
-   The sweep and the watcher's cadence-gated tick share the [recovery contract](../../../bin/fm-secondmate-liveness-lib.sh); for T3 threads, follow the [native recovery guide](../../../docs/t3code-backend.md#restart-and-liveness-behavior).
 3. **Wake queue** - when locked, drains and presents the durable wake queue without running the inactive-outcome scan inline, and prints the raw records prominently as this turn's first work queue; a clearly labeled status-event annotation may follow a valid `signal` record and includes every status line still unread at the presentation cursor, but never replaces the raw record or current-state reconciliation, and a lapsed watcher chain still surfaces here via the same guard alarm.
    Presented records remain durable until the handling turn runs the generation-bound acknowledgement printed by the drain.
    Every locked drain also prints a bounded fleet-wide `OPEN DECISIONS` section when durable decision records remain open, including when the queue itself is empty; reconcile those entries before continuing.
@@ -31,7 +27,7 @@ The locked startup inactive-outcome scan joins that worker so a slow local curre
    That liveness line is a fast presence check only, not a full state read - when you need a crew's actual current state (a run-step, not just "is the pane there"), read it with `bin/fm-crew-state.sh <id>` as before; the digest deliberately skips that deeper, slower read for every task so it stays fast and bounded.
 6. **Network checks** - after the fleet-state digest, the deferred stage's result, or an explicit statement of what it has not confirmed yet.
    A read-only session runs no network checks at all and says so.
-7. **Context digest and next step** - last of the bulk sections, the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, each clearly delimited, followed by the closing reminder.
+7. **Context digest and next step** - last of the bulk sections, the full contents of `data/projects.md`, `data/captain.md`, and `data/learnings.md`, each clearly delimited, followed by the closing reminder.
    A file that does not exist prints an explicit `ABSENT` marker, never confused with an empty-but-present file: absence is meaningful (`captain.md` absent means use the firstmate repo's built-in defaults, `projects.md` absent means rebuild it from the clones under `projects/`, etc.).
    The closing reminder points back to the emitted supervision block and preserves only the lock, afk, Relay, and read-once reminders.
 
@@ -40,4 +36,3 @@ Do not dispatch until the essential launch tools are present and GitHub authenti
 Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
 A silent bootstrap section needs no action; for any printed actionable diagnostic line, act on what that line names.
 `BOOTSTRAP_INFO:` lines are completed no-action facts and do not require loading a skill.
-`secondmate-provisioning` owns startup secondmate sync, liveness, and inherited local-material convergence.

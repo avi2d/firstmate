@@ -137,7 +137,6 @@ FM_BACKEND_HERDR_ESCALATED_PREFIX=".herdr-escalated-"
 # .fm-secondmate-home is written by bin/fm-home-seed.sh (AGENTS.md section 6)
 # at a seeded secondmate home's root, containing exactly that secondmate's id.
 # The primary firstmate home never carries this marker.
-FM_BACKEND_HERDR_SECONDMATE_MARKER=".fm-secondmate-home"
 # The presentation projection is intentionally separate from the authoritative
 # task endpoint record.
 # A per-task journal lives under state/ as <id>.herdr-presentation.
@@ -357,14 +356,6 @@ fm_backend_herdr_presentation_enabled() {  # <config-dir> [<state-dir>] [<sessio
 # when the PRIMARY spawns that secondmate (its own process's FM_HOME still
 # names the primary at that point) - see fm-spawn.sh's herdr case arm.
 fm_backend_herdr_workspace_label() {
-  local marker="$FM_HOME/$FM_BACKEND_HERDR_SECONDMATE_MARKER" id
-  if [ -f "$marker" ]; then
-    id=$(tr -d '[:space:]' < "$marker" 2>/dev/null)
-    if [ -n "$id" ]; then
-      printf '2ndmate-%s' "$id"
-      return 0
-    fi
-  fi
   printf 'firstmate'
 }
 

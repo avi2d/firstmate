@@ -105,26 +105,6 @@ fm_worker_account_read() {
   ' -- "$1" "$2"
 }
 
-# fm_worker_account_config <harness> <config-dir> [<secondmate-id>]
-# Prints the directory containing the applicable pin. Only a missing per-mate
-# file falls back to the home pin; unreadable or malformed files still select
-# the override so the ordinary parser refuses them. Non-pinnable runners and
-# ordinary workers keep the supplied directory unchanged.
-fm_worker_account_config() {
-  local harness=$1 config=$2 mate=${3:-} file candidate rc
-  if [ -z "$mate" ] || ! file=$(fm_worker_account_file "$harness"); then
-    printf '%s\n' "$config"
-    return 0
-  fi
-  candidate="$config/secondmate-accounts/$mate"
-  fm_worker_account_read "$harness" "$candidate/$file" >/dev/null
-  rc=$?
-  case "$rc" in
-  3) printf '%s\n' "$config" ;;
-  4) return 1 ;;
-  *) printf '%s\n' "$candidate" ;;
-  esac
-}
 
 # fm_worker_account_resolve <harness> <config-dir> <setting>
 # Prints "declared<TAB>root<TAB>providers" for a valid pin, where root is the
@@ -263,17 +243,11 @@ fm_worker_account_check() {
 # endpoint exists, and bin/fm-control.sh before a relaunch stops the live
 # agent.
 fm_worker_account_select() {
-  local harness=$1 config=$2 model=$3 executable=$4 raw=${5:-} mate=${6:-}
-  local selection declared root providers word provider='' selected_config setting
-  selected_config=$(fm_worker_account_config "$harness" "$config" "$mate") || return 1
+  local harness=$1 config=$2 model=$3 executable=$4 raw=${5:-}
+  local selection declared root providers word provider='' setting
   setting="config/$(fm_worker_account_file "$harness")"
-  [ "$selected_config" = "$config" ] || setting="$selected_config/$(fm_worker_account_file "$harness")"
-  selection=$(fm_worker_account_resolve "$harness" "$selected_config" "$setting") || return 1
-  if [ -z "$selection" ]; then
-    [ "$selected_config" = "$config" ] && return 0
-    echo "error: secondmate account pin disappeared during selection: $setting" >&2
-    return 1
-  fi
+  selection=$(fm_worker_account_resolve "$harness" "$config" "$setting") || return 1
+  [ -n "$selection" ] || return 0
   declared=${selection%%$'\t'*}
   root=${selection#*$'\t'}
   providers=${root#*$'\t'}

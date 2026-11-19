@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# fm-remote-readiness-lib.sh - the remote second-mate readiness gate sequence.
+# fm-remote-readiness-lib.sh - the execution-home readiness checks.
 #
 # Source this file and call:
-#   fm_remote_readiness_ensure <bin-dir> <secondmate-id> [backend]
+#   fm_remote_readiness_ensure <bin-dir> <route> [backend]
 #
 # It runs bin/fm-remote-doctor.sh on that route's configured host, and when the
 # read-only run reports any gap it runs the doctor again with --fix and then a
@@ -28,7 +28,7 @@
 # shellcheck disable=SC2034
 FM_REMOTE_READINESS_OUT=
 
-fm_remote_readiness_probe() { # <bin-dir> <secondmate-id> [doctor-args...]
+fm_remote_readiness_probe() { # <bin-dir> <route> [doctor-args...]
   local bin_dir=$1 id=$2 out rc
   shift 2
   out=$("$bin_dir/fm-on.sh" "$id" fm-remote-doctor.sh "$@" </dev/null 2>&1)
@@ -37,7 +37,7 @@ fm_remote_readiness_probe() { # <bin-dir> <secondmate-id> [doctor-args...]
   return "$rc"
 }
 
-fm_remote_readiness_ensure() { # <bin-dir> <secondmate-id> [backend]
+fm_remote_readiness_ensure() { # <bin-dir> <route> [backend]
   local bin_dir=$1 id=$2 backend=${3:-any} rc
   local -a doctor_args=()
   [ "$backend" = any ] || doctor_args=(--backend "$backend")

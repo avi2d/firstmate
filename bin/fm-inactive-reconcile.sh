@@ -128,8 +128,6 @@ CREW_STATE_BIN="${FM_INACTIVE_CREW_STATE_BIN:-$SCRIPT_DIR/fm-crew-state.sh}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
-# shellcheck source=bin/fm-parent-channel-lib.sh
-. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
@@ -279,16 +277,6 @@ publish_actionable() { # <key> <payload>
   printf 'actionable: %s\n' "$payload"
 }
 
-queue_notice_once() { # <record> <key> <payload>
-  local record=$1 key=$2 payload=$3 notified rc=0
-  notified=$(record_value "$record" notice_emitted)
-  [ "$notified" = 1 ] && return 1
-  publish_actionable "$key" "$payload" || rc=$?
-  if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
-    record_field_set "$record" notice_emitted 1 || return 2
-  fi
-  return "$rc"
-}
 
 queue_presentation() { # <record> <fingerprint> <payload>
   local record=$1 fingerprint=$2 payload=$3
@@ -444,161 +432,6 @@ pr_for_task() { # <meta> [preferred-line]
   clean_field "$value"
 }
 
-home_secondmate_id() {
-  fm_parent_channel_home_id "$FM_HOME"
-}
-
-report_to_parent() { # <task> <state> <outcome-key> <fingerprint> <pr>
-  local task=$1 state=$2 outcome_key=$3 fingerprint=$4 pr=$5 line
-  line="$state [key=$outcome_key]: inactive terminal child=$task fingerprint=$fingerprint"
-  [ -z "$pr" ] || line="$line pr=$pr"
-  fm_parent_channel_report "$FM_HOME" "$STATE" "$line"
-}
-
-# Queue the once-per-record notice that a parent report could not be written.
-# A home seeded without its parent binding cannot report upward at all, and
-# every later terminal outcome fails the same way for the same reason, so the
-# binding is named when it is the cause.
-notice_parent_report_failed() { # <record> <fingerprint> <payload>
-  local record=$1 fingerprint=$2 payload=$3
-  if ! fm_secondmate_parent_record_parse "$FM_HOME/.fm-secondmate-parent"; then
-    payload="$payload (missing or unreadable parent binding .fm-secondmate-parent)"
-  fi
-  queue_notice_once "$record" "inactive-reconcile:$fingerprint" "$payload" || true
-}
-
-# The whole terminal event a child's ledger states, or non-zero when the ledger
-# is absent, unusable, or states no done or failed event (1), or when that event
-# is the line still being appended (2, no trailing newline yet). The event is
-# selected through the shared latest-event reader, so the ledger path owns a
-# terminal record whose continuation prose trails it, and an unfinished line of
-# ordinary prose withholds nothing.
-child_terminal_ledger_line() { # <status>
-  local status=$1 snapshot last marker='__FM_LEDGER_SNAPSHOT_END__'
-  [ -f "$status" ] && [ ! -L "$status" ] && [ -s "$status" ] || return 1
-  last=$(last_status_line "$status")
-  case "$(status_line_verb "$last")" in done|failed) ;; *) return 1 ;; esac
-  snapshot=$(cat "$status"; printf '%s' "$marker") || return 1
-  case "$snapshot" in
-    *$'\n'"$marker") ;;
-    "$last$marker"|*$'\n'"$last$marker") return 2 ;;
-  esac
-  printf '%s\n' "$last"
-}
-
-# Claim one already-delivered inactive fallback as the delivery of this ledger
-# event. Both reconciliation paths hold the child's meta lock, so this receipt
-# update serializes their decision even though the child appends its ledger
-# without that lock. The claim stores the exact ledger fingerprint: a retry of
-# this event stays suppressed, while a later terminal line remains a new event.
-claim_inactive_report_for_ledger() { # <task> <incarnation> <state> <ledger-fingerprint> <predecessor-head>
-  local task=$1 incarnation=$2 state=$3 ledger_fingerprint=$4 predecessor_head=$5 record key claim
-  for record in "$OUTCOME_DIR"/*.reported; do
-    [ -f "$record" ] && [ ! -L "$record" ] || continue
-    [ "$(record_value "$record" task_id)" = "$task" ] || continue
-    [ "$(record_value "$record" incarnation)" = "$incarnation" ] || continue
-    [ "$(record_value "$record" state)" = "$state" ] || continue
-    key=$(record_value "$record" outcome_key)
-    case "$key" in inactive-outcome-*) ;; *) continue ;; esac
-    [ "$(record_value "$record" status_head)" = "$predecessor_head" ] || continue
-    claim=$(record_value "$record" ledger_claim)
-    if [ "$claim" = "$ledger_fingerprint" ]; then
-      return 0
-    fi
-    [ -z "$claim" ] || continue
-    record_field_set "$record" ledger_claim "$ledger_fingerprint" || return 2
-    return 0
-  done
-  return 1
-}
-
-# The ledger-first parent delivery for one direct child, for a caller holding
-# the child's meta lock. Returns 0 when the line is delivered, already
-# delivered, or nothing is owed, and 1 when it is owed but the parent channel
-# could not be written (the notice is queued once per record).
-report_child_ledger_locked() { # <id> <meta>
-  local id=$1 meta=$2 status last previous state note pr mode yolo data incarnation fingerprint predecessor_head outcome_key line
-  status="$STATE/$id.status"
-  last=$(child_terminal_ledger_line "$status") || return 0
-  state=$(status_line_verb "$last")
-  pr=$(pr_for_task "$meta" "$last")
-  incarnation=$(meta_incarnation "$meta")
-  fingerprint=$(sha256_text "$incarnation|$id|$state|ledger|$last")
-  if [ "$state" = "done" ] && [ ! -f "$(record_path "$fingerprint" reported)" ] \
-    && [ ! -f "$(record_path "$fingerprint" pending)" ] \
-    && ! fm_dod_accept_ship_done "$(meta_field "$meta" kind)" "$(meta_field "$meta" mode)" \
-      "$(meta_field "$meta" worktree)" "$(meta_field "$meta" project)" "$last" \
-      "$STATE" "$id" "$meta" meta-locked >/dev/null; then
-    return 0
-  fi
-  outcome_key="child-outcome-$id-$state-${fingerprint:0:8}"
-  ensure_record "$fingerprint" "$id" "$incarnation" "$state" "$outcome_key" direct upstream "$pr" || return 1
-  [ -n "$RECORD_PENDING" ] || return 0
-  last_status_line "$status" previous >/dev/null
-  predecessor_head=$(sha256_text "$previous")
-  if claim_inactive_report_for_ledger "$id" "$incarnation" "$state" "$fingerprint" "$predecessor_head"; then
-    # The fallback line is already on the parent channel. This reported ledger
-    # receipt records that its richer rendering owes no second publication.
-    mark_reported "$RECORD_PENDING" || return 1
-    return 0
-  elif [ "$?" -eq 2 ]; then
-    return 1
-  fi
-  note=$(clean_field "$(status_line_note "$last")")
-  mode=$(clean_field "$(meta_field "$meta" mode)")
-  yolo=$(clean_field "$(meta_field "$meta" yolo)")
-  data="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-  line="$state [key=$outcome_key]: child $id $state: $note"
-  [ -z "$pr" ] || line="$line pr=$pr"
-  [ -z "$mode" ] || line="$line mode=$mode"
-  [ -z "$yolo" ] || line="$line yolo=$yolo"
-  if [ -f "$data/$id/report.md" ] && [ ! -L "$data/$id/report.md" ]; then
-    line="$line report=data/$id/report.md"
-  fi
-  if fm_parent_channel_report "$FM_HOME" "$STATE" "$line"; then
-    mark_reported "$RECORD_PENDING" || return 1
-    return 0
-  fi
-  notice_parent_report_failed "$RECORD_PENDING" "$fingerprint" \
-    "child outcome needs parent report: child=$id state=$state"
-  return 1
-}
-
-# Every direct child's ledger, under its meta lock. File reads, plus a local
-# git reachability check for a ship done: with no delivery record yet, so it
-# runs on every poll in a secondmate home; a delivery failure is already queued as a
-# notice and never fails the scan.
-ledger_pass() {
-  local meta id lock
-  for meta in "$STATE"/*.meta; do
-    [ -f "$meta" ] || continue
-    id=$(basename "$meta" .meta)
-    valid_id "$id" || continue
-    [ "$(meta_field "$meta" kind)" != secondmate ] || continue
-    lock=$(fm_meta_lock_path "$meta") || continue
-    fm_lock_try_acquire "$lock" || continue
-    if [ ! -f "$meta" ] || [ -L "$meta" ] \
-      || [ "$(meta_field "$meta" kind)" = secondmate ]; then
-      fm_lock_release "$lock"
-      continue
-    fi
-    report_child_ledger_locked "$id" "$meta" || true
-    fm_lock_release "$lock"
-  done
-}
-
-# The `report <task-id>` entry point: the caller holds the child's meta lock.
-report_child() { # <id>
-  local id=$1 meta rc=0
-  mkdir -p "$STATE" "$OUTCOME_DIR" || return 1
-  [ ! -L "$OUTCOME_DIR" ] || return 1
-  home_secondmate_id >/dev/null || { rc=$?; [ "$rc" -eq 1 ] && return 0; return 1; }
-  meta="$STATE/$id.meta"
-  [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
-  [ "$(meta_field "$meta" kind)" != secondmate ] || return 0
-  report_child_ledger_locked "$id" "$meta"
-}
-
 task_holds_live_work() { # <id> <meta> <timeout> <last-status-line>; 0 when the verdict must be withheld, 3 on timeout
   local id=$1 meta=$2 timeout=$3 last=$4 backend target verdict rc=0 spawn_epoch status_epoch
   backend=$(fm_backend_of_meta "$meta")
@@ -626,20 +459,15 @@ task_holds_live_work() { # <id> <meta> <timeout> <last-status-line>; 0 when the 
   esac
 }
 
-reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 started left
+reconcile_direct_child_locked() { # <id> <meta> <timeout>
+  local id=$1 meta=$2 timeout=$3 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 started left
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
-  [ "$kind" = secondmate ] && return 0
+  case "$kind" in ""|ship|scout) ;; *) return 0 ;; esac
   status="$STATE/$id.status"
   turn="$STATE/$id.turn-ended"
   last=$(last_status_line "$status")
   status_line_verb "$last" | grep -Fx captain-held >/dev/null 2>&1 && return 0
-  # A ledger that states its own outcome is the ledger-first path's to deliver.
-  if [ -n "$self" ]; then
-    child_terminal_ledger_line "$status" >/dev/null
-    case "$?" in 0|2) return 0 ;; esac
-  fi
   age=$(last_activity_age "$meta" "$status" "$turn")
   [ "$age" -ge "$FM_INACTIVE_RECONCILE_SECS" ] || return 0
   started=$(date +%s)
@@ -647,10 +475,6 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
     "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
   last=$(last_status_line "$status")
-  if [ -n "$self" ]; then
-    child_terminal_ledger_line "$status" >/dev/null
-    case "$?" in 0|2) return 0 ;; esac
-  fi
   case "$state_line" in
     'state: done '*) state='done' ;;
     'state: failed '*) state='failed' ;;
@@ -668,33 +492,20 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   # fresh parent event per sentence. The last line stays in the record as
   # status_head evidence.
   fingerprint=$(sha256_text "$incarnation|$id|$state|$pr")
-  if [ -n "$self" ]; then
-    outcome_key="inactive-outcome-$self-$id-$state"
-  else
-    outcome_key="inactive-outcome-main-$id-$state"
-  fi
+  outcome_key="inactive-outcome-main-$id-$state"
   ensure_record "$fingerprint" "$id" "$incarnation" "$state" "$outcome_key" direct "upstream" "$pr" "$(sha256_text "$last")" || return 1
   [ -n "$RECORD_PENDING" ] || return 0
-  if [ -n "$self" ]; then
-    if report_to_parent "$id" "$state" "$outcome_key" "$fingerprint" "$pr"; then
-      mark_reported "$RECORD_PENDING" || return 1
-    else
-      notice_parent_report_failed "$RECORD_PENDING" "$fingerprint" \
-        "inactive terminal outcome needs parent report: child=$id state=$state"
-    fi
-    return 0
-  fi
   record_phase_set "$RECORD_PENDING" presentation || return 1
   payload="inactive terminal outcome awaiting captain presentation: child=$id state=$state"
   [ -z "$pr" ] || payload="$payload pr=$pr"
   queue_presentation "$RECORD_PENDING" "$fingerprint" "$payload" || true
 }
 
-reconcile_direct_child() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 lock rc=0
+reconcile_direct_child() { # <id> <meta> <timeout>
+  local id=$1 meta=$2 timeout=$3 lock rc=0
   lock=$(fm_meta_lock_path "$meta") || return 1
   fm_lock_acquire_wait "$lock" || return 1
-  reconcile_direct_child_locked "$id" "$meta" "$self" "$timeout" || rc=$?
+  reconcile_direct_child_locked "$id" "$meta" "$timeout" || rc=$?
   fm_lock_release "$lock"
   return "$rc"
 }
@@ -704,8 +515,8 @@ reconcile_direct_child() { # <id> <meta> <secondmate-id-or-empty> <timeout>
 # between the deadline computation and these checks; without the guaranteed
 # first visit, such a scan would return 3 having examined no child at all while
 # write_scan_marker had already advanced the cursor past the skipped child.
-scan_pass() { # <cursor> <after|through> <deadline> <secondmate-id-or-empty>
-  local cursor=$1 range=$2 deadline=$3 self=${4:-} meta id remaining rc first
+scan_pass() { # <cursor> <after|through> <deadline>
+  local cursor=$1 range=$2 deadline=$3 meta id remaining rc first
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     id=$(basename "$meta" .meta)
@@ -728,7 +539,7 @@ scan_pass() { # <cursor> <after|through> <deadline> <secondmate-id-or-empty>
       remaining=1
     fi
     [ "$remaining" -gt 0 ] || return 3
-    reconcile_direct_child "$id" "$meta" "$self" "$remaining" || {
+    reconcile_direct_child "$id" "$meta" "$remaining" || {
       rc=$?
       [ "$rc" -eq 3 ] && return 3
       return "$rc"
@@ -737,32 +548,20 @@ scan_pass() { # <cursor> <after|through> <deadline> <secondmate-id-or-empty>
 }
 
 scan() {
-  local startup=${1:-0} self='' cursor deadline rc=0 marker_rc=0
+  local startup=${1:-0} cursor deadline rc=0
   mkdir -p "$STATE" "$OUTCOME_DIR" || return 1
   [ ! -L "$OUTCOME_DIR" ] || return 1
-  if self=$(home_secondmate_id); then
-    # The ledger-first delivery is per poll, not per cadence.
-    ledger_pass
-  else
-    marker_rc=$?
-    self=''
-  fi
   if [ "$startup" != 1 ] && [ "$(scan_marker_age)" -lt "$FM_INACTIVE_RECONCILE_SECS" ]; then
     return 0
   fi
   cursor=$(scan_marker_cursor)
   valid_id "$cursor" || cursor=''
   write_scan_marker "$cursor" || return 1
-  if [ -z "$self" ] && [ "$marker_rc" -ne 1 ]; then
-    publish_actionable "inactive-reconcile-diagnostic:invalid-secondmate-home" \
-      "inactive terminal outcomes remain unreconciled: invalid .fm-secondmate-home marker" || true
-    return 0
-  fi
   deadline=$(( $(date +%s) + FM_INACTIVE_RECONCILE_BUDGET_SECS ))
   SCAN_FIRST_VISIT_PENDING=1
-  scan_pass "$cursor" after "$deadline" "$self" || rc=$?
+  scan_pass "$cursor" after "$deadline" || rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$cursor" ]; then
-    scan_pass "$cursor" through "$deadline" "$self" || rc=$?
+    scan_pass "$cursor" through "$deadline" || rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
     write_scan_marker '' || return 1
@@ -816,13 +615,6 @@ case "$mode" in
     fm_lock_acquire_wait "$SCAN_LOCK" || exit 1
     trap 'fm_lock_release "$SCAN_LOCK"' EXIT
     scan "$2"
-    ;;
-  report)
-    if [ "$#" -ne 2 ] || ! valid_id "$2"; then
-      printf 'usage: fm-inactive-reconcile.sh report <task-id>\n' >&2
-      exit 2
-    fi
-    report_child "$2"
     ;;
   acknowledge)
     [ "$#" -eq 2 ] || { printf 'usage: fm-inactive-reconcile.sh acknowledge <fingerprint>\n' >&2; exit 2; }

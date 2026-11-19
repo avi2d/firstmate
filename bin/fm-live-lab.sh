@@ -2,10 +2,9 @@
 # fm-live-lab.sh - stand up, check, drive, and tear down one disposable live
 # supervision lab: a real lab main session on Claude or Pi, with the
 # supervision host (Claude) or branch (Pi) wired as a real home runs it,
-# optionally a real seeded local second mate and a real gated worker.
 #
 # Usage:
-#   fm-live-lab.sh up --harness claude|pi [--mate] [--worker]
+#   fm-live-lab.sh up --harness claude|pi [--worker]
 #                     [--model <m>] [--effort <e>]
 #                     [--supervision-host <line>|none|off] [--expect-host yes|no]
 #                     [--source <repo>] [--ref <rev>] [--timeout <seconds>]
@@ -20,7 +19,6 @@
 # It exits 0 only when every check passed; otherwise it exits 1 and leaves the
 # lab up for inspection, so run down either way. check re-runs the same checks
 # once. say types text into a lab window and presses Enter (window main, the
-# lab primary, by default; mate and worker name the lab's own tasks). pane
 # prints a window's recent scrollback. down stops every lab process, removes the
 # lab's Claude trust entries by one atomic replace, removes <lab-root>, and exits
 # non-zero if the recorded Pi trust store or ~/.treehouse gained changes.
@@ -34,7 +32,6 @@
 #                    supervision-host <line> (default claude on Claude, absent
 #                    on Pi; none leaves the file absent; off writes the
 #                    inherited supervision-host-off opt-out instead, so the
-#                    mate spawn inherits it).
 #   tmux server      private, through the lab home's bin/fm-lab-home.sh
 #                    tmux-dir, with no user tmux config (its plugins never run
 #                    in a lab), started from an empty environment so no inherited
@@ -48,17 +45,14 @@
 #                    ~/.treehouse it selected, so check and down use those same
 #                    paths even from a later shell with another HOME.
 #   trust            Claude: bin/fm-claude-trust.sh --lab-home for the primary
-#                    and the spawn's own registration for the mate and worker. Pi:
+#                    and the spawn's own registration for the worker. Pi:
 #                    --approve, which trusts project-local files for this run
 #                    only, so the Pi trust store is never written and all of
 #                    .pi/extensions loads; sessions stay under
 #                    <lab-root>/pi-sessions.
-#   task ids         lab<nonce>-mate and lab<nonce>-worker, unique per lab,
+#   task ids         lab<nonce>-worker, unique per lab,
 #                    because a spawn keeps a task temp dir at /tmp/fm-<id>
 #                    that a fixed id would share with other labs and tasks.
-#   mate/            --mate: bin/fm-home-seed.sh <mate-id> <lab-root>/mate
-#                    --no-projects (an explicit path cloned from the git lab
-#                    home), launched by bin/fm-spawn.sh --secondmate.
 #   worker           --worker: a lab project notes with a lab-private origin
 #                    (local-only +yolo), a scaffolded brief, a backlog item, and
 #                    a real bin/fm-spawn.sh worker that parks on
@@ -67,7 +61,7 @@
 #   primary          window main: claude --setting-sources project,local
 #                    (default sonnet, medium, permission mode auto) or pi
 #                    (default openai-codex/gpt-6-luna, medium), launched
-#                    after the mate and worker so its first turn end arms
+#                    after the worker so its first turn end arms
 #                    supervision. up then sends one harmless probe prompt.
 #
 # Readiness checks (check prints "ok <name>: ..." or "fail <name>: ..."):
@@ -85,11 +79,9 @@
 #                 current on-disk builds.
 #   host          Claude: with --expect-host yes (the default on Claude unless
 #                 --supervision-host off) the supervision host runs; with no,
-#                 none runs. Skipped when the lab has no mate or worker, since
 #                 an empty fleet arms nothing.
 #   watcher       a live watcher with a fresh beacon holds this home's lock
 #                 (skipped on an empty fleet).
-#   mate          --mate: its window is alive and its own session lock names a
 #                 live process, so it got past trust into its charter. With
 #                 --supervision-host off, its inherited flag and disabled host
 #                 gate are also required.
@@ -150,11 +142,8 @@ load_lab() {  # <root>: refuse anything up did not build, then load its record
   LAB=$(rec_get "$ROOT" home)
   TMUX_DIR=$(rec_get "$ROOT" tmux_dir)
   EXPECT_HOST=$(rec_get "$ROOT" expect_host)
-  HOST_OFF=$(rec_get "$ROOT" host_off)
-  WANT_MATE=$(rec_get "$ROOT" mate)
   WANT_WORKER=$(rec_get "$ROOT" worker)
   NONCE=$(rec_get "$ROOT" nonce)
-  MATE_ID=$(rec_get "$ROOT" mate_id)
   WORKER_ID=$(rec_get "$ROOT" worker_id)
   GATE=$(rec_get "$ROOT" gate)
   PI_TRUST_BEFORE=$(rec_get "$ROOT" pi_trust)
@@ -209,12 +198,10 @@ lab_run() {  # [NAME=VALUE...] <command...>: run in the lab's clean environment
 # window_id <name>: the tmux id of the lab window with exactly this name, or
 # nothing. A name is matched here and never passed as a target, because tmux
 # resolves a target it cannot find, even an exact =name, to the current window,
-# while a stale window id fails. mate and worker name the lab's own tasks, whose
 # windows the spawn recorded in their metadata.
 window_id() {
   local name=$1 window
   case "$name" in
-    mate) name=$MATE_ID ;;
     worker) name=$WORKER_ID ;;
   esac
   window=$(sed -n 's/^window=//p' "$LAB/state/$name.meta" 2>/dev/null)
@@ -236,7 +223,7 @@ window_alive() {  # <name>
 
 pid_alive() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; kill -0 "$1" 2>/dev/null; }
 
-fleet_nonempty() { [ "$WANT_MATE" = yes ] || [ "$WANT_WORKER" = yes ]; }
+fleet_nonempty() { [ "$WANT_WORKER" = yes ]; }
 
 # ---- readiness checks -------------------------------------------------------
 
@@ -342,20 +329,6 @@ check_watcher() {
   fi
 }
 
-check_mate() {
-  local pid gate_rc
-  window_alive mate || { echo "fail mate: the $MATE_ID window is not running"; return 1; }
-  pid=$(sed -n 1p "$ROOT/mate/state/.lock" 2>/dev/null)
-  pid_alive "$pid" || { echo "fail mate: the mate holds no session lock yet (wedged before its charter?)"; return 1; }
-  if [ "$HOST_OFF" = yes ]; then
-    [ -f "$ROOT/mate/config/supervision-host-off" ] \
-      || { echo "fail mate: the inherited supervision-host-off flag is missing"; return 1; }
-    bash "$ROOT/mate/bin/fm-supervision-engine-lib.sh" enabled "$ROOT/mate/config" claude
-    gate_rc=$?
-    [ "$gate_rc" -eq 1 ] || { echo "fail mate: the supervision-host gate did not read off (exit $gate_rc)"; return 1; }
-  fi
-  echo "ok mate: $MATE_ID pid $pid in $ROOT/mate"
-}
 
 check_worker() {
   local state
@@ -387,7 +360,6 @@ run_checks() {
     check_extensions || rc=1
   fi
   check_watcher || rc=1
-  if [ "$WANT_MATE" = yes ]; then check_mate || rc=1; fi
   if [ "$WANT_WORKER" = yes ]; then check_worker || rc=1; fi
   check_treehouse || rc=1
   return "$rc"
@@ -472,21 +444,12 @@ PY
     --mode local-only --yolo on --harness claude --model sonnet --effort low)
 }
 
-spawn_mate() {
-  local charter='Provide an idle live-validation lab second mate. When explicitly steered for a synthetic test, report only honest local lab outcomes; do not claim external PR activity, merge, or retire yourself.'
-  (cd "$LAB" && lab_run FM_HOME="$LAB" FM_SECONDMATE_CHARTER="$charter" \
-    FM_SECONDMATE_SCOPE='second-mate live validation synthetic status relay' \
-    "$LAB/bin/fm-home-seed.sh" "$MATE_ID" "$ROOT/mate" --no-projects) || return 1
-  (cd "$LAB" && lab_run FM_HOME="$LAB" "$LAB/bin/fm-spawn.sh" "$MATE_ID" --secondmate)
-}
-
 cmd_up() {
-  local harness="" mate=no worker=no model="" effort=medium host_line=__default__ expect_host="" source="$BUILDER_ROOT" ref=HEAD timeout=600
+  local harness="" worker=no model="" effort=medium host_line=__default__ expect_host="" source="$BUILDER_ROOT" ref=HEAD timeout=600
   local root=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --harness) harness=${2:-}; shift 2 ;;
-      --mate) mate=yes; shift ;;
       --worker) worker=yes; shift ;;
       --model) model=${2:-}; shift 2 ;;
       --effort) effort=${2:-}; shift 2 ;;
@@ -505,8 +468,6 @@ cmd_up() {
   [ -n "$expect_host" ] || { [ "$harness" = claude ] && [ "$host_line" != off ] && expect_host=yes || expect_host=no; }
   case "$expect_host" in yes|no) ;; *) die "--expect-host takes yes or no" ;; esac
   [ "$host_line" != __default__ ] || { [ "$harness" = claude ] && host_line=claude || host_line=none; }
-  HOST_OFF=no
-  [ "$host_line" != off ] || HOST_OFF=yes
   [ -n "$model" ] || { [ "$harness" = claude ] && model=sonnet || model=openai-codex/gpt-6-luna; }
   CLAUDE_DIR=${CLAUDE_CONFIG_DIR:-}
   case "$CLAUDE_DIR" in ''|/*) ;; *) die "CLAUDE_CONFIG_DIR must be an absolute path" ;; esac
@@ -523,9 +484,9 @@ cmd_up() {
   fi
   ROOT=$(real_dir "$root")
   LAB="$ROOT/home"
-  HARNESS=$harness EXPECT_HOST=$expect_host WANT_MATE=$mate WANT_WORKER=$worker
+  HARNESS=$harness EXPECT_HOST=$expect_host WANT_WORKER=$worker
   NONCE=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
-  MATE_ID="lab${NONCE:0:12}-mate" WORKER_ID="lab${NONCE:0:12}-worker"
+  WORKER_ID="lab${NONCE:0:12}-worker"
   GATE="$LAB/data/$WORKER_ID/gate"
   PI_TRUST_BEFORE=$(digest "$PI_TRUST_STORE")
   treehouse_listing | sort > "$ROOT/.treehouse-before"
@@ -535,10 +496,8 @@ cmd_up() {
     echo "home=$LAB"
     echo "expect_host=$expect_host"
     if [ "$host_line" = off ]; then echo 'host_off=yes'; else echo 'host_off=no'; fi
-    echo "mate=$mate"
     echo "worker=$worker"
     echo "nonce=$NONCE"
-    echo "mate_id=$MATE_ID"
     echo "worker_id=$WORKER_ID"
     echo "gate=$GATE"
     echo "pi_trust=$PI_TRUST_BEFORE"
@@ -557,7 +516,6 @@ cmd_up() {
   mkdir -p "$LAB/state" "$LAB/data" "$LAB/config" "$LAB/projects" "$ROOT/treehouse"
   printf 'tmux\n' > "$LAB/config/backend"
   printf 'claude\n' > "$LAB/config/crew-harness"
-  printf 'claude sonnet low\n' > "$LAB/config/secondmate-harness"
   printf 'auto\n' > "$LAB/config/claude-permission-mode"
   case "$host_line" in
     none) ;;
@@ -572,10 +530,6 @@ cmd_up() {
   lab_run tmux -S "$(lab_socket)" -f /dev/null new-session -d -s firstmate -n lab -x 220 -y 60 -c "$ROOT" || die "cannot start the lab tmux server"
   record_launch_pid "$(lab_tmux display-message -p '#{pid}')"
 
-  if [ "$mate" = yes ]; then
-    spawn_mate || die "cannot seed and launch the second mate"
-    record_launch_pid "$(window_field mate '#{pane_pid}')"
-  fi
   if [ "$worker" = yes ]; then
     spawn_worker || die "cannot launch the gated worker"
     record_launch_pid "$(window_field worker '#{pane_pid}')"
@@ -585,7 +539,7 @@ cmd_up() {
   local -a primary=()
   if [ "$harness" = claude ]; then
     local settle=$(( $(date +%s) + 300 )) retry
-    until { [ "$mate" != yes ] || check_mate >/dev/null; } && { [ "$worker" != yes ] || [ -s "$LAB/state/$WORKER_ID.status" ]; }; do
+    until [ "$worker" != yes ] || [ -s "$LAB/state/$WORKER_ID.status" ]; do
       [ "$(date +%s)" -lt "$settle" ] || break
       sleep 2
     done
@@ -821,14 +775,14 @@ cmd_down() {
   # The second is scoped to this lab home for any task it spawned; the first is
   # removed only for the lab's own unique ids, since another home may share it.
   home_hash=$(printf '%s' "$LAB" | shasum -a 256 | awk '{print $1}')
-  ids=("$MATE_ID" "$WORKER_ID")
+  ids=("$WORKER_ID")
   for meta in "$LAB"/state/*.meta; do
     [ -f "$meta" ] && ids+=("$(basename "$meta" .meta)")
   done
   for id in "${ids[@]}"; do
     [ -n "$id" ] || continue
     for dir in "/tmp/fm-$id+$home_hash" "/tmp/fm-$id"; do
-      [ "$dir" != "/tmp/fm-$id" ] || [ "$id" = "$MATE_ID" ] || [ "$id" = "$WORKER_ID" ] || continue
+      [ "$dir" != "/tmp/fm-$id" ] || [ "$id" = "$WORKER_ID" ] || continue
       if [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ]; then
         rm -rf "$dir" && echo "removed: task temp $dir"
       fi

@@ -28,8 +28,6 @@
 _FM_MERGE_OUTCOME_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-pr-lib.sh"
-# shellcheck source=bin/fm-parent-channel-lib.sh
-. "$_FM_MERGE_OUTCOME_LIB_DIR/fm-parent-channel-lib.sh"
 
 # shellcheck disable=SC2034 # Public result consumed by sourcing callers.
 FM_MERGE_OUTCOME_ALREADY_RECORDED=false
@@ -57,7 +55,7 @@ FM_MERGE_OUTCOME_ALREADY_RECORDED=false
 fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [authority]
   local home=$1 state=$2 id=$3 url=$4 origin=$5
   local authority=${6-} suffix=
-  local self_rc=0 destination='' line lock status=0
+  local lock status=0
   local provider host path number
   # shellcheck disable=SC2034 # Sourced wake helpers consume these scoped globals.
   local STATE FM_WAKE_QUEUE FM_WAKE_QUEUE_LOCK
@@ -76,14 +74,6 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
   number=$FM_PR_NUMBER
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
 
-  if destination=$(fm_parent_channel_destination "$home" "$state"); then
-    line="done [key=merged-$id]: merged $id $FM_PR_URL$suffix"
-  else
-    self_rc=$?
-    [ "$self_rc" -eq 1 ] || return 3
-    destination=''
-  fi
-
   STATE=$state
   # shellcheck source=bin/fm-wake-lib.sh
   . "$_FM_MERGE_OUTCOME_LIB_DIR/fm-wake-lib.sh"
@@ -97,13 +87,8 @@ fm_merge_outcome_report() {  # <home> <state> <task-id> <pr-url> <origin> [autho
     return 0
   fi
 
-  if [ -n "$destination" ]; then
-    fm_parent_channel_append_once "$destination" "$(status_stamp_line "$line")" || status=1
-  fi
-  if [ "$status" -eq 0 ] && { [ "$origin" = poll ] || [ -z "$destination" ]; }; then
-    fm_wake_append check "merged-$id-$FM_PR_URL" \
-      "check: merge landed: $id $FM_PR_URL$suffix" || status=1
-  fi
+  fm_wake_append check "merged-$id-$FM_PR_URL" \
+    "check: merge landed: $id $FM_PR_URL$suffix" || status=1
   if [ "$status" -eq 0 ]; then
     fm_pr_poll_merge_mark_notified "$state" "$id" \
       "$provider" "$host" "$path" "$number" || status=1

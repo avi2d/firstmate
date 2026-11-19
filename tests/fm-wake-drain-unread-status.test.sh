@@ -131,101 +131,11 @@ test_signal_annotation_surfaces_every_unread_note_not_only_the_newest() {
   pass "a queued status signal annotates every unread note, not only the newest"
 }
 
-test_pending_reply_resolution_surfaces_once() {
-  local dir state out status
-  dir=$(make_case pending-reply-resolution)
-  state="$dir/state"
-  out="$dir/drain.out"
-  status="$state/task5.status"
-  prime_cursor "$state" "$status"
-
-  printf 'blocked [key=pending-reply-abcdef0123456789]: pending-reply-missed: task=task5 pending-reply-id=abcdef0123456789 request=ship it\n' >> "$status"
-  append_wake "$state" signal task5.status "signal: task5.status" \
-    || fail "queueing the pending-reply request signal failed"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null \
-    || fail "drain failed while acknowledging the pending-reply request"
-  {
-    printf 'resolved [key=pending-reply-abcdef0123456789]: pending-reply-resolved: task=task5 pending-reply-id=abcdef0123456789 via=status\n'
-    printf 'note: re-read acknowledgement\n'
-  } >> "$status"
-
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed on a pending-reply resolution"
-
-  grep -F 'pending-reply-resolved: task=task5 pending-reply-id=abcdef0123456789 via=status' "$out" >/dev/null \
-    || fail "the pending-reply resolution was buried under the later note: $(cat "$out")"
-  grep -F 'task5 note: re-read acknowledgement' "$out" >/dev/null \
-    || fail "the trailing note was not surfaced with the pending-reply resolution: $(cat "$out")"
-  if grep -F 'OPEN DECISIONS' "$out" >/dev/null; then
-    fail "the pending-reply resolution did not close its open decision: $(cat "$out")"
-  fi
-
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "second drain after pending-reply presentation failed"
-  if grep -F 'pending-reply-resolved:' "$out" >/dev/null; then
-    fail "an already-presented pending-reply resolution was replayed: $(cat "$out")"
-  fi
-  pass "a pending-reply resolution buried under a later note surfaces once and closes OPEN DECISIONS"
-}
 
 # The watcher's pending-reply close goes through the self-announced append, so
 # it records its bytes as this home's own and never wakes. The drain must still
 # present that reserved-key resolution in UNREAD STATUS, its only guaranteed
 # presentation.
-test_self_announced_pending_reply_close_still_surfaces() {
-  local dir state out status corr
-  dir=$(make_case self-announced-pending-reply)
-  state="$dir/state"
-  out="$dir/drain.out"
-  status="$state/task6.status"
-
-  run_pending_reply() {
-    FM_STATE_OVERRIDE="$state" FM_PENDING_REPLY_NOW=5000 bash -c '
-      . "$1"; . "$2"; shift 2; "$@"
-    ' _ "$ROOT/bin/fm-pending-reply-lib.sh" "$ROOT/bin/fm-wake-lib.sh" "$@"
-  }
-
-  corr=$(run_pending_reply fm_pending_reply_create "$dir" "$state" task6 "ship it") \
-    || fail "could not create the pending-reply record"
-  run_pending_reply fm_pending_reply_mark_delivered "$state" "$corr" \
-    || fail "could not mark the pending-reply request delivered"
-  FM_STATE_OVERRIDE="$state" FM_PENDING_REPLY_NOW=5000 bash -c '
-    . "$1"; rec=$(fm_pending_reply_path "$2" "$3")
-    fm_pending_reply_set "$rec" phase escalated && fm_pending_reply_set "$rec" escalated_epoch 4950
-  ' _ "$ROOT/bin/fm-pending-reply-lib.sh" "$state" "$corr" \
-    || fail "could not mark the pending-reply request escalated"
-
-  printf 'blocked [key=pending-reply-%s]: pending-reply-missed: task=task6 pending-reply-id=%s request=ship it\n' \
-    "$corr" "$corr" > "$status"
-  prime_status_seen "$state" "$status" || fail "could not mark the status file surfaced"
-  append_wake "$state" signal task6.status "signal: task6.status" \
-    || fail "queueing the pending-reply escalation signal failed"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null || fail "drain of the escalation failed"
-  printf 'done [corr=%s]: shipped after all\n' "$corr" >> "$status"
-  prime_status_seen "$state" "$status" || fail "could not mark the status file surfaced"
-  append_wake "$state" signal task6.status "signal: task6.status" \
-    || fail "queueing the delayed reply signal failed"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" >/dev/null || fail "drain of the delayed reply failed"
-
-  run_pending_reply fm_pending_reply_try_resolve "$state" "$corr" \
-    || fail "the delayed reply did not resolve the pending-reply record"
-  sed -E 's/ \[at=[0-9]+\]//' "$status" \
-    | grep -F "resolved [key=pending-reply-$corr]: pending-reply-resolved:" >/dev/null \
-    || fail "the resolve did not append the escalation close: $(cat "$status")"
-  [ -s "$state/.task6.home-appends" ] \
-    || fail "the escalation close did not go through the self-announced append"
-  run_pending_reply fm_wake_signal_seen_current "$state" "$status" \
-    || fail "the self-announced escalation close was left to re-wake this home"
-
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain after the escalation close failed"
-  sed -E 's/ \[at=[0-9]+\]//' "$out" \
-    | grep -F "task6 resolved [key=pending-reply-$corr]: pending-reply-resolved: task=task6 pending-reply-id=$corr" >/dev/null \
-    || fail "the self-announced pending-reply resolution was hidden from UNREAD STATUS: $(cat "$out")"
-
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "second drain after the escalation close failed"
-  if grep -F 'pending-reply-resolved:' "$out" >/dev/null; then
-    fail "an already-presented self-announced resolution was replayed: $(cat "$out")"
-  fi
-  pass "a self-announced pending-reply close does not wake yet still surfaces once in UNREAD STATUS"
-}
 
 test_unread_output_over_cap_remains_recoverable() {
   local dir state out status i payload
@@ -465,8 +375,6 @@ test_incident_note_answer_buried_under_routine_note_surfaces_both
 test_already_presented_notes_are_not_replayed
 test_brand_new_note_after_presentation_is_surfaced
 test_signal_annotation_surfaces_every_unread_note_not_only_the_newest
-test_pending_reply_resolution_surfaces_once
-test_self_announced_pending_reply_close_still_surfaces
 test_unread_output_over_cap_remains_recoverable
 test_snapshot_does_not_ack_a_later_append
 test_retired_task_id_starts_new_status_unread

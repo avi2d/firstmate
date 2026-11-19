@@ -15,17 +15,7 @@ Usage: fm-control.sh <task-id> interrupt
                                         [--effort <level>]
                                         (--note <text> | --note-file <path>)
 
-Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
-DATA plane: conversational text for the agent to read, always routing-marked
-for a kind=secondmate target so the reply returns through the status path.
-That marking is right for a message and wrong for a lifecycle command - a
-marked "/quit" arrives as ordinary chat the agent reasons ABOUT instead of
-executing. This script is the control plane: semantic process control with a
-closed verb list, per-harness mechanics owned by an executable adapter
-(bin/fm-control-lib.sh) rather than improvised in agent prose, and a verified
-postcondition for every action. There is deliberately NO arbitrary-text and
-NO generic raw-key entry point here; fm-send remains the only way to send an
-agent something to read.
+Use `fm-send.sh` for text and these verbs for lifecycle commands.
 
   interrupt  Deliver the harness's verified interrupt sequence. The agent
              keeps running. Postcondition: delivery succeeded, the endpoint
@@ -41,11 +31,7 @@ agent something to read.
              otherwise reports `cancel=not-running` having sent one press.
   exit       Stop the agent, preserving its terminal endpoint, worktree, and
              every uncommitted change. Interrupts first when the task reads
-             busy, then submits the harness's exit command. A secondmate is
-             first given up to FM_CONTROL_SECONDMATE_SETTLE_WAIT to finish
-             its turn on its own, so the restart that follows its persist
-             answer stops an idle agent rather than cutting that turn off.
-             Postcondition:
+             busy, then submits the harness's exit command.
              the backend's recovery-grade classifier reports the agent gone.
              Already-stopped is success (idempotent). An endpoint that reads
              `missing` (or, on Rex, `unreadable`, which is how a stopped Rex
@@ -85,11 +71,8 @@ agent something to read.
              a tmux `missing` cannot be proven absent from a task record, so
              it refuses.
              An explicit `default` model or effort clears that
-             axis for the replacement. With no explicit axis, a secondmate
-             re-resolves its durable config/secondmate-harness pin (harness
-             plus its optional model and effort tokens) exactly as any other
-             respawn does, while a ship or scout keeps the exact adapter
-             already recorded for it.
+             axis for the replacement. Otherwise the replacement keeps the
+             recorded adapter, model, and effort.
              A prefixed raw-command basename cannot reconstruct its launch
              command, so relaunch requires an explicit --harness for it.
              A replacement Claude or Pi profile must also pass this home's
@@ -99,9 +82,6 @@ agent something to read.
              A recorded Claude account (claude_account=) follows a relaunch
              that keeps the same harness and model, under the same pre-stop
              sign-in check; any other profile relaunches without it.
-             A replacement omp secondmate likewise passes its per-secondmate
-             omp profile pin (bin/fm-omp-profile-lib.sh) before the old agent
-             stops.
              The same pre-stop refusal applies to this home's worker tool
              exclusions (bin/fm-exclude-tools-lib.sh): a malformed list, or a
              replacement runtime that cannot hide the listed tools.
@@ -109,10 +89,8 @@ agent something to read.
              keeps its conversation, so a new turn or a provider change on
              it continues the same agent rather than a fresh one
              (fm_control_backend_relaunch_supported).
-             --note is required for a ship or scout, whose replacement
-             inherits the local copy but none of the conversation; a
-             secondmate reconciles its own home's records at startup, so its
-             standing charter is never rewritten.
+             --note is required. The replacement keeps the worktree but
+             does not inherit the conversation.
              Records a durable checkpoint and that note, exits the old agent,
              then delegates the launch to its single owner,
              bin/fm-spawn.sh --relaunch. A failure before publication keeps
@@ -137,8 +115,7 @@ fm-<id> label, an explicit session:window endpoint, and a bare window name
 are all refused - a lifecycle command delivered to the wrong endpoint is far
 worse than a loud refusal.
 
-A remotely placed secondmate is refused by name: its agent runs on another
-host, so no postcondition this plane verifies could be read for it here.
+A worker on another host is controlled through its recorded execution route.
 
 Fail-closed boundaries:
   - An unverified harness, or a harness whose control mechanics are unknown,
@@ -164,8 +141,6 @@ Environment knobs (all bounded waits, seconds):
   FM_CONTROL_EXIT_WAIT         alive->dead wait after the exit command (30)
   FM_CONTROL_LAUNCH_WAIT       dead->alive wait after a relaunch (90)
   FM_CONTROL_EXIT_RETRIES      Enter retries for the exit command (3)
-  FM_CONTROL_SECONDMATE_SETTLE_WAIT  wait for a secondmate's turn to end
-                               before stopping it (180)
 EOF
 }
 
@@ -206,12 +181,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
-# shellcheck source=bin/fm-omp-profile-lib.sh
-. "$SCRIPT_DIR/fm-omp-profile-lib.sh"
 # shellcheck source=bin/fm-exclude-tools-lib.sh
 . "$SCRIPT_DIR/fm-exclude-tools-lib.sh"
 
@@ -221,7 +192,6 @@ ARM_WAIT=${FM_CONTROL_ARM_WAIT:-1.5}
 EXIT_WAIT=${FM_CONTROL_EXIT_WAIT:-30}
 LAUNCH_WAIT=${FM_CONTROL_LAUNCH_WAIT:-90}
 EXIT_RETRIES=${FM_CONTROL_EXIT_RETRIES:-3}
-SECONDMATE_SETTLE_WAIT=${FM_CONTROL_SECONDMATE_SETTLE_WAIT:-180}
 
 die() {  # <message>
   echo "error: $1" >&2
@@ -452,12 +422,12 @@ $hop_out
 EOF
 }
 
+KIND=$(fm_meta_get "$META" kind)
+case "${KIND:-ship}" in ship|scout) ;; *) die "task $ID has an unsupported recorded kind" ;; esac
 if [ -n "$(fm_meta_get "$META" remote_host)" ]; then
-  if [ "$(fm_meta_get "$META" kind)" != secondmate ] && [ -n "$(fm_meta_get "$META" remote_route)" ]; then
-    fm_control_remote_worker
-    exit "$?"
-  fi
-  die "task $ID is a remotely placed secondmate on $(fm_meta_get "$META" remote_host); its agent runs outside this home, so no lifecycle action here could verify that it interrupted, stopped, or came back. Drive its lifecycle on that host, and reconcile it through the secondmate recovery path rather than this plane"
+  [ -n "$(fm_meta_get "$META" remote_route)" ] || die "task $ID has no execution-home route"
+  fm_control_remote_worker
+  exit "$?"
 fi
 
 if [ "$(fm_meta_get "$META" harness)" = cloud-claude ]; then
@@ -512,24 +482,6 @@ composer_state() {
 # Interrupting a Pi turn instead moves its queued follow-ups into the composer
 # and leaves Herdr reporting the turn as running for a moment afterwards, so
 # the exit could prove neither that the composer was empty nor what it held.
-settle_secondmate_turn() {
-  local elapsed=0
-  while :; do
-    [ "$(agent_state)" = alive ] || return 0
-    case "$(composer_state)" in
-      pending|pending-unproven) return 0 ;;
-      empty)
-        case "$(busy_verdict)" in
-          busy*) ;;
-          *) return 0 ;;
-        esac
-        ;;
-    esac
-    awk -v e="$elapsed" -v t="$SECONDMATE_SETTLE_WAIT" 'BEGIN{exit !(e < t)}' || return 0
-    sleep "$POLL"
-    elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
-  done
-}
 
 # wait_agent_state <wanted...> <timeout>: poll until agent_state prints one of
 # the wanted values. Prints the final observed state; returns 0 on a match.
@@ -870,7 +822,6 @@ do_exit() {
       esac
       ;;
   esac
-  [ "$KIND" != secondmate ] || settle_secondmate_turn
   # A busy agent is interrupted first before the exit command is submitted.
   case "$(busy_verdict)" in
     busy*)
@@ -985,10 +936,6 @@ RELAUNCH_TX=
 RELAUNCH_BRIEF=
 PRIOR_HARNESS=$HARNESS
 PRIOR_RECORDED_HARNESS=$RECORDED_HARNESS
-CONFIG_HARNESS=
-CONFIG_MODEL=
-CONFIG_EFFORT=
-CONFIG_CLAUDE_ACCOUNT=
 PRIOR_MODEL=
 PRIOR_EFFORT=
 TARGET_HARNESS=$HARNESS
@@ -1106,47 +1053,10 @@ resolve_relaunch_profile() {
      && [ "$PRIOR_RECORDED_HARNESS" != "$PRIOR_HARNESS" ]; then
     die "task $ID records harness '$PRIOR_RECORDED_HARNESS', whose original launch command cannot be reconstructed from its recorded basename; relaunching without --harness would substitute the canonical adapter '$PRIOR_HARNESS' for the command actually running. Pass an explicit --harness to choose the replacement runtime deliberately"
   fi
-  CONFIG_HARNESS=
-  CONFIG_MODEL=
-  CONFIG_EFFORT=
-  CONFIG_CLAUDE_ACCOUNT=
-  if [ "$KIND" = secondmate ] && [ "$HARNESS_SET" = 0 ]; then
-    # A secondmate's harness, model, and effort are a durable configured pin
-    # that every respawn re-resolves (the secondmate-provisioning contract), so
-    # a relaunch with no explicit harness picks up a newly configured one
-    # instead of freezing whatever this incarnation happens to run. The mate id
-    # is passed so a per-mate override line is honored here too; a crewmate or
-    # scout deliberately does NOT resolve config here: their harness comes
-    # from firstmate's own dispatch-profile judgment at intake, and silently
-    # re-resolving it would bypass that consultation.
-    if ! CONFIG_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" secondmate "$ID"); then
-      die "the configured secondmate runtime pin for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved runtime"
-    fi
-    if ! CONFIG_MODEL=$("$SCRIPT_DIR/fm-harness.sh" secondmate-model "$ID"); then
-      die "the configured secondmate model pin for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved model"
-    fi
-    if ! CONFIG_EFFORT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-effort "$ID"); then
-      die "the configured secondmate effort pin for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved effort"
-    fi
-    if ! CONFIG_CLAUDE_ACCOUNT=$("$SCRIPT_DIR/fm-harness.sh" secondmate-account "$ID"); then
-      die "the configured secondmate account for $ID cannot be read; fix config/secondmate-harness rather than relaunching onto an unresolved account"
-    fi
-    case "$CONFIG_EFFORT" in
-      ''|low|medium|high|xhigh|max|ultra) ;;
-      *)
-        echo "warning: config/secondmate-harness effort token '$CONFIG_EFFORT' is not one of low, medium, high, xhigh, max, ultra; ignoring" >&2
-        CONFIG_EFFORT=
-        ;;
-    esac
-  fi
   if [ "$HARNESS_SET" = 1 ]; then
     fm_control_harness_supported "$NEW_HARNESS" \
       || die "'$NEW_HARNESS' is not a verified harness; fm-control refuses to relaunch onto an adapter with no verified control or launch mechanics"
     TARGET_HARNESS=$NEW_HARNESS
-  elif [ "$HARNESS_SET" = 0 ] && [ -n "$CONFIG_HARNESS" ]; then
-    fm_control_harness_supported "$CONFIG_HARNESS" \
-      || die "the configured secondmate harness '$CONFIG_HARNESS' is not verified; fm-control refuses to relaunch onto an adapter with no verified control or launch mechanics"
-    TARGET_HARNESS=$CONFIG_HARNESS
   else
     TARGET_HARNESS=$PRIOR_HARNESS
   fi
@@ -1161,8 +1071,6 @@ resolve_relaunch_profile() {
   # caller names them too.
   if [ "$MODEL_SET" = 1 ]; then
     TARGET_MODEL=$NEW_MODEL
-  elif [ "$HARNESS_SET" = 0 ] && [ -n "$CONFIG_HARNESS" ]; then
-    TARGET_MODEL=${CONFIG_MODEL:-default}
   elif [ "$TARGET_HARNESS" = "$PRIOR_HARNESS" ]; then
     TARGET_MODEL=$PRIOR_MODEL
   else
@@ -1170,8 +1078,6 @@ resolve_relaunch_profile() {
   fi
   if [ "$EFFORT_SET" = 1 ]; then
     TARGET_EFFORT=$NEW_EFFORT
-  elif [ "$HARNESS_SET" = 0 ] && [ -n "$CONFIG_HARNESS" ]; then
-    TARGET_EFFORT=${CONFIG_EFFORT:-default}
   elif [ "$TARGET_HARNESS" = "$PRIOR_HARNESS" ]; then
     TARGET_EFFORT=$PRIOR_EFFORT
   else
@@ -1201,13 +1107,11 @@ resolve_relaunch_profile() {
   # The launch owner applies this home's worker account pin too, but only after
   # the old agent has been stopped, so a pin that no longer resolves or is
   # signed out must refuse here, while nothing has changed yet.
-  local account_model=$TARGET_MODEL account_mate=
+  local account_model=$TARGET_MODEL
   [ "$account_model" != default ] || account_model=
   TARGET_CLAUDE_ACCOUNT=
   if [ "$CLAUDE_ACCOUNT_SET" = 1 ]; then
     [ "$NEW_CLAUDE_ACCOUNT" = default ] || TARGET_CLAUDE_ACCOUNT=$NEW_CLAUDE_ACCOUNT
-  elif [ -n "$CONFIG_CLAUDE_ACCOUNT" ]; then
-    TARGET_CLAUDE_ACCOUNT=$CONFIG_CLAUDE_ACCOUNT
   elif { [ "$TARGET_HARNESS" = "$PRIOR_HARNESS" ] && [ "$TARGET_MODEL" = "$PRIOR_MODEL" ]; } \
      || fm_claude_bridge_model "$TARGET_HARNESS" "$account_model"; then
     TARGET_CLAUDE_ACCOUNT=$(fm_meta_get "$META" claude_account)
@@ -1216,15 +1120,12 @@ resolve_relaunch_profile() {
     fm_claude_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
       "$account_model" "$TARGET_CLAUDE_ACCOUNT" >/dev/null || return 1
     [ "$TARGET_HARNESS" = claude ] && return 0
-  elif [ "$KIND" != secondmate ]; then
+  else
     fm_claude_bridge_account_required "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
       "$account_model" || return 1
   fi
-  [ "$KIND" != secondmate ] || account_mate=$ID
   fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
-    "$account_model" "$TARGET_HARNESS" "" "$account_mate" >/dev/null || return 1
-  fm_omp_profile_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
-    "$account_mate" >/dev/null || return 1
+    "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
   # Likewise polytoken's launch profile and wiring refusals
   # (bin/fm-polytoken-lib.sh owns them). The launch owner retires the prior
   # incarnation's own generated hook layer, so only one it did not generate
@@ -1242,9 +1143,7 @@ resolve_relaunch_profile() {
   # Likewise config/crew-exclude-tools: a malformed file, or a replacement
   # runtime that cannot hide the listed tools, refuses here, before the old
   # agent stops. Secondmate agents are not covered.
-  if [ "$KIND" != secondmate ]; then
-    fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
-  fi
+  fm_exclude_tools_check "$TARGET_HARNESS" 0 "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" >/dev/null || return 1
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch
@@ -1253,7 +1152,7 @@ resolve_relaunch_profile() {
 # refuses outright when any of it cannot be established.
 CHECKPOINT_LINES=()
 safe_checkpoint() {
-  local wt_real wt_top wt_top_real head head_ref head_ref_status status_output dirty children marker child_meta other_rc=0
+  local wt_real wt_top wt_top_real head head_ref head_ref_status status_output dirty marker other_rc=0
   CHECKPOINT_LINES=()
   [ -n "$WT" ] || die "task $ID has no recorded worktree; refusing to relaunch without a recorded local copy to preserve"
   [ -d "$WT" ] || die "task $ID's recorded worktree $WT is missing; refusing to relaunch and lose track of its work"
@@ -1291,32 +1190,6 @@ safe_checkpoint() {
     dirty=no
   fi
   CHECKPOINT_LINES+=("worktree_head=$head" "worktree_dirty=$dirty")
-  if [ "$KIND" = secondmate ]; then
-    # A secondmate's own crewmates outlive its relaunch: they run in their own
-    # endpoints, and the relaunched secondmate reconciles them from its home's
-    # durable records at startup. The checkpoint proves those records are
-    # readable BEFORE the agent stops, so a relaunch can never strand child
-    # work behind an unreadable home.
-    marker=$(cat "$WT/.fm-secondmate-home" 2>/dev/null || true)
-    [ "$marker" = "$ID" ] \
-      || die "task $ID's home $WT is not marked as its own seeded secondmate home (marker: ${marker:-none}); refusing to relaunch"
-    # Do not walk state/ with find(1): watcher scratch files can vanish
-    # mid-scan and make find fail even when every child *.meta is readable.
-    [ -d "$WT/state" ] && [ -r "$WT/state" ] && [ -x "$WT/state" ] \
-      || die "secondmate $ID's home has no readable state directory, so its child work cannot be accounted for; refusing to relaunch"
-    children=0
-    for child_meta in "$WT/state"/*.meta; do
-      if [ ! -e "$child_meta" ] && [ ! -L "$child_meta" ]; then
-        continue
-      fi
-      if [ ! -f "$child_meta" ] || [ -L "$child_meta" ] \
-         || ! cat "$child_meta" >/dev/null 2>&1; then
-        die "secondmate $ID's child record $child_meta is not a readable regular file; refusing to relaunch"
-      fi
-      children=$((children + 1))
-    done
-    CHECKPOINT_LINES+=("children=$children")
-  fi
 }
 
 # record_note: put the required progress note somewhere durable, and - for a
@@ -1370,11 +1243,6 @@ do_relaunch() {
         || die "task $ID has no instructions at $RELAUNCH_BRIEF; refusing to relaunch a worker with nothing to work from"
       [ "$NOTE_SET" = 1 ] && [ -n "$NOTE" ] \
         || die "relaunch of a $KIND task requires --note (or --note-file): the replacement worker inherits the local copy but none of the conversation, so it must be told what happened"
-      ;;
-    secondmate)
-      # The charter in the secondmate's own home is its instruction source and
-      # stays untouched.
-      RELAUNCH_BRIEF=
       ;;
     *)
       die "task $ID records kind '$KIND', which has no defined relaunch shape"

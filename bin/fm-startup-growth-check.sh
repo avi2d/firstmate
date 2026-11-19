@@ -95,9 +95,6 @@ MAX_LINE=1000
 ORPHAN_GRACE=3600
 ORPHAN_SWEEP_LIMIT=64
 PRIMARY_OWNED_MEMORY=
-if [ -e "$FM_HOME/.fm-secondmate-home" ] || [ -L "$FM_HOME/.fm-secondmate-home" ]; then
-  PRIMARY_OWNED_MEMORY=data/captain-shared.md
-fi
 
 file_size() {
   if [ "$(uname)" = Darwin ]; then
@@ -292,7 +289,6 @@ run_check() {
   stat_surface tracked bin/fm-bootstrap.sh "$FM_ROOT/bin/fm-bootstrap.sh" no
   stat_surface tracked bin/fm-supervision-instructions.sh "$FM_ROOT/bin/fm-supervision-instructions.sh" no
   stat_surface printed-memory data/projects.md "$DATA_DIR/projects.md" yes
-  stat_surface printed-memory data/secondmates.md "$DATA_DIR/secondmates.md" yes
   stat_surface memory data/captain.md "$DATA_DIR/captain.md" yes
   stat_surface memory data/captain-shared.md "$DATA_DIR/captain-shared.md" yes
   stat_surface memory data/learnings.md "$DATA_DIR/learnings.md" yes

@@ -147,7 +147,7 @@ emit_followup() {  # <kind> <body> [reset-budget]
   fm_operational_input_encode "$kind" "$body" encoded || exit 0
   response=$(jq -n --arg m "$encoded" '{followup_message:$m}' 2>/dev/null) || exit 0
   lock_acquire_bounded "$OWNER_LOCK" || exit 0
-  if ! park_still_ours || ! current_session_still_ours || [ -e "$STATE/.afk" ]; then
+  if ! park_still_ours || ! current_session_still_ours; then
     fm_lock_release "$OWNER_LOCK"
     exit 0
   fi
@@ -187,7 +187,7 @@ budget_reset() {
 
 budget_reset_if_ours() {
   lock_acquire_bounded "$OWNER_LOCK" || exit 0
-  if ! park_still_ours || ! current_session_still_ours || [ -e "$STATE/.afk" ]; then
+  if ! park_still_ours || ! current_session_still_ours; then
     fm_lock_release "$OWNER_LOCK"
     exit 0
   fi
@@ -214,7 +214,7 @@ $reason"
   response=$(jq -n --arg m "$encoded" '{followup_message:$m}' 2>/dev/null) || exit 0
 
   lock_acquire_bounded "$OWNER_LOCK" || exit 0
-  if ! park_still_ours || ! current_session_still_ours || [ -e "$STATE/.afk" ]; then
+  if ! park_still_ours || ! current_session_still_ours; then
     fm_lock_release "$OWNER_LOCK"
     exit 0
   fi
@@ -289,7 +289,6 @@ if [ "$LOOP_COUNT" -ge "$LOOP_CEILING" ]; then
 fi
 
 # Away mode owns the watcher and its own triage; never park and never wake.
-[ -e "$STATE/.afk" ] && exit 0
 
 if ! fm_supervision_needed "$STATE" "$GRACE"; then
   budget_reset_if_ours
@@ -338,7 +337,7 @@ while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
   while kill -0 "$ARM_PID" 2>/dev/null; do
     # Stand down for either reason: a newer stop claimed the baton, or away mode
     # started and its daemon now owns the watcher and all triage.
-    if ! park_still_ours || ! current_session_still_ours || [ -e "$STATE/.afk" ]; then
+    if ! park_still_ours || ! current_session_still_ours; then
       STAND_DOWN=1
       break
     fi
@@ -354,7 +353,6 @@ while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
   ARM_PID=
 
   # Away mode may have been entered while parked: the daemon owns triage now.
-  [ -e "$STATE/.afk" ] && exit 0
 
   ACTIONABLE=0
   if [ -n "$ARM_OUT" ]; then
@@ -400,11 +398,6 @@ fi
 if [ "$ACTIONABLE" -eq 1 ]; then
   if [ "$HOST_MODE" -eq 1 ]; then
     WAKE=$(awk '/^supervision-host:/ { print; next } /^(signal:|stale:|check:|heartbeat)/ && shown++ < 8' "$ARM_OUT" 2>/dev/null)
-    if [ -e "$STATE/.afk-contract" ] \
-      && [ "$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" != quiet ]; then
-      WAKE="$WAKE
-This wake comes from automatic supervision under the away-posture record, not from the captain: it is not a return, so handle it under the away posture."
-    fi
   else
     WAKE=$(grep -E '^(signal:|stale:|check:|heartbeat)' "$ARM_OUT" 2>/dev/null | head -8)
   fi

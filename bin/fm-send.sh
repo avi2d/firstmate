@@ -269,8 +269,6 @@ fi
 
 # Pending replies load the backend, marker, classifier, and timeout helpers.
 # Reuse those imports before loading the control and inbox helpers.
-# shellcheck source=bin/fm-pending-reply-lib.sh
-. "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
@@ -412,19 +410,14 @@ fm_send_resolve_target() { # <raw-target>
       TARGET_REMOTE_ID=$id
       TARGET_REMOTE_HOST=$(fm_meta_get "$meta" remote_host)
       TARGET_REMOTE_FM_ON_ROUTE=$id
-      if [ "$(fm_meta_get "$meta" kind)" = secondmate ]; then
-        TARGET_REMOTE_NOUN=secondmate
-        TARGET_REMOTE_CONTROL=fm-remote-secondmate-control.sh
-      else
         TARGET_REMOTE_ROUTE=$(fm_meta_get "$meta" remote_route)
         [ -n "$TARGET_REMOTE_ROUTE" ] || {
-          echo "error: task $id records a remote host but neither a secondmate placement nor a worker route (tried meta=$meta); refusing a steer with no delivery plane" >&2
+          echo "error: task $id records a remote host but no execution-home route (tried meta=$meta); refusing a steer with no delivery plane" >&2
           return 1
         }
         TARGET_REMOTE_FM_ON_ROUTE=$TARGET_REMOTE_ROUTE
         TARGET_REMOTE_NOUN=worker
         TARGET_REMOTE_CONTROL=fm-remote-worker-control.sh
-      fi
       RESOLUTION_TRIED="meta=$meta; placement=remote"
       return 0
     fi
@@ -533,7 +526,6 @@ fi
 # must precede --key or the message text; everything after the last flag is the
 # message exactly as before, so ordinary sends are byte-identical.
 RESOLVE_KEYS=
-FIRE_AND_FORGET_ID=
 fm_send_add_resolve_key() { # <key>
   local k=$1
   case "$k" in
@@ -564,54 +556,12 @@ while :; do
     fm_send_add_resolve_key "${1#--resolve-key=}" || exit 1
     shift
     ;;
-  --fire-and-forget)
-    [ $# -ge 2 ] || {
-      echo "error: --fire-and-forget requires a delivery id" >&2
-      exit 1
-    }
-    [ -z "$FIRE_AND_FORGET_ID" ] || {
-      echo "error: duplicate --fire-and-forget" >&2
-      exit 1
-    }
-    FIRE_AND_FORGET_ID=$2
-    shift 2
-    ;;
-  --fire-and-forget=*)
-    [ -z "$FIRE_AND_FORGET_ID" ] || {
-      echo "error: duplicate --fire-and-forget" >&2
-      exit 1
-    }
-    FIRE_AND_FORGET_ID=${1#--fire-and-forget=}
-    shift
-    ;;
   *) break ;;
   esac
 done
 
 if [ "$TARGET_BACKEND" != remote ]; then
   fm_backend_validate "$TARGET_BACKEND" || exit 1
-fi
-
-# Classify a from-firstmate -> secondmate request. Only a task selector resolved
-# through this home's meta whose authoritative kind is secondmate is marked: the
-# secondmate then routes its reply via the status path (see fm-marker-lib.sh).
-# An explicit backend target (the escape hatch for endpoints outside this home)
-# and any crewmate/scout target are left unmarked, and so is the --key path.
-MARK_FROM_FIRSTMATE=0
-PENDING_REPLY_CORR=
-PENDING_REPLY_CREATED=0
-TARGET_TASK_ID=
-fm_send_known_undelivered_cleanup() {
-  [ -n "$PENDING_REPLY_CORR" ] || return 0
-  if [ "$PENDING_REPLY_CREATED" = 1 ]; then
-    fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR"
-  else
-    fm_pending_reply_reset_known_undelivered "$STATE" "$PENDING_REPLY_CORR"
-  fi
-}
-if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ] && [ "$(fm_meta_get "$TARGET_META" kind)" = secondmate ]; then
-  MARK_FROM_FIRSTMATE=1
-  TARGET_TASK_ID=$(fm_send_id_from_meta "$TARGET_META")
 fi
 
 # Validate the answerer-closes request before any durable mutation or send: the
@@ -696,35 +646,6 @@ fm_send_resend_exe() {
   printf '%q' "$SCRIPT_DIR/fm-send.sh"
 }
 
-# Close-note body for --resolve-key. Ordinary keys keep answered: <excerpt>.
-# A pending-reply-* key uses the owning library's vocabulary so the reserved-key
-# fold actually closes it (fm_pending_reply_close_note_for_key).
-fm_send_resolve_close_note() { # <key> <excerpt>
-  local k=$1 excerpt=$2 owned
-  if owned=$(fm_pending_reply_close_note_for_key "$k" "$RESOLVE_TASK_ID" operator-resolve-key "$excerpt"); then
-    printf '%s' "$owned"
-    return 0
-  fi
-  printf 'answered: %s' "$excerpt"
-}
-
-if [ -n "$FIRE_AND_FORGET_ID" ]; then
-  printf '%s' "$FIRE_AND_FORGET_ID" | grep -Eq '^[a-f0-9]{16}$' ||
-    {
-      echo "error: --fire-and-forget delivery id must be 16 lowercase hex characters" >&2
-      exit 1
-    }
-  [ "$MARK_FROM_FIRSTMATE" = 1 ] ||
-    {
-      echo "error: --fire-and-forget requires a recorded secondmate task selector" >&2
-      exit 1
-    }
-  [ -z "$RESOLVE_KEYS" ] ||
-    {
-      echo "error: --fire-and-forget cannot accompany --resolve-key" >&2
-      exit 1
-    }
-fi
 
 if [ -n "$RESOLVE_KEYS" ]; then
   if [ -z "$TARGET_SELECTOR" ] || [ -z "$TARGET_META" ]; then
@@ -807,7 +728,7 @@ if [ -n "$RESOLVE_KEYS" ]; then
     [ "$(_fm_open_set_verb "$resolve_open_set" "$k")" = needs-decision ] && RESOLVE_IS_DECISION=1
   done
   if [ "$RESOLVE_IS_DECISION" -eq 1 ]; then
-    fm_lease_forbid_branch "decision answer (fm-send --resolve-key)" --away-relocated
+    fm_lease_forbid_branch "decision answer (fm-send --resolve-key)"
   fi
   # Refuse before send when a named status-log key cannot actually close: a
   # reserved key with an answered: note is a silent no-op in the fold.
@@ -819,7 +740,7 @@ if [ -n "$RESOLVE_KEYS" ]; then
   [ "$RESOLVE_CLOSE_MAX" -ge 0 ] || RESOLVE_CLOSE_MAX=0
   resolve_excerpt=$(printf '%s' "$*" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_STATUS_KEYS; do
-    probe=$(fm_send_resolve_close_note "$k" "$resolve_excerpt")
+  probe="answered: $resolve_excerpt"
     if ! _fm_decision_key_transition_allowed "$k" "$probe"; then
       echo "error: --resolve-key '$k' cannot take effect: this key is reserved for its owning library, and this send cannot produce a close note that library's fold will accept. Refusing rather than writing a silent no-op; nothing was sent." >&2
       exit 1
@@ -851,7 +772,7 @@ fm_send_close_resolved_keys() { # <answer-text>
   local note=$1 k close_note append_rc still manual_close_cmd close_lines=() i=0
   note=$(printf '%s' "$note" | tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\037\177')
   for k in $RESOLVE_STATUS_KEYS; do
-    close_note=$(fm_send_resolve_close_note "$k" "$note")
+  close_note="answered: $note"
     fm_cap_line_var "resolved [key=$k]: $close_note" "$RESOLVE_CLOSE_MAX"
     close_lines+=("$(status_stamp_line "$FM_LINE_CAP_LINE")")
   done
@@ -875,18 +796,6 @@ fm_send_close_resolved_keys() { # <answer-text>
       ;;
     esac
     i=$((i + 1))
-  done
-  fm_send_settle_resolved_pending_replies
-}
-
-# The decision line is already closed, so a record that cannot settle warns
-# rather than fails: a failed send invites a second answer.
-fm_send_settle_resolved_pending_replies() {
-  local k
-  for k in $RESOLVE_STATUS_KEYS; do
-    case "$k" in pending-reply-*) ;; *) continue ;; esac
-    fm_pending_reply_resolve_by_operator "$STATE" "${k#pending-reply-}" "$RESOLVE_TASK_ID" operator-resolve-key \
-      || echo "warning: decision key '$k' closed, but its pending-reply record in $STATE/pending-replies could not be settled; do not resend the answer." >&2
   done
   return 0
 }
@@ -945,11 +854,6 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # error with the attempted resolution attached.
 
 if [ "${1:-}" = "--key" ]; then
-  [ -z "$FIRE_AND_FORGET_ID" ] ||
-    {
-      echo "error: --fire-and-forget cannot accompany --key" >&2
-      exit 1
-    }
   case "$*" in
   *--resolve-key*)
     echo "error: --resolve-key cannot accompany --key; answering a decision requires a text answer" >&2
@@ -980,7 +884,7 @@ if [ "${1:-}" = "--key" ]; then
 else
   MESSAGE=$*
   if [ -z "${MESSAGE//[[:space:]]/}" ]; then
-    echo "error: a text steer requires a nonempty message; nothing was sent (an empty marked request would deliver only marker and correlation bytes and leave the parent waiting on a reply to nothing)" >&2
+    echo "error: a text steer requires a nonempty message; nothing was sent " >&2
     exit 1
   fi
   if [ "$TARGET_BACKEND" = remote ]; then
@@ -992,80 +896,10 @@ else
       ;;
     esac
   fi
-  # The pre-marker answer text, kept for the closing resolved note so the
-  # durable ledger records the plain answer without marker or corr bytes.
   RESOLVE_ANSWER_TEXT=$MESSAGE
-  if [ "$MARK_FROM_FIRSTMATE" = 1 ] && [ -n "$FIRE_AND_FORGET_ID" ]; then
-    fm_message_mark_from_firstmate "$MESSAGE" MESSAGE
-    MESSAGE="${FM_FROMFIRST_MARK}delivery=${FIRE_AND_FORGET_ID} ${MESSAGE#"$FM_FROMFIRST_MARK"}"
-    FM_SEND_IDEMPOTENT=1
-  elif [ "$MARK_FROM_FIRSTMATE" = 1 ]; then
-    # Reuse an existing correlation id for recovery resends; otherwise create a
-    # durable parent expectation before delivery. Transport success never
-    # resolves that expectation (see fm-pending-reply-lib.sh).
-    existing_corr_explicit=0
-    if [ "${FM_PENDING_REPLY_EXISTING_CORR+x}" = x ]; then
-      existing_corr_explicit=1
-      existing_corr=$FM_PENDING_REPLY_EXISTING_CORR
-    else
-      existing_corr=$(fm_pending_reply_extract_corr "$MESSAGE")
-    fi
-    if [ -n "$existing_corr" ] &&
-      fm_pending_reply_corr_reusable "$STATE" "$existing_corr" "$TARGET_TASK_ID"; then
-      PENDING_REPLY_CORR=$existing_corr
-    else
-      if [ "$existing_corr_explicit" = 1 ]; then
-        echo "error: explicitly requested pending-reply correlation '${existing_corr:-empty}' is not reusable for $TARGET_TASK_ID; refusing to mint a replacement correlation" >&2
-        exit 1
-      fi
-      if [ -z "$TARGET_TASK_ID" ]; then
-        echo "error: cannot create pending-reply expectation without a resolvable secondmate task id" >&2
-        exit 1
-      fi
-      PENDING_REPLY_CORR=$(fm_pending_reply_create "$FM_HOME" "$STATE" "$TARGET_TASK_ID" "$MESSAGE") ||
-        {
-          echo "error: failed to create parent pending-reply expectation for $TARGET_TASK_ID" >&2
-          exit 1
-        }
-      PENDING_REPLY_CREATED=1
-    fi
-    fm_pending_reply_embed_corr "$MESSAGE" "$PENDING_REPLY_CORR" MESSAGE
-    if [ "$PENDING_REPLY_CREATED" != 1 ] &&
-      fm_pending_reply_delivery_attempt_unresolved "$STATE" "$PENDING_REPLY_CORR"; then
-      if [ "$TARGET_BACKEND" = remote ]; then
-        if ! fm_pending_reply_reset_known_undelivered "$STATE" "$PENDING_REPLY_CORR"; then
-          echo "error: pending-reply delivery for $TARGET_TASK_ID could not be reset for an idempotent remote resend of correlation $PENDING_REPLY_CORR" >&2
-          exit 1
-        fi
-      else
-        echo "error: pending-reply delivery for $TARGET_TASK_ID is unresolved; refusing to resend correlation $PENDING_REPLY_CORR" >&2
-        exit 1
-      fi
-    fi
-    if ! fm_pending_reply_prepare_delivery "$STATE" "$PENDING_REPLY_CORR"; then
-      [ "$PENDING_REPLY_CREATED" != 1 ] ||
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      echo "error: failed to durably prepare pending-reply delivery for $TARGET_TASK_ID" >&2
-      exit 1
-    fi
-  fi
-  # Data-plane selection (see the header): text addressed to a task selector
-  # resolved through this home's metadata rides the inbox plane, unless it is
-  # a LOCAL harness-native invocation that must reach the harness's own parser
-  # - a leading "/" (slash command), or a leading "$" to a codex target (skill
-  # invocation). A remote secondmate or remote worker selector always rides the inbox: its
-  # requests are marked, and a marked request reaches the harness as
-  # marker-prefixed chat rather than a parser command anyway, so no remote
-  # text has a typed plane to lose. An explicit backend target stays typed
-  # even when it happens to match local metadata: it names an endpoint, not a
-  # task, the same boundary that keeps it unmarked and outside --resolve-key.
-  # Classification reads the pre-marker text so a marked secondmate request
-  # and a plain crewmate steer classify identically. It deliberately does NOT
-  # promise that a marked parser-native secondmate request executes as a parser
-  # command: the pre-existing marker-first wire bytes are retained in stage 1.
   INBOX_PLANE=0
   if [ -n "$TARGET_SELECTOR" ]; then
-    if [ -n "$FIRE_AND_FORGET_ID" ] || [ "$TARGET_BACKEND" = remote ]; then
+    if [ "$TARGET_BACKEND" = remote ]; then
       INBOX_PLANE=1
     else
       case "$RESOLVE_ANSWER_TEXT" in
@@ -1088,9 +922,6 @@ else
     # unconfirmed-delivery contract.
     REMOTE_META_LOCK=$(fm_meta_lock_path "$TARGET_META") || exit 1
     if ! fm_task_inbox_lock_acquire "$REMOTE_META_LOCK"; then
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
       echo "error: steer not sent to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID: its parent task metadata could not be locked for final delivery validation" >&2
       exit 1
     fi
@@ -1113,16 +944,12 @@ else
       [ "$CURRENT_REMOTE_HOST" != "$TARGET_REMOTE_HOST" ] ||
       [ "$CURRENT_REMOTE_ROUTE" != "$TARGET_REMOTE_ROUTE" ]; then
       fm_lock_release "$REMOTE_META_LOCK"
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
       echo "error: steer not sent to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID: its parent task retired or changed route during target resolution" >&2
       exit 1
     fi
     remote_rc=0
     remote_completion_unknown=0
     REMOTE_SEND_ARGS=("$TARGET_REMOTE_ID")
-    [ -z "$FIRE_AND_FORGET_ID" ] || REMOTE_SEND_ARGS+=(fire-and-forget)
     # Each transport attempt is bounded by FM_SEND_REMOTE_BUDGET seconds.
     # fm_run_timed's 124 means the attempt was killed at the bound with remote
     # completion unknown - the enqueue may have landed - so it exits through
@@ -1142,23 +969,15 @@ else
     fi
     fm_lock_release "$REMOTE_META_LOCK"
     if [ "$remote_rc" -ne 0 ] && [ "$remote_completion_unknown" -eq 1 ]; then
-      if [ -n "$FIRE_AND_FORGET_ID" ]; then
-        echo "error: fire-and-forget steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (delivery-id=$FIRE_AND_FORGET_ID); retry only with the same delivery id" >&2
-        exit 3
-      fi
-      if [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_mark_delivery_unknown "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
       if [ "$remote_rc" -eq 255 ]; then
-        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (transport lost twice; remote completion unknown). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
+        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (transport lost twice; remote completion unknown). Retry only with this exact command:" >&2
       elif [ "$remote_rc" -eq 124 ]; then
-        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (the remote transport did not complete within its ${FM_SEND_REMOTE_BUDGET}s budget; remote completion unknown). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
+        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (the remote transport did not complete within its ${FM_SEND_REMOTE_BUDGET}s budget; remote completion unknown). Retry only with this exact command:" >&2
       else
-        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (the first transport attempt had unknown completion and the retry failed). Only the correlation-reusing resend below is idempotent and lands on the same remote inbox record:" >&2
+        echo "error: steer to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID is unconfirmed (the first transport attempt had unknown completion and the retry failed). Retry only with this exact command:" >&2
       fi
       printf '%s' "$(fm_send_resend_env)" >&2
-      printf 'FM_PENDING_REPLY_EXISTING_CORR=%q %s' \
-        "$PENDING_REPLY_CORR" "$(fm_send_resend_exe)" >&2
+      printf '%s' "$(fm_send_resend_exe)" >&2
       for resend_arg in "${FM_SEND_ORIGINAL_ARGS[@]}"; do
         printf ' %q' "$resend_arg" >&2
       done
@@ -1166,28 +985,13 @@ else
       exit 1
     fi
     if [ "$remote_rc" -ne 0 ]; then
-      fm_send_known_undelivered_cleanup ||
-        echo "error: known-undelivered pending-reply state could not be reset for $TARGET_TASK_ID" >&2
       echo "error: steer not sent to remote $TARGET_REMOTE_NOUN $TARGET_REMOTE_ID (the remote steering-inbox record could not be written; the remote leg's stderr above has the reason)" >&2
       exit 1
-    fi
-    # The remote record is durable delivery, exactly as a local enqueue is.
-    if [ -n "$PENDING_REPLY_CORR" ]; then
-      if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
-        :
-      else
-        delivery_commit_status=$?
-        if [ "$delivery_commit_status" = 2 ]; then
-          echo "notice: the steer was durably recorded in the remote inbox, but its pending-reply delivery commit failed; a durable recovery marker was stored and the watcher will reconcile it. Do not resend." >&2
-        else
-          echo "warning: reply-tracking-degraded (steer delivered, do not resend): the steer was durably recorded in the remote inbox, but its pending-reply delivery commit and recovery marker both failed, so the reply expectation for this request may not reconcile on its own. Inspect $STATE." >&2
-        fi
-      fi
     fi
     if [ -n "$RESOLVE_KEYS" ]; then
       fm_send_close_resolved_keys "$RESOLVE_ANSWER_TEXT" || exit 1
       fm_send_feed_resolved_holds "$RESOLVE_ANSWER_TEXT" || exit 1
-      [ "$TARGET_REMOTE_NOUN" != worker ] || fm_send_mirror_closes_to_host
+      fm_send_mirror_closes_to_host
     fi
     exit 0
   fi
@@ -1195,9 +999,6 @@ else
     INBOX_TASK_ID=$(fm_send_id_from_meta "$TARGET_META")
     INBOX_META_LOCK=$(fm_meta_lock_path "$TARGET_META") || exit 1
     if ! fm_task_inbox_lock_acquire "$INBOX_META_LOCK"; then
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
       echo "error: steer not sent to $INBOX_TASK_ID: its task metadata could not be locked for final delivery validation" >&2
       exit 1
     fi
@@ -1215,51 +1016,16 @@ else
         [ "$CURRENT_INBOX_SPAWN_GEN" != "$FM_SEND_EXPECTED_SPAWN_GEN" ]; } ||
       [ -n "$(fm_meta_get "$TARGET_META" remote_host)" ]; then
       fm_lock_release "$INBOX_META_LOCK"
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
       echo "error: steer not sent to $INBOX_TASK_ID: the task retired or changed endpoint during target resolution" >&2
       exit 1
     fi
-    if [ "${FM_SEND_IDEMPOTENT:-0}" = 1 ]; then
-      INBOX_RECORD=$(fm_task_inbox_write_idempotent "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
-        "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
-    else
-      INBOX_RECORD=$(fm_task_inbox_write "$STATE" "$INBOX_TASK_ID" "$MESSAGE" \
-        "${FIRE_AND_FORGET_ID:+fire-and-forget}") || inbox_write_rc=$?
-    fi
+    INBOX_RECORD=$(fm_task_inbox_write "$STATE" "$INBOX_TASK_ID" "$MESSAGE") || inbox_write_rc=$?
     if [ "${inbox_write_rc:-0}" -ne 0 ]; then
       fm_lock_release "$INBOX_META_LOCK"
-      if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-        fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-      fi
       echo "error: steer not sent to $INBOX_TASK_ID: its inbox record could not be written under $STATE/$INBOX_TASK_ID.inbox" >&2
       exit 1
     fi
     fm_lock_release "$INBOX_META_LOCK"
-    # Enqueue IS durable delivery to the task's record: mark the pending
-    # expectation delivered now, without resolving it - only a correlated
-    # parent report acknowledges the request.
-    if [ -n "$PENDING_REPLY_CORR" ]; then
-      if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
-        :
-      else
-        delivery_commit_status=$?
-        if [ "$delivery_commit_status" = 2 ]; then
-          echo "notice: the steer was recorded at $INBOX_RECORD, but its pending-reply delivery commit failed; a durable recovery marker was stored and the watcher will reconcile it. Do not resend." >&2
-        else
-          # Both the commit and its recovery marker failed. The durable inbox
-          # record is what delivers the steer, so the send still SUCCEEDED:
-          # a nonzero here would read as undelivered to every automated caller
-          # and invite a duplicate enqueue - the exact defect this plane
-          # removes. Surface the degradation as its own distinct,
-          # non-resend-inviting condition instead: reply tracking for this
-          # request may not resolve or escalate on its own until an operator
-          # inspects it.
-          echo "warning: reply-tracking-degraded (steer delivered, do not resend): the steer was durably recorded at $INBOX_RECORD, but its pending-reply delivery commit and recovery marker both failed, so the reply expectation for this request may not reconcile on its own. Inspect $STATE." >&2
-        fi
-      fi
-    fi
     # The answer is durably sent: close each answered decision at enqueue time
     # (answerer-closes; see the header contract).
     if [ -n "$RESOLVE_KEYS" ]; then
@@ -1272,18 +1038,6 @@ else
     ring_rc=0
     fm_task_inbox_ring "$TARGET_BACKEND" "$T" "$INBOX_RECORD" "$EXPECTED_LABEL" || ring_rc=$?
     ring_retry="the watcher will re-ring"
-    if [ -n "$FIRE_AND_FORGET_ID" ] \
-      && [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/wait-no-turns" ]; then
-      case "$ring_rc" in
-      1|2)
-        if fm_task_inbox_mark_retry "$STATE" "$INBOX_TASK_ID" "$INBOX_RECORD"; then
-          ring_retry="the watcher will ring it once more"
-        else
-          ring_retry="its one retry ring could not be recorded, so nothing will ring it again"
-        fi
-        ;;
-      esac
-    fi
     case "$ring_rc" in
     1) echo "fm-send: doorbell skipped (composer visibly holds pending text); the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
     2) echo "fm-send: doorbell did not reach $T; the steer is durably recorded at $INBOX_RECORD and $ring_retry" >&2 ;;
@@ -1333,8 +1087,6 @@ else
     send_rc=$?
   fi
   if [ "$send_rc" -ne 0 ]; then
-    fm_send_known_undelivered_cleanup ||
-      echo "error: known-undelivered pending-reply state could not be reset for $TARGET_TASK_ID" >&2
     echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
   fi
@@ -1342,8 +1094,6 @@ else
   empty)
     ;;
   send-failed)
-    fm_send_known_undelivered_cleanup ||
-      echo "error: known-undelivered pending-reply state could not be reset for $TARGET_TASK_ID" >&2
     echo "error: text not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
     ;;
@@ -1353,55 +1103,18 @@ else
     # steer and keeps rendering it). That is not a proven failure, so never
     # re-type the message: verify the pane instead. Exit 3 is the documented
     # delivered-unconfirmed status.
-    # The pending-reply expectation is deliberately NOT discarded here:
-    # dropping it would silently stop tracking a marked request that very
-    # likely landed. It stays armed on its unconfirmed-delivery marker, so a
-    # correlated report still resolves it and an unanswered one still
-    # surfaces through the library's own reconciliation
-    # (bin/fm-pending-reply-lib.sh).
     echo "fm-send: text delivered to $T but submission is unconfirmed (verdict=pending; tried $RESOLUTION_TRIED); do not retype or blindly resend - verify with fm-peek.sh, then re-send '--key Enter' only if the composer still holds the text" >&2
     exit 3
     ;;
   unconfirmed)
-    # An API backend's outcome is unproven: a lost reply or an error that can
-    # follow a commit (T3 Code commits a send before it answers). Like
-    # pending, delivery is unproven
-    # rather than refused, so the pending-reply expectation stays armed; the
-    # adapter retains the logical delivery's request id under the retry policy
-    # in docs/t3code-backend.md. A marked secondmate request is the exception:
-    # a plain rerun mints a new
-    # correlation, so its text and request id differ, and the armed attempt
-    # refuses a resend of this one.
-    if [ -n "$PENDING_REPLY_CORR" ]; then
-      echo "fm-send: delivery to $T is unconfirmed (verdict=unconfirmed: the $TARGET_BACKEND outcome is unproven, a lost reply or an error that can follow a commit; tried $RESOLUTION_TRIED); do not resend - a rerun mints a new pending-reply correlation and would deliver twice; correlation $PENDING_REPLY_CORR stays armed, so verify with fm-peek.sh and let its reply or the watcher's reconciliation settle it" >&2
-    else
       echo "fm-send: delivery to $T is unconfirmed (verdict=unconfirmed: the $TARGET_BACKEND outcome is unproven, a lost reply or an error that can follow a commit; tried $RESOLUTION_TRIED); verify with fm-peek.sh, and resend only the identical text, which reuses its request id" >&2
-    fi
     exit 3
     ;;
   *)
-    if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
-      fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
-    fi
     echo "error: text not submitted to $T (delivery unconfirmed; verdict=${verdict:-unknown}; tried $RESOLUTION_TRIED)" >&2
     exit 1
     ;;
   esac
-  # Delivery confirmed. Mark the pending expectation delivered without resolving
-  # it: only a correlated parent report acknowledges the request.
-  if [ -n "$PENDING_REPLY_CORR" ]; then
-    if fm_pending_reply_confirm_delivery "$STATE" "$PENDING_REPLY_CORR"; then
-      :
-    else
-      delivery_commit_status=$?
-      if [ "$delivery_commit_status" = 2 ]; then
-        echo "error: text was delivered to $T, but its pending-reply delivery commit failed; a durable recovery marker was stored and the watcher will reconcile it. Do not resend." >&2
-      else
-        echo "error: text was delivered to $T, but its pending-reply delivery commit and recovery marker both failed. Do not resend; inspect $STATE manually." >&2
-      fi
-      exit 1
-    fi
-  fi
   # Delivery is fully confirmed: close each answered decision in this home's
   # ledger (answerer-closes; see the header contract).
   if [ -n "$RESOLVE_KEYS" ]; then

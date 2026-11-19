@@ -69,12 +69,6 @@ fm_role_file() {
   printf '%s/firstmate-role\n' "${1%/}"
 }
 
-# fm_role_inherit_receipt <config-dir> - receipt written by the inheritance
-# machinery (remote receiver, or the local route's own bookkeeping).
-fm_role_inherit_receipt() {
-  printf '%s/.fm-inherit-firstmate-role.generation\n' "${1%/}"
-}
-
 # fm_role_scope_valid <scope> - 0 when <scope> is <host>/<owner>/<repo>
 # (deeper paths allowed for group-style hosts) over a conservative charset.
 fm_role_scope_valid() {
@@ -359,124 +353,16 @@ fm_role_parse_file() {
 }
 
 # fm_role_sha256_stdin - hex digest of stdin on either digest tool.
-fm_role_sha256_stdin() {
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 2>/dev/null | awk '{print $1}'
-  else
-    sha256sum 2>/dev/null | awk '{print $1}'
-  fi
-}
-
-# fm_role_inherit_check <role-file> <receipt> - 0 when the receipt is well
-# formed and proves the destination's current state (a put whose bytes hash to
-# the recorded payload, or a recorded absent with no destination file).
-# FM_ROLE_DIAG names the narrow failure.
-fm_role_inherit_check() {
-  local role_file=$1 receipt=$2 gen bytes sha cmd have
-  if [ -L "$receipt" ] || [ ! -f "$receipt" ]; then
-    FM_ROLE_DIAG="inheritance receipt is missing or unsafe"
-    return 1
-  fi
-  {
-    IFS= read -r gen
-    IFS= read -r bytes
-    IFS= read -r sha
-    IFS= read -r cmd
-  } <"$receipt" || {
-    FM_ROLE_DIAG="inheritance receipt is unreadable"
-    return 1
-  }
-  case $gen in
-  '' | *[!0-9]*) FM_ROLE_DIAG="inheritance receipt generation is malformed"; return 1 ;;
-  esac
-  case $bytes in
-  '' | *[!0-9]*) FM_ROLE_DIAG="inheritance receipt byte count is malformed"; return 1 ;;
-  esac
-  case $sha in
-  *[!0-9a-f]*) FM_ROLE_DIAG="inheritance receipt hash is malformed"; return 1 ;;
-  esac
-  [ "${#sha}" -eq 64 ] || {
-    FM_ROLE_DIAG="inheritance receipt hash is malformed"
-    return 1
-  }
-  case $cmd in
-  put | absent) ;;
-  *)
-    FM_ROLE_DIAG="inheritance receipt records an unknown operation '$cmd'"
-    return 1
-    ;;
-  esac
-  if [ "$cmd" = absent ]; then
-    if [ "$bytes" != 0 ]; then
-      FM_ROLE_DIAG="inheritance receipt records an absent payload with a nonzero byte count"
-      return 1
-    fi
-    if [ "$sha" != e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ]; then
-      FM_ROLE_DIAG="inheritance receipt records an absent payload whose digest is not the empty payload"
-      return 1
-    fi
-    if [ -e "$role_file" ] || [ -L "$role_file" ]; then
-      FM_ROLE_DIAG="the parent recorded no role grant, but a local role file exists and cannot be verified"
-      return 1
-    fi
-    return 0
-  fi
-  if [ -L "$role_file" ] || [ ! -f "$role_file" ]; then
-    FM_ROLE_DIAG="the inherited role grant is missing or unsafe"
-    return 1
-  fi
-  have=$(wc -c <"$role_file" 2>/dev/null | tr -d '[:space:]')
-  if [ "$have" != "$bytes" ]; then
-    FM_ROLE_DIAG="the inherited role grant diverges from the receipt"
-    return 1
-  fi
-  have=$(fm_role_sha256_stdin <"$role_file")
-  if [ "$have" != "$sha" ]; then
-    FM_ROLE_DIAG="the inherited role grant diverges from the receipt"
-    return 1
-  fi
-  return 0
-}
-
-# fm_role_resolve <home> <config-dir> - resolve the effective role. Sets
-# FM_ROLE, FM_ROLE_SCOPE, FM_ROLE_SOURCE (absent|local|inherited), FM_ROLE_DIAG.
-# Always returns 0: every failure resolves to user with the narrow reason in
 # FM_ROLE_DIAG. A secondmate home (its .fm-secondmate-home marker) requires the
 # inheritance receipt for any grant; a file it cannot prove is dead on arrival.
 fm_role_resolve() {
-  local home=$1 config=$2 role_file receipt cmd
+  local config=$2 role_file
   FM_ROLE=user
   FM_ROLE_SCOPE=
   # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
   FM_ROLE_SOURCE=absent
   FM_ROLE_DIAG=
   role_file=$(fm_role_file "$config")
-  if [ -f "$home/.fm-secondmate-home" ] && [ ! -L "$home/.fm-secondmate-home" ]; then
-    receipt=$(fm_role_inherit_receipt "$config")
-    if [ -e "$receipt" ] || [ -L "$receipt" ]; then
-      if ! fm_role_inherit_check "$role_file" "$receipt"; then
-        FM_ROLE_DIAG="unverified inherited grant: $FM_ROLE_DIAG"
-        return 0
-      fi
-      cmd=$(sed -n '4p' "$receipt" 2>/dev/null)
-      # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
-      FM_ROLE_SOURCE=inherited
-      if [ "$cmd" = absent ]; then
-        return 0
-      fi
-      if ! fm_role_parse_file "$role_file"; then
-        FM_ROLE=user
-        FM_ROLE_SCOPE=
-        FM_ROLE_DIAG="malformed inherited role: $FM_ROLE_DIAG"
-      fi
-      return 0
-    fi
-    if [ -e "$role_file" ] || [ -L "$role_file" ]; then
-      FM_ROLE_DIAG="unverified inherited grant: a role file exists with no propagation receipt, and a secondmate gains the role only through propagation"
-      return 0
-    fi
-    return 0
-  fi
   if [ -e "$role_file" ] || [ -L "$role_file" ]; then
     # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
     FM_ROLE_SOURCE=local
@@ -489,19 +375,6 @@ fm_role_resolve() {
   fi
   return 0
 }
-
-# fm_role_inherit_payload <home> <config-dir> <out-file> - stage the role this
-# home publishes to its secondmates: the resolved maintainer directive, or no
-# file at all when the home resolves to user for any reason (absent, user,
-# malformed, symlinked, or unproven), so propagation carries revocation rather
-# than raw bytes this home's own resolver rejects. Runs in a subshell so the
-# caller's FM_ROLE globals are untouched.
-fm_role_inherit_payload() (
-  rm -f "$3" || exit 1
-  fm_role_resolve "$1" "$2"
-  [ "$FM_ROLE" = maintainer ] || exit 0
-  printf 'maintainer %s\n' "$FM_ROLE_SCOPE" >"$3"
-)
 
 # fm_role_gate_self_publish <home> <config-dir> <project-dir> <code-root> [consent]
 # Evaluate whether this home may run a publication contract for a task on

@@ -176,8 +176,11 @@ worker_crew_state() {  # <id>
 }
 
 worker_fleet() {
-  local meta id backend target harness tail busy hash agent_state
+  local meta id backend target harness tail busy hash agent_state oldest age inbox
   validate_home
+  [ -d "$TARGET_HOME/state" ] && [ ! -L "$TARGET_HOME/state" ] || return 0
+  # shellcheck source=bin/fm-task-inbox-lib.sh
+  . "$SCRIPT_DIR/fm-task-inbox-lib.sh"
   for meta in "$TARGET_HOME/state/"*.meta; do
     [ -f "$meta" ] && [ ! -L "$meta" ] || continue
     id=$(basename "$meta" .meta)
@@ -205,7 +208,12 @@ worker_fleet() {
     else
       hash=-
     fi
-    printf '%s\t%s\t%s\t%s\n' "$id" "$agent_state" "$busy" "$hash"
+    inbox=-
+    if oldest=$(fm_task_inbox_oldest_unhandled "$TARGET_HOME/state" "$id"); then
+      age=$(fm_path_age "$oldest")
+      inbox="${oldest##*/}:$age"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$agent_state" "$busy" "$hash" "$inbox"
   done
 }
 
@@ -232,8 +240,6 @@ worker_done_gate() {  # <id> <done line>
 # a deferral met only at launch arrives after the parent published its record.
 admit_heavy_gates() {  # <id>
   local id=$1 config loadavg
-  # shellcheck source=bin/fm-secondmate-registry-lib.sh
-  . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
   # shellcheck source=bin/fm-wake-lib.sh
   . "$SCRIPT_DIR/fm-wake-lib.sh"
   config=$(fm_project_capacity_config_dir "$TARGET_HOME" "$TARGET_HOME/config") || die "the root home that declares host limits cannot be resolved"
@@ -288,7 +294,6 @@ worker_admit() {  # <id> <project>
       [ -f "$meta" ] && [ ! -L "$meta" ] || continue
       [ "$meta" != "$state/$id.meta" ] || continue
       kind=$(fm_meta_get "$meta" kind 2>/dev/null || true)
-      [ "$kind" != secondmate ] || continue
       [ -z "$(fm_meta_get "$meta" pr 2>/dev/null || true)" ] || continue
       pname=$(fm_meta_get "$meta" project 2>/dev/null || true)
       pname=${pname##*/}

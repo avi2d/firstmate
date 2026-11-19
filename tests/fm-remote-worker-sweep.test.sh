@@ -17,8 +17,8 @@ export STATE POLL=30 SCRIPT_DIR="$ROOT/bin"
 . "$ROOT/bin/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-task-inbox-lib.sh
 . "$ROOT/bin/fm-task-inbox-lib.sh"
-# shellcheck source=bin/fm-pending-reply-lib.sh
-. "$ROOT/bin/fm-pending-reply-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$ROOT/bin/fm-wake-lib.sh"
 # shellcheck source=bin/fm-remote-worker-poll-lib.sh
 . "$ROOT/bin/fm-remote-worker-poll-lib.sh"
 age_of() {
@@ -31,9 +31,6 @@ printf '%s\n' '- lab - lab route (host: lab-host; root: /remote/code; home: /rem
 printf 'kind=ship\nharness=pi\nremote_host=lab-host\nremote_route=lab\n' > "$STATE/w1.meta"
 mkdir -p "$STATE/w1.inbox"
 printf 'inspect the session\n' > "$STATE/w1.inbox/001.msg"
-corr=$(fm_pending_reply_create "$HOME_DIR" "$STATE" w1 'inspect the session') || fail "pending-reply creation refused"
-rec=$(fm_pending_reply_path "$STATE" "$corr") || fail "pending-reply path refused"
-fm_pending_reply_set "$rec" delivered_epoch "$(( $(date +%s) - 120 ))" || fail "delivery confirmation refused"
 cat > "$TMP_ROOT/fakebin/fake-ssh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -58,8 +55,8 @@ if ! printf '%s' "$argvb64" | base64 --decode > "$tmp" 2>/dev/null; then
 fi
 verb=$(tr '\000' '\n' < "$tmp" | sed -n '2p')
 case "$verb" in
-  fleet) printf 'w1\tworking\tbusy\thash1\n' ;;
-  ring) cat >> "$FM_TEST_RING_LOG"; printf '\nrung\n' >> "$FM_TEST_RING_LOG"; exit 0 ;;
+  fleet) printf 'w1\talive\tbusy\thash1\t001.msg:120\n' ;;
+  ring) cat >> "$FM_TEST_RING_LOG"; printf 'ring=0\n'; exit 0 ;;
   *) printf "unknown remote worker command '%s'\n" "$verb"; exit 1 ;;
 esac
 SH
@@ -73,9 +70,9 @@ remote_worker_poll || fail "the sweep refused a healthy remote worker"
 want=$(fm_task_inbox_doorbell_line "$STATE/w1.inbox/001.msg") || fail "doorbell refused"
 got=$(head -1 "$FM_TEST_RING_LOG")
 [ "$got" = "$want" ] || fail "the re-ring carried [$got] instead of the record doorbell [$want]"
-pass "one sweep re-rings an unacked steer with its record doorbell"
+pass "a sweep does not miss an overdue inbox entry that has no pending-reply record"
 : > "$FM_TEST_RING_LOG"
 remote_worker_poll || fail "the second sweep refused"
 [ ! -s "$FM_TEST_RING_LOG" ] || fail "the sweep re-rang inside its own grace window"
 [ -e "$STATE/.remote-ring-escalated-w1" ] && fail "the sweep escalated a rung steer"
-pass "the second sweep in the grace window stays quiet"
+pass "retry grace prevents a duplicate doorbell"

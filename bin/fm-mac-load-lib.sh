@@ -181,7 +181,6 @@ fm_mac_heavy_count() {  # <first-state> <own-id>
         return 1
       }
       kind=$(fm_meta_get "$meta" kind)
-      [ "$kind" != secondmate ] || continue
       [ -z "$(fm_meta_get "$meta" pr)" ] || continue
       [ "$(fm_meta_get "$meta" harness)" != cloud-claude ] || continue
       id=$(basename "$meta" .meta)
@@ -328,7 +327,6 @@ fm_linux_heavy_count() {  # <first-state> <own-id> <config-dir>
         return 1
       }
       kind=$(fm_meta_get "$meta" kind)
-      [ "$kind" != secondmate ] || continue
       [ -z "$(fm_meta_get "$meta" pr)" ] || continue
       [ "$(fm_meta_get "$meta" harness)" != cloud-claude ] || continue
       id=$(basename "$meta" .meta)

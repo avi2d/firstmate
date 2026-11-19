@@ -422,57 +422,6 @@ fm_extension_pair_owns_supervision() {  # <state> <extension-dir> <source:marker
   fm_pid_alive "$session_pid"
 }
 
-# Away-mode supervision evidence. While state/.afk exists the away-mode daemon
-# (bin/fm-supervise-daemon.sh) owns supervision: it runs bin/fm-watch.sh
-# one-shot, so the watcher exits on EVERY wake and the daemon starts its
-# replacement. Between those cycles no watcher process holds the watch lock,
-# with nothing at all wrong - the supervisor is the daemon, and the watcher is
-# its restarting child.
-#
-# fm_afk_daemon_owns_supervision <state>
-# True when away mode is active AND a live, identity-matched daemon holds this
-# home's singleton daemon lock. The identity match is the same discipline the
-# watcher lock uses (fm_watcher_lock_matches_pid): a recycled pid, a lock left
-# by a killed daemon, or a daemon that never recorded its identity all fail it,
-# so only a daemon process that is genuinely still running counts as ownership.
-# This proves an OWNER, never freshness: callers keep their own beacon test, so
-# a daemon that stops restarting its watcher still fails supervision once the
-# beacon passes grace.
-fm_afk_daemon_owns_supervision() {
-  local state=$1 lockdir pid recorded current
-  [ -e "$state/.afk" ] || return 1
-  lockdir="$state/.supervise-daemon.lock"
-  pid=$(cat "$lockdir/pid" 2>/dev/null) || return 1
-  fm_pid_alive "$pid" || return 1
-  recorded=$(cat "$lockdir/pid-identity" 2>/dev/null) || return 1
-  [ -n "$recorded" ] || return 1
-  current=$(fm_pid_identity "$pid" 2>/dev/null) || return 1
-  [ -n "$current" ] || return 1
-  [ "$current" = "$recorded" ]
-}
-
-# fm_afk_mode <state>
-# The single owner of reading state/.afk's declared mode. Always prints
-# exactly one of "away" or "quiet" and always succeeds - every caller gets a
-# definitive answer, never an error to handle. Presence/liveness stays owned
-# by fm_afk_daemon_owns_supervision and the raw `-e "$state/.afk"` checks
-# throughout the tree; this is the mode of an ALREADY-present flag.
-# "away" (today's return-on-any-unmarked-message behavior) is the safe
-# default: missing, empty, unreadable, or unrecognized content, and the
-# legacy bare-epoch-timestamp content written before mode existed, all read
-# as "away". Only an exact first-line "quiet" ever reads as "quiet" -
-# kunchenguid/firstmate#2356's standing captain-present quiet mode, entered
-# only through /quiet and exited only through an explicit /quiet off
-# (AGENTS.md section 8's away-mode stub).
-fm_afk_mode() {
-  local state=$1 mode
-  mode=$(head -n 1 "$state/.afk" 2>/dev/null) || { printf '%s\n' away; return 0; }
-  case "$mode" in
-    quiet) printf '%s\n' quiet ;;
-    *) printf '%s\n' away ;;
-  esac
-}
-
 # fm_watcher_supervision_verdict <state> <watch-path> [grace] [home] [root]
 # Model-aware "is supervision healthy right now" verdict for the pull warning
 # guard (bin/fm-guard.sh), NOT the arm layer or the turn-end guard. Sets:
@@ -1782,106 +1731,19 @@ fm_task_set_lock_path() {  # <state-dir>
   printf '%s/.task-set.lock\n' "$state"
 }
 
-# The top-most firstmate home reachable from this one on THIS machine, used as
-# the single anchor every local home agrees on for machine-local shared state.
-#
-# A local parent binding is followed upward. A remote parent binding terminates
-# the walk at the current home, which is the correct answer rather than an
-# error: the parent lives on another machine, so its filesystem can neither hold
-# nor be observed by a lock taken here, and a remote-seeded home is itself the
-# top of the local tree that fm_local_firstmate_state_dirs below enumerates
-# (that walk already skips remote registry entries for the same reason).
-# Refusing a remote binding instead made every operation anchored here fail
-# closed inside a remote secondmate home and its local descendants.
-#
-# Everything else still fails closed: an unreadable or malformed binding, an
-# unreachable local parent, a cycle, and a chain deeper than the bound.
 fm_firstmate_root_home() {
-  local home=${1:-$FM_HOME} marker parent seen="|" depth=0
-  home=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 1
-  while [ -e "$home/.fm-secondmate-parent" ] || [ -L "$home/.fm-secondmate-parent" ]; do
-    marker="$home/.fm-secondmate-parent"
-    if ! command -v fm_secondmate_parent_record_parse >/dev/null 2>&1; then
-      # shellcheck source=bin/fm-secondmate-parent-lib.sh
-      . "$FM_WAKE_LIB_DIR/fm-secondmate-parent-lib.sh"
-    fi
-    fm_secondmate_parent_record_parse "$marker" || return 1
-    case "$FM_SECONDMATE_PARENT_ROUTE" in
-      local) ;;
-      remote) break ;;
-      *) return 1 ;;
-    esac
-    parent=$(CDPATH='' cd -- "$FM_SECONDMATE_PARENT_HOME" 2>/dev/null && pwd -P) || return 1
-    case "$seen" in *"|$parent|"*) return 1 ;; esac
-    seen="$seen$home|"
-    home=$parent
-    depth=$((depth + 1))
-    [ "$depth" -le 64 ] || return 1
-  done
-  printf '%s\n' "$home"
+  (CDPATH='' cd -- "${1:-$FM_HOME}" 2>/dev/null && pwd -P)
 }
 
-# Every Firstmate state directory on THIS machine whose task records can share a
-# machine-local resource with <first-state>: <first-state> itself, then the local
-# root home and each local secondmate home registered below it, walked through
-# every data/secondmates.md breadth-first. Remote registry entries are skipped,
-# because their workers run on another machine.
-#
-# Sets FM_LOCAL_FIRSTMATE_STATES to that list, <first-state> first and without
-# duplicates however each directory is spelled. Returns 1 with
-# FM_LOCAL_FIRSTMATE_ERROR naming what could not be proved - an unresolvable
-# root, an unsafe or malformed registry, or an unavailable registered local
-# home - so a caller refuses rather than treating an unreadable home as one
-# with no tasks. Requires bin/fm-secondmate-registry-lib.sh to be sourced first.
-# shellcheck disable=SC2034 # FM_LOCAL_FIRSTMATE_ERROR is read by callers.
-fm_local_firstmate_state_dirs() {  # <first-state>
-  local first=$1 root home reg line child known existing i=0
-  local -a homes
+fm_local_firstmate_state_dirs() {
+  local first=$1 root
   FM_LOCAL_FIRSTMATE_STATES=("$first")
-  FM_LOCAL_FIRSTMATE_ERROR=
-  root=$(fm_firstmate_root_home "$FM_HOME") || {
-    FM_LOCAL_FIRSTMATE_ERROR="cannot resolve the root Firstmate home"
+  root=$(fm_firstmate_root_home) || {
     return 1
   }
-  homes=("$root")
-  while [ "$i" -lt "${#homes[@]}" ]; do
-    home=${homes[$i]}
-    i=$((i + 1))
-    known=0
-    for existing in "${FM_LOCAL_FIRSTMATE_STATES[@]}"; do
-      if [ "$existing" = "$home/state" ] || [ "$existing" -ef "$home/state" ]; then
-        known=1
-      fi
-    done
-    [ "$known" = 1 ] || FM_LOCAL_FIRSTMATE_STATES+=("$home/state")
-    reg="$home/data/secondmates.md"
-    [ ! -e "$reg" ] && [ ! -L "$reg" ] && continue
-    [ -f "$reg" ] && [ ! -L "$reg" ] || {
-      FM_LOCAL_FIRSTMATE_ERROR="local Firstmate registry is unsafe at $reg"
-      return 1
-    }
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        "- "*)
-          secondmate_registry_parse_line "$line" || {
-            FM_LOCAL_FIRSTMATE_ERROR="malformed local Firstmate registry entry in $reg"
-            return 1
-          }
-          [ "$SECONDMATE_REGISTRY_REMOTE" -eq 0 ] || continue
-          child=$([ -d "$SECONDMATE_REGISTRY_HOME" ] &&
-            CDPATH='' cd -- "$SECONDMATE_REGISTRY_HOME" 2>/dev/null && pwd -P) || {
-            FM_LOCAL_FIRSTMATE_ERROR="registered local Firstmate home is unavailable: $SECONDMATE_REGISTRY_HOME"
-            return 1
-          }
-          known=0
-          for existing in "${homes[@]}"; do
-            [ "$existing" != "$child" ] || known=1
-          done
-          [ "$known" = 1 ] || homes+=("$child")
-          ;;
-      esac
-    done < "$reg"
-  done
+  if [ "$first" != "$root/state" ] && ! [ "$first" -ef "$root/state" ]; then
+    FM_LOCAL_FIRSTMATE_STATES+=("$root/state")
+  fi
 }
 
 # The one lock serializing Treehouse slot allocation and return for a project,
@@ -2840,104 +2702,6 @@ fm_wake_queued_carries_locked() {
   awk -F '\t' -v kind="$kind" -v key="$key" -v needle="$needle" \
     'NF >= 5 && $3 == kind && $4 == key && index($5, needle) { found = 1; exit }
      END { exit !found }' "$FM_WAKE_QUEUE" 2>/dev/null
-}
-
-fm_wake_secondmate_progress_marker_write() { # <task> <observed-at> <oldest-row-key>
-  local task=$1 observed_at=$2 oldest_row_key=$3 marker tmp
-  case "$task" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
-  case "$observed_at" in ''|*[!0-9]*) return 1 ;; esac
-  case "$oldest_row_key" in ''|*[!0-9-]*) return 1 ;; esac
-  marker="$STATE/.secondmate-wake-progress-$task"
-  if [ -e "$marker" ] || [ -L "$marker" ]; then
-    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
-  fi
-  tmp=$(mktemp "$STATE/.secondmate-wake-progress.XXXXXX") || return 1
-  if ! printf '%s\t%s\n' "$observed_at" "$oldest_row_key" > "$tmp" || ! chmod 0600 "$tmp" \
-    || ! _fm_atomic_replace "$tmp" "$marker"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-}
-
-fm_wake_secondmate_ring_marker_write() { # <task> <row-key>
-  local task=$1 row_key=$2 marker tmp
-  case "$task" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
-  case "$row_key" in ''|*[!0-9-]*) return 1 ;; esac
-  marker="$STATE/.secondmate-wake-ring-$task"
-  if [ -e "$marker" ] || [ -L "$marker" ]; then
-    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
-  fi
-  tmp=$(mktemp "$STATE/.secondmate-wake-ring.XXXXXX") || return 1
-  if ! printf '%s\n' "$row_key" > "$tmp" || ! chmod 0600 "$tmp" \
-    || ! _fm_atomic_replace "$tmp" "$marker"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-}
-
-fm_wake_secondmate_stall_marker_write() { # <task> <row-key>
-  local task=$1 row_key=$2 marker tmp
-  case "$task" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
-  case "$row_key" in ''|*[!0-9-]*) return 1 ;; esac
-  marker="$STATE/.secondmate-wake-stall-$task"
-  if [ -e "$marker" ] || [ -L "$marker" ]; then
-    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
-  fi
-  tmp=$(mktemp "$STATE/.secondmate-wake-stall.XXXXXX") || return 1
-  if ! printf '%s\n' "$row_key" > "$tmp" || ! chmod 0600 "$tmp" \
-    || ! _fm_atomic_replace "$tmp" "$marker"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-}
-
-fm_wake_secondmate_stall_receipt_write() { # <task> <row-key>
-  local task=$1 row_key=$2 root task_dir receipt tmp
-  case "$task" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
-  case "$row_key" in ''|*[!0-9-]*) return 1 ;; esac
-  root="$STATE/.secondmate-wake-stall-receipts"
-  task_dir="$root/$task"
-  if [ -e "$root" ] || [ -L "$root" ]; then
-    [ -d "$root" ] && [ ! -L "$root" ] || return 1
-  else
-    mkdir "$root" || return 1
-    chmod 0700 "$root" || return 1
-  fi
-  if [ -e "$task_dir" ] || [ -L "$task_dir" ]; then
-    [ -d "$task_dir" ] && [ ! -L "$task_dir" ] || return 1
-  else
-    mkdir "$task_dir" || return 1
-    chmod 0700 "$task_dir" || return 1
-  fi
-  receipt="$task_dir/$row_key"
-  [ "$(cat "$receipt" 2>/dev/null || true)" != "$row_key" ] || return 0
-  tmp=$(mktemp "$task_dir/.receipt.XXXXXX") || return 1
-  if ! printf '%s\n' "$row_key" > "$tmp" || ! chmod 0600 "$tmp" \
-    || ! _fm_atomic_replace "$tmp" "$receipt"; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-}
-
-fm_wake_commit_secondmate_stall_receipts_through() { # <cutoff> [<rows-file>]
-  local cutoff=$1 rows=${2:-} key seq rest epoch task row_key
-  while IFS= read -r key; do
-    seq=${key##*-}
-    rest=${key%-*}
-    epoch=${rest##*-}
-    task=${rest#secondmate-wake-loop-}
-    task=${task%-"$epoch"}
-    case "$seq" in ''|*[!0-9]*) return 1 ;; esac
-    case "$epoch" in ''|*[!0-9]*) return 1 ;; esac
-    case "$task" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
-    row_key="$epoch-$seq"
-    fm_wake_secondmate_stall_receipt_write "$task" "$row_key" || return 1
-  done < <(awk -F '\t' -v cutoff="$cutoff" -v rows="$rows" '
-    BEGIN { if (rows != "") while ((getline line < rows) > 0) owned[line]=1 }
-    NF >= 5 && $2 ~ /^[0-9]+$/ && $2 <= cutoff \
-      && (rows == "" || ($2 in owned)) && $3 == "check" \
-      && $4 ~ /^secondmate-wake-loop-[A-Za-z0-9._-]+-[0-9]+-[0-9]+$/ { print $4 }
-  ' "$FM_WAKE_QUEUE" 2>/dev/null)
 }
 
 fm_wake_restore_queue() {

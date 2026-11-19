@@ -56,7 +56,7 @@ def reraise_event($thread; $now; $now_iso):
      body:("no reply from the contribution author for " + $age)}
     + (if $thread.review_bot == true then {review_bot:true} else {} end);
 def known($input; $saved):
-  ([($input.tasks // [])[] | select(.kind != "secondmate")
+  ([($input.tasks // [])[]
      | select(.pr.url | canonical_url) | {task:.id,url:.pr.url}]
    + [($input.backlog.records // [])[] | select(.structured == true) as $task
       | ($task.links // [])[] | select(canonical_url) | {task:$task.id,url:.}]

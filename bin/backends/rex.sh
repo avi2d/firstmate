@@ -199,13 +199,13 @@ fm_backend_rex_version_check() {  # [start|read]
 fm_backend_rex_local_server_ensure() {
   local endpoint
   endpoint=$(fm_backend_rex_server_endpoint) || {
-    echo "error: could not determine the Rex server endpoint; Rex workers need a Rex server on this machine. For work on another host, use remote second mates (docs/remote-secondmates.md)" >&2
+    echo "error: could not determine the Rex server endpoint; Rex workers need a Rex server on this machine. For work on another host, place the project on an execution home (docs/remote-workers.md)" >&2
     return 1
   }
   case "$endpoint" in
     unix://*) return 0 ;;
   esac
-  echo "error: Rex server endpoint '$endpoint' is not proven to be on this machine; Rex workers need a Rex server on this machine. For work on another host, use remote second mates (docs/remote-secondmates.md)" >&2
+  echo "error: Rex server endpoint '$endpoint' is not proven to be on this machine; Rex workers need a Rex server on this machine. For work on another host, place the project on an execution home (docs/remote-workers.md)" >&2
   return 1
 }
 

@@ -353,15 +353,8 @@ LOG_VERB=$(status_line_verb "$LOG_LINE")
 # A remote mate's recorded worktree and backend target live on its own host, so
 # the local worktree probe above and the local pane reads below would misreport
 # a healthy remote mate as gone or dead. Ask the remote host for the endpoint's
-# recovery-grade state over the same fm-on.sh transport fm-send uses, then read
-# current activity from the routed status log exactly as for a local
-# secondmate (an idle endpoint is healthy for a secondmate either way). An
-# unreachable host or unreadable endpoint is reported as unknown-remote -
-# explicitly NOT proof of death - so a transport blip never reads as a torn
-# down or dead mate; only the remote host's own dead/missing verdict may say
-# the endpoint is actually gone.
 if [ -n "$REMOTE_HOST" ]; then
-  if [ "$(fm_meta_get "$META" kind)" != secondmate ] && [ -n "$(fm_meta_get "$META" remote_route)" ]; then
+  [ -n "$(fm_meta_get "$META" remote_route)" ] || emit unknown remote-endpoint "task has no execution-home route"
     FM_CREW_STATE_REMOTE_BUDGET=${FM_CREW_STATE_REMOTE_BUDGET:-120}
     case "$FM_CREW_STATE_REMOTE_BUDGET" in ''|*[!0-9]*|0)
       emit unknown remote-endpoint "unknown-remote: FM_CREW_STATE_REMOTE_BUDGET must be a positive integer" ;;
@@ -376,32 +369,6 @@ if [ -n "$REMOTE_HOST" ]; then
       'state: '*) printf '%s\n' "$REMOTE_LINE"; exit 0 ;;
       *) emit unknown remote-endpoint "unknown-remote: worker state unreadable on $REMOTE_HOST (not proof of death)" ;;
     esac
-  fi
-  if ! REMOTE_STATE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" "$ID" \
-    fm-remote-secondmate-control.sh state "$ID" < /dev/null 2>/dev/null); then
-    REMOTE_STATE=
-  fi
-  REMOTE_STATE=$(printf '%s\n' "$REMOTE_STATE" | tail -1)
-  case "$REMOTE_STATE" in
-    alive)
-      if [ -n "$LOG_VERB" ]; then
-        LOG_STATE=$(map_log_state "$LOG_LINE")
-        if [ "$LOG_STATE" != unknown ]; then
-          emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
-        fi
-      fi
-      emit unknown remote-endpoint "alive on $REMOTE_HOST (an idle secondmate is healthy)"
-      ;;
-    dead|missing)
-      emit unknown remote-endpoint "remote endpoint $REMOTE_STATE on $REMOTE_HOST"
-      ;;
-    '')
-      emit unknown remote-endpoint "unknown-remote: $REMOTE_HOST unreachable or endpoint unreadable (not proof of death)"
-      ;;
-    *)
-      emit unknown remote-endpoint "unknown-remote: endpoint state '$REMOTE_STATE' on $REMOTE_HOST (not proof of death)"
-      ;;
-  esac
 fi
 
 # pane_readable is consulted ONLY in the no-run fallback below. The run-step path
@@ -1612,26 +1579,22 @@ if ! pane_readable "$BACKEND_TARGET"; then
   esac
 fi
 
-# Secondmates idle on their own watcher (idle pane = healthy), so the busy
-# state is not meaningful for them; read their state from the status log only.
 # Only an exact busy verdict reports working here, and only an exact idle
 # verdict permits the status-log fallback below. Missing, malformed, stale, or
 # unverified semantic state remains unknown.
-if [ "$KIND" != secondmate ]; then
-  BUSY_VERDICT=$(crew_busy_verdict "$BACKEND_TARGET")
-  case "${BUSY_VERDICT%% *}" in
-    busy) emit working pane "harness busy (${BUSY_VERDICT#* })" ;;
-    idle) ;;
-    unknown)
-      case "$BUSY_VERDICT" in
-        "unknown launch-exec-failed")
-          emit blocked pane "harness '$HARNESS' never started: the worker shell could not exec it (launch-exec-failed)" ;;
-        *) emit unknown pane "harness state unavailable ($BUSY_VERDICT)" ;;
-      esac
-      ;;
-    *) emit unknown pane "harness state unavailable ($BUSY_VERDICT)" ;;
-  esac
-fi
+BUSY_VERDICT=$(crew_busy_verdict "$BACKEND_TARGET")
+case "${BUSY_VERDICT%% *}" in
+  busy) emit working pane "harness busy (${BUSY_VERDICT#* })" ;;
+  idle) ;;
+  unknown)
+    case "$BUSY_VERDICT" in
+      "unknown launch-exec-failed")
+        emit blocked pane "harness '$HARNESS' never started: the worker shell could not exec it (launch-exec-failed)" ;;
+      *) emit unknown pane "harness state unavailable ($BUSY_VERDICT)" ;;
+    esac
+    ;;
+  *) emit unknown pane "harness state unavailable ($BUSY_VERDICT)" ;;
+esac
 
 # Fall back to the resolved status declaration, but ONLY when its verb maps to a real
 # run-state. A decision-closing event - resolved: (fm-classify-lib.sh's

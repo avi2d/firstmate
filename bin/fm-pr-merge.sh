@@ -28,8 +28,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-merge-outcome-lib.sh"
 # shellcheck source=bin/fm-merge-authority-lib.sh
 . "$SCRIPT_DIR/fm-merge-authority-lib.sh"
-# shellcheck source=bin/fm-afk-contract.sh
-. "$SCRIPT_DIR/fm-afk-contract.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
@@ -317,21 +315,6 @@ FM_PR_GITHUB_AUTO_REQUESTED=false
 if [ "$PROVIDER" = github ] && caller_requested_auto_merge "$@"; then
   FM_PR_GITHUB_AUTO_REQUESTED=true
 fi
-FM_PR_GITLAB_ASYNC_REQUESTED=false
-if [ "$PROVIDER" = gitlab ]; then
-  for arg in "$@"; do
-    case "$arg" in
-      --auto-merge|--when-pipeline-succeeds) FM_PR_GITLAB_ASYNC_REQUESTED=true ;;
-      --auto-merge=*|--when-pipeline-succeeds=*)
-        case "${arg#*=}" in
-          [tT]|[tT][rR][uU][eE]|1) FM_PR_GITLAB_ASYNC_REQUESTED=true ;;
-          [fF]|[fF][aA][lL][sS][eE]|0) FM_PR_GITLAB_ASYNC_REQUESTED=false ;;
-        esac
-        ;;
-    esac
-  done
-fi
-FM_PR_AWAY_POSTURE=false
 
 fm_backlog_directory_present "$STATE" "state directory" || {
   echo "error: PR merge refused: $FM_BACKLOG_TRANSITION_ERROR" >&2
@@ -351,7 +334,7 @@ META="$STATE/$ID.meta"
 # whatever that record says.
 # shellcheck source=bin/fm-lease-lib.sh
 . "$SCRIPT_DIR/fm-lease-lib.sh"
-fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
+fm_lease_forbid_branch "PR merge (fm-pr-merge)"
 
 require_unowned_release_pr() {
   local json title owner
@@ -392,7 +375,6 @@ MERGE_CONTROL_LOCK=
 MERGE_META_LOCK=
 merge_control_cleanup() {
   [ -z "$MERGE_META_LOCK" ] || fm_lock_release "$MERGE_META_LOCK" || true
-  fm_afk_contract_lock_release || true
   [ -z "$MERGE_CONTROL_LOCK" ] || fm_lock_release "$MERGE_CONTROL_LOCK" || true
 }
 trap merge_control_cleanup EXIT
@@ -467,7 +449,6 @@ fi
 # the merge request. Sets FM_PR_MERGE_HEAD to the verified head on success and
 # returns non-zero after reporting every condition that failed.
 FM_PR_MERGE_HEAD=
-FM_PR_GITLAB_ASYNC_CONFIGURED=false
 FM_PR_EXPECTED_HEAD_REFUSAL=
 
 note_expected_head() {
@@ -482,7 +463,7 @@ gitlab_verify_mergeable() {
   local json fields line pipeline_waived
   local total=0 named=0 refusals=''
   local state='' detail='' conflicts='' discussions=''
-  local live_head='' pipeline_sha='' pipeline_status='' pipeline_absent='' async_configured=''
+  local live_head='' pipeline_sha='' pipeline_status='' pipeline_absent=''
 
   # GITLAB_HOST is set to the same host the project URL already carries, so the
   # instance is taken from the parsed URL by both signals and never from the
@@ -505,9 +486,7 @@ gitlab_verify_mergeable() {
         "head=" + ((.sha // "") | tostring),
         "pipeline_sha=" + ((.head_pipeline.sha // "") | tostring),
         "pipeline_status=" + ((.head_pipeline.status // "") | tostring),
-        "pipeline_absent=" + (if has("head_pipeline") and .head_pipeline == null then "true" else "false" end),
-        "async_configured=" + (if .merge_when_pipeline_succeeds == true or (.merge_after != null) then "true" else "false" end)
-      else
+        "pipeline_absent=" + (if has("head_pipeline") and .head_pipeline == null then "true" else "false" end)      else
         error("merge request payload is not an object")
       end' 2>/dev/null); then
     echo "error: could not read the GitLab merge request state before merging" >&2
@@ -524,7 +503,6 @@ gitlab_verify_mergeable() {
       pipeline_sha=*) pipeline_sha=${line#pipeline_sha=} ;;
       pipeline_status=*) pipeline_status=${line#pipeline_status=} ;;
       pipeline_absent=*) pipeline_absent=${line#pipeline_absent=} ;;
-      async_configured=*) async_configured=${line#async_configured=} ;;
       *) continue ;;
     esac
     named=$((named + 1))
@@ -596,7 +574,6 @@ FIELDS
       "$URL" "$live_head" >&2
   fi
   FM_PR_MERGE_HEAD=$live_head
-  FM_PR_GITLAB_ASYNC_CONFIGURED=$async_configured
 }
 
 # Pre-merge conditions for a Forgejo pull request, read from one live view of
@@ -1700,64 +1677,7 @@ require_released_merge_hold() {
   esac
 }
 
-FM_PR_MERGE_AUTHORITY=
-# The authority read. bin/fm-merge-authority-lib.sh owns what the away-posture
-# record's presence means; this function owns what a merge run may do about it,
-# so the answer the merge poll later tags its ledger row with is the same answer
-# resolved here. An unreadable record refuses rather than being skipped.
-resolve_merge_authority() {
-  FM_PR_MERGE_AUTHORITY=
-  if fm_merge_authority_resolve "$FM_HOME" "$STATE" "$META" "$ID"; then
-    FM_PR_MERGE_AUTHORITY=$FM_MERGE_AUTHORITY
-    return 0
-  fi
-  echo "error: PR merge refused - the away-posture record could not be read; nothing was merged" >&2
-  return 1
-}
-
-# Take the away record's own lock (bin/fm-afk-contract.sh owns it) so that
-# record cannot be published, replaced, or archived between the authority read
-# below and the forge command that acts on it. Refuses without the lock: a merge
-# on authority nothing is holding still is exactly what this closes. This is the
-# only path that holds both the per-task control lock and the away-record lock,
-# and it always takes them in that order; the away-record side takes only its own
-# lock, so the pair cannot deadlock.
-hold_away_record_for_merge() {
-  fm_afk_contract_lock_hold "$STATE" && return 0
-  echo "error: PR merge refused - the away-posture record could not be locked for the merge; nothing was merged" >&2
-  return 1
-}
-
-require_current_away_authority() {
-  FM_PR_AWAY_POSTURE=false
-  if fm_afk_contract_away_present "$STATE"; then
-    FM_PR_AWAY_POSTURE=true
-    if [ "$PROVIDER" = github ] && [ "$FM_PR_GITHUB_AUTO_REQUESTED" = true ]; then
-      echo "error: --auto is attended-only; while the away-posture record exists only a synchronous merge may run under its authority lock" >&2
-      return 2
-    fi
-    if [ "$PROVIDER" = gitlab ] \
-      && { [ "$FM_PR_GITLAB_ASYNC_REQUESTED" = true ] || [ "$FM_PR_GITLAB_ASYNC_CONFIGURED" = true ]; }; then
-      echo "error: GitLab auto-merge is attended-only; while the away-posture record exists only an immediate merge may run under its authority lock" >&2
-      return 2
-    fi
-  fi
-  fm_lease_forbid_branch "PR merge (fm-pr-merge)" --away-relocated
-  resolve_merge_authority || return 1
-  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "${#ALLOW_RED[@]}" -gt 0 ]; then
-    echo "error: --allow-red is attended-only; while the away-posture record exists the green check is absolute" >&2
-    return 2
-  fi
-  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "${#ALLOW_MISSING[@]}" -gt 0 ]; then
-    echo "error: --allow-missing is attended-only; while the away-posture record exists every required check must report" >&2
-    return 2
-  fi
-  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$ALLOW_NO_PIPELINE" = true ]; then
-    echo "error: --allow-no-pipeline is attended-only; while the away-posture record exists a GitLab merge requires a successful head pipeline" >&2
-    return 2
-  fi
-}
-
+FM_PR_MERGE_AUTHORITY=attended
 persist_accepted_merge_authority() {
   local status=0
   [ "$RELEASE_PR" = true ] && return 0
@@ -1776,27 +1696,6 @@ persist_accepted_merge_authority() {
   return 1
 }
 
-# While away, a merge proceeds only when the base branch's rules prove no
-# merge queue, because a queued merge can land after its away authority
-# lapses with the record's archive. A repository whose
-# plan does not expose branch rules at all (GitHub's "Upgrade to GitHub Pro or
-# make this repository public" 403) proves that on its own, since such a
-# repository cannot have a merge_queue rule either; see
-# github_read_queue_method, which resolves that specific 403 to status=none.
-# Every other failure to read the queue state (auth, rate limit, network, a
-# 404, or an unrelated 403) stays unreadable and refuses the merge. The merge
-# stays synchronous (--auto is refused earlier) and every other gate still
-# applies.
-refuse_github_queue_while_away() {
-  [ "$FM_PR_AWAY_POSTURE" = true ] || return 0
-  # Accepted confused-agent-grade limitation, as in bin/fm-lease-lib.sh, not an
-  # oversight: a queue rule or PR base change after this preflight can still
-  # enqueue the merge, which can land after its away authority lapses.
-  github_read_queue_method
-  [ "$FM_PR_GITHUB_QUEUE_STATUS" = none ] && return 0
-  echo "error: GitHub merge refused while away because the base branch's merge-queue state does not prove an immediate merge; nothing was handed to the forge" >&2
-  return 2
-}
 
 FM_PR_GITHUB_STACK=unknown
 FM_PR_GITHUB_STACK_NUMBER=
@@ -2144,16 +2043,8 @@ github_merge_stack_async() {
   local request_file='' response='' status='' uuid='' expected=''
   local reported_method='' reported_action='' bypass='' message=''
   local fields='' line='' total='' named='' abort=''
-  if [ "$FM_PR_AWAY_POSTURE" = true ]; then
-    fm_afk_contract_lock_release || true
-    fm_lock_release "$MERGE_CONTROL_LOCK" || true
-    MERGE_CONTROL_LOCK=
-    echo "error: GitHub merge refused while away: a stacked merge lands in the background after this run's authority lock releases, so only a synchronous merge may run under it; nothing was handed to the forge" >&2
-    exit 2
-  fi
   request_file=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge-async.XXXXXX") || {
     echo "error: no temporary file was available for the asynchronous merge request; nothing was merged" >&2
-    fm_afk_contract_lock_release || true
     fm_lock_release "$MERGE_CONTROL_LOCK" || true
     MERGE_CONTROL_LOCK=
     exit 1
@@ -2166,7 +2057,6 @@ github_merge_stack_async() {
      + (if $body != "" then {commit_message: $body} else {} end)' >"$request_file"; then
     echo "error: the asynchronous merge request for $URL could not be built; nothing was merged" >&2
     rm -f "$request_file"
-    fm_afk_contract_lock_release || true
     fm_lock_release "$MERGE_CONTROL_LOCK" || true
     MERGE_CONTROL_LOCK=
     exit 1
@@ -2248,7 +2138,6 @@ FIELDS
       ;;
   esac
   if [ -n "$abort" ]; then
-    fm_afk_contract_lock_release || true
     fm_lock_release "$MERGE_CONTROL_LOCK" || true
     MERGE_CONTROL_LOCK=
     echo "error: $abort; nothing was merged" >&2
@@ -2256,7 +2145,6 @@ FIELDS
   fi
   FM_PR_GITHUB_MERGE_ACCEPTED=true
   persist_accepted_merge_authority || exit 1
-  fm_afk_contract_lock_release || true
   fm_lock_release "$MERGE_CONTROL_LOCK" || true
   MERGE_CONTROL_LOCK=
   case "$status" in
@@ -2360,10 +2248,6 @@ github_caller_method_is() {
 
 github_report_queue_rules() {
   local queue_method methods_display
-  if [ "$FM_PR_AWAY_POSTURE" = true ]; then
-    printf 'error: the direct merge did not land while the away-posture record exists; merge-queue retry flags are unavailable because a queued merge would outlive its authority\n' >&2
-    return 0
-  fi
   github_read_queue_method
   case "$FM_PR_GITHUB_QUEUE_STATUS" in
     single)
@@ -2416,12 +2300,8 @@ github_report_unmerged_outcome() {
     fi
   fi
   if [ "$FM_PR_GITHUB_QUEUE_OBSERVED" != true ]; then
-    if [ "$FM_PR_AWAY_POSTURE" = true ]; then
-      printf 'error: the synchronous merge did not land while the away-posture record exists; no asynchronous merge or queue retry is available under away authority\n' >&2
-    else
       printf 'error: the merge queue could not be observed for %s because the queue-aware read was unavailable, so a pull request already in the merge queue cannot be told apart from one that never entered it; re-check the pull request'"'"'s merge queue state before retrying\n' \
         "$URL" >&2
-    fi
     return 0
   fi
   github_report_queue_rules
@@ -2682,9 +2562,6 @@ fi
 # Record before either forge call. This arms the merge poll without claiming a
 # landed outcome, so even a provider read failure after a real merge cannot
 # leave teardown without the PR identity it needs to verify the result.
-away_status=0
-require_current_away_authority || away_status=$?
-[ "$away_status" -eq 0 ] || exit "$away_status"
 if [ "$RELEASE_PR" != true ]; then
   require_recorded_pr_identity || exit 1
   record_pr_metadata || exit 1
@@ -2776,13 +2653,6 @@ case "$PROVIDER" in
         "$URL" "$UPSTREAM_SYNC_HEAD" "$FM_PR_MERGE_HEAD" >&2
       exit 1
     fi
-    # The away record is locked first, so this last presence and authority read
-    # and the forge command below share one live-owner critical section.
-    hold_away_record_for_merge || exit 1
-    away_status=0
-    require_current_away_authority || away_status=$?
-    [ "$away_status" -eq 0 ] || exit "$away_status"
-    refuse_github_queue_while_away || exit 2
     if [ "$FM_PR_GITHUB_BEHIND" = true ]; then
       if [ "$UPDATE_BRANCH" != true ]; then
         echo "error: $URL is behind its base; updating its source branch requires explicit --update-branch consent on this authorized merge request (the update remains if new checks prevent merging)" >&2
@@ -2805,11 +2675,9 @@ case "$PROVIDER" in
     if [ "$merge_status" -eq 0 ]; then
       FM_PR_GITHUB_MERGE_ACCEPTED=true
       persist_accepted_merge_authority || exit 1
-      fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
     else
-      fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
       [ -z "$merge_output" ] || printf '%s\n' "$merge_output" >&2
@@ -2848,27 +2716,15 @@ case "$PROVIDER" in
     # in between is refused by GitLab instead of merged unverified. --yes only
     # skips the interactive confirmation, which no supervised run can answer;
     # the conditions above are what authorize the merge.
-    # The away record is locked first, so this last presence and authority read
-    # and the forge command below share one live-owner critical section.
-    hold_away_record_for_merge || exit 1
-    away_status=0
-    require_current_away_authority || away_status=$?
-    [ "$away_status" -eq 0 ] || exit "$away_status"
     merge_status=0
-    gitlab_merge_args=()
-    if [ "$FM_PR_AWAY_POSTURE" = true ]; then
-      gitlab_merge_args=(--auto-merge=false)
-    fi
     GITLAB_HOST="$FM_PR_HOST" glab mr merge "$PR_NUMBER" -R "$PROJECT_URL" \
-      --sha "$FM_PR_MERGE_HEAD" --yes "$@" "${gitlab_merge_args[@]+"${gitlab_merge_args[@]}"}" || merge_status=$?
+      --sha "$FM_PR_MERGE_HEAD" --yes "$@" || merge_status=$?
     if [ "$merge_status" -ne 0 ]; then
-      fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
       exit "$merge_status"
     fi
     persist_accepted_merge_authority || exit 1
-    fm_afk_contract_lock_release || true
     fm_lock_release "$MERGE_CONTROL_LOCK" || true
     MERGE_CONTROL_LOCK=
     gitlab_confirm_rc=0
@@ -2881,12 +2737,6 @@ case "$PROVIDER" in
     [ -n "$forgejo_method" ] || forgejo_method=$(forgejo_default_merge_style) || exit 1
     forgejo_verify_mergeable || exit 1
     autonomous_security_path_gate || exit 1
-    # The away record is locked first, so this last presence and authority
-    # read and the forge command below share one live-owner critical section.
-    hold_away_record_for_merge || exit 1
-    away_status=0
-    require_current_away_authority || away_status=$?
-    [ "$away_status" -eq 0 ] || exit "$away_status"
     # head_commit_id binds the merge to the head this run verified: Forgejo's
     # REST API rejects a mismatched value with "head out of date" (verified
     # against a real instance), matching --match-head-commit/--sha above. tea
@@ -2911,7 +2761,6 @@ case "$PROVIDER" in
       forgejo_confirm_attempt=$((forgejo_confirm_attempt + 1))
     done
     if [ "$forgejo_confirm_rc" -ne 0 ]; then
-      fm_afk_contract_lock_release || true
       fm_lock_release "$MERGE_CONTROL_LOCK" || true
       MERGE_CONTROL_LOCK=
       [ -z "$merge_output" ] || printf 'error: > %s\n' "$merge_output" >&2
@@ -2919,7 +2768,6 @@ case "$PROVIDER" in
       exit 1
     fi
     persist_accepted_merge_authority || exit 1
-    fm_afk_contract_lock_release || true
     fm_lock_release "$MERGE_CONTROL_LOCK" || true
     MERGE_CONTROL_LOCK=
     ;;
@@ -2937,10 +2785,6 @@ fm_merge_outcome_report "$FM_HOME" "$STATE" "$ID" "$URL" self \
   "${FM_PR_MERGE_AUTHORITY:-}" || outcome_rc=$?
 case "$outcome_rc" in
   0) ;;
-  3)
-    printf 'actionable: merged %s but could not report it upward: this home has no readable secondmate identity or parent binding (.fm-secondmate-home, .fm-secondmate-parent)\n' \
-      "$URL" >&2
-    ;;
   *)
     printf 'actionable: merged %s but could not record the outcome for supervision\n' "$URL" >&2
     ;;

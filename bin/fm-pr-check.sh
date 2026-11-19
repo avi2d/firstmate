@@ -53,8 +53,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-parent-channel-lib.sh
-. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
@@ -106,7 +104,7 @@ pr_check_scan() {
     id=${id%.meta}
     fm_pr_task_id_valid "$id" || continue
     kind=$(sed -n 's/^kind=//p' "$meta" | tail -1)
-    case "$kind" in secondmate|scout) continue ;; esac
+    case "$kind" in scout) continue ;; esac
     url=$(pr_check_reported_url "$STATE/$id.status") || continue
     recorded=$(grep '^pr=' "$meta" | tail -1 | cut -d= -f2- || true)
     pr_check_pr_retired "$id" "$recorded" && continue
@@ -185,10 +183,7 @@ fi
 # arming a merge watch here would queue the mate itself for teardown as landed
 # work once that pull request merges.
 KIND=$(grep '^kind=' "$META" | tail -1 | cut -d= -f2- || true)
-if [ "$KIND" = secondmate ]; then
-  echo "error: $ID is a secondmate, not a delivery lane - $URL was reported on its status channel but belongs to a task in the mate's own home, which arms its own merge watch" >&2
-  exit 1
-fi
+case "${KIND:-ship}" in ship) ;; *) echo "error: $ID is not a delivery task" >&2; exit 1 ;; esac
 
 # A prior exact merged result may have queued its durable wake immediately
 # before interruption.
@@ -391,49 +386,7 @@ if command -v jq >/dev/null 2>&1; then
 else
   printf 'contributions: jq unavailable; coverage is unconfirmed\n' >&2
 fi
-# Opt-in config/ready-after-green: a no-mistakes PR is ready only once the
-# child's own status holds the checks-green report naming this exact PR, so a
-# PR registered while its checks are pending or failing publishes no ready
-# line. The report is read with the same test bin/fm-crew-state.sh uses, so
-# text around `PR <url> checks green` does not withhold the line.
-# The child's later done line still reaches the parent through
-# bin/fm-inactive-reconcile.sh, and registering again after the report
-# publishes this line. Only the last done line counts, so a later done that
-# does not report green withdraws an earlier one.
-fm_pr_check_ready_line_waits_for_green() {
-  local note
-  [ -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/ready-after-green" ] || return 1
-  case "$PROVIDER:$PR_MODE" in
-    gerrit:*|*:direct-PR|*:local-only) return 1 ;;
-  esac
-  note=$(grep -E '^done( \[at=[^]]*\])?: ' "$STATE/$ID.status" 2>/dev/null | tail -1 | sed -E 's/^done( \[at=[^]]*\])?: //' || true)
-  fm_dod_note_reports_ci_ready "$note" || return 0
-  case " $note " in
-    *"$URL"[^[:alnum:]]*) return 1 ;;
-  esac
-  return 0
-}
-
-# In a secondmate home the registration itself is a captain-facing fact:
-# publish the child's PR-ready line with the canonical URL just recorded, so it
-# reaches the parent whether or not the mate model appends anything
-# (bin/fm-parent-channel-lib.sh). A main home has no channel and this is a
-# silent no-op there. The poll is armed either way; a channel that cannot be
-# written is reported as actionable, and bin/fm-inactive-reconcile.sh still
-# delivers the child's own ready line on the next supervision poll.
-READY_LINE="done [key=child-pr-$ID]: child $ID PR ready: $URL"
-PR_MODE=$(grep '^mode=' "$META" | tail -1 | cut -d= -f2- || true)
 PR_YOLO=$(grep '^yolo=' "$META" | tail -1 | cut -d= -f2- || true)
-[ -z "$PR_MODE" ] || READY_LINE="$READY_LINE mode=$(fm_parent_channel_clean_note "$PR_MODE")"
-[ -z "$PR_YOLO" ] || READY_LINE="$READY_LINE yolo=$(fm_parent_channel_clean_note "$PR_YOLO")"
-READY_RC=0
-if ! fm_pr_check_ready_line_waits_for_green; then
-  fm_parent_channel_report "$FM_HOME" "$STATE" "$READY_LINE" || READY_RC=$?
-fi
-case "$READY_RC" in
-  0|1) ;;
-  *) printf 'actionable: PR %s is registered but its ready line did not reach the parent channel (rc=%s)\n' "$URL" "$READY_RC" >&2 ;;
-esac
 if [ "$PROVIDER" = github ] && [ "$PR_YOLO" = on ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ]; then
   "$SCRIPT_DIR/fm-procevent-merge-on-green.sh" arm >/dev/null \
     || printf 'merge-on-green: not armed, so %s merges on the supervised path\n' "$URL" >&2

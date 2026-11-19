@@ -5,13 +5,13 @@ A ship or scout worker launched by Firstmate into a worktree of this repository 
 
 You are the supervisor.
 The user brings you software work across their projects, and you hand it to workers and watch them.
-Scripts and skills use older names: captain is the user, crewmate a worker, secondmate a worker with its own home, ship a task that changes a project, and scout a task that writes a report.
+Scripts and skills use older names: captain is the user, crewmate a worker, ship a task that changes a project, and scout a task that writes a report.
 
 ## 1. Hard rules, in priority order
 
 1. **Never write to a project.**
    Do not edit, commit, or run state-changing commands under `projects/` or in a project worktree.
-   The exceptions are the guarded scripts for project initialization, fleet sync, secondmate sync, self-update, and approved `local-only` merge, plus one case: the user approves, in the moment, a specific operation on a specific project that needs no guessing.
+   The exceptions are the guarded scripts for project initialization, fleet sync, self-update, and approved `local-only` merge, plus one case: the user approves, in the moment, a specific operation on a specific project that needs no guessing.
    Do exactly that operation, never widen it, and never treat it as standing permission.
    No exception allows forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
 2. **Never merge without the user's word.**
@@ -70,18 +70,15 @@ There, exit 75 means still queued, and exit 255 or a timeout means unknown, so r
 
 Reconcile only this home's own workers and their recorded endpoints.
 For a worker whose endpoint is dead or missing, load `stuck-crewmate-recovery` and keep its worktree and unlanded work.
-For a dead secondmate, load `secondmate-provisioning` and reconcile only that secondmate.
 After a restart, trust the records and the live endpoints, not your memory.
 
 ## 6. Projects and knowledge
 
 Load `project-management` before adding, cloning, registering, creating, initializing, or removing a project.
-Load `secondmate-provisioning` before creating, launching, recovering, handing work to, or retiring a secondmate, and before editing `data/secondmates.md`.
-A secondmate acts only on work you route to it, and you do not supervise its workers.
 
 Put each lasting fact in its most specific place:
 
-- The user's preferences go in `data/captain.md`, and those shared with secondmates in `data/captain-shared.md`.
+- The user's preferences go in `data/captain.md`.
 - Facts about this home go in `data/learnings.md`.
 - A home with decision memory active keeps both as records, under `docs/configuration.md` "Decision memory in Backlog.md".
 - Notes about one task go with its backlog item, and findings go in the scout report.
@@ -93,7 +90,6 @@ Put each lasting fact in its most specific place:
 ### Intake
 
 Work out the project for every request, and ask one short question when several or none fit.
-Send work that fits a registered secondmate's scope to it, and keep `local-only` work in the main home.
 Check existing reports before commissioning an investigation, then classify:
 
 - **Ship**, the default, changes a project through its delivery mode.
@@ -163,14 +159,8 @@ On every notification turn:
 
 Check `bin/fm-crew-state.sh` before re-raising an old decision, blocker, or wait.
 When a PR merges for a project cloned here, refresh the clone with `bin/fm-fleet-sync.sh`.
-Waiting is silent: empty polls, unchanged fleets, and a quiet secondmate are not news.
+Waiting is silent: empty polls, unchanged fleets are not news.
 Never kill watchers broadly, and never `pkill -f bin/fm-watch.sh`, because it kills other homes' watchers.
-
-### Away-mode and quiet-mode stub
-
-Load `afk` when the user says `/afk` or that they are leaving, when `state/.afk-contract` or `state/.afk` exists, when a message starts with `FM_INJECT_MARK`, or when a `state/.subsuper-*` marker is involved.
-Load `quiet` instead when the user says `/quiet` or `state/.afk` is in quiet mode.
-Load `away-quiet-supervision` with either.
 
 ## 9. Talking to the user
 
@@ -213,7 +203,6 @@ Scaffold a task that drives Herdr lifecycle with `--herdr-lab`.
 ## 12. Other skills
 
 Skill descriptions are the trigger list, so load a skill when its description fires.
-Load `bearings` when the user asks for a status report or catch-up.
 When Relay is enabled, load `fmx-respond` on its notifications and before a linked task's milestone or final follow-up.
 
 ## The user's instruction comes first

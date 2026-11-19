@@ -247,24 +247,6 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-hold-reason-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-hold-reason-lib.sh"
-# shellcheck source=bin/fm-parent-channel-lib.sh
-# shellcheck disable=SC1091
-. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
-# shellcheck source=bin/fm-afk-contract.sh
-# shellcheck disable=SC1091
-. "$SCRIPT_DIR/fm-afk-contract.sh"
-
-PARENT_HOLD_PUBLISHED=0
-publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
-  local id=$1 occurrence=$2 verb=$3 note=$4 rc=0
-  PARENT_HOLD_PUBLISHED=0
-  fm_parent_channel_report "$FM_HOME" "$STATE" \
-    "$verb [key=captain-hold-$id-$occurrence]: captain hold $id: $(fm_parent_channel_clean_note "$note")" || rc=$?
-  case "$rc" in
-    0|1) PARENT_HOLD_PUBLISHED=1 ;;
-    *) printf 'actionable: task %s is held for the captain in this home but that did not reach the parent channel (rc=%s)\n' "$id" "$rc" >&2 ;;
-  esac
-}
 
 CAPTAIN_META_LOCK=
 CAPTAIN_META_LOCK_HELD=0
@@ -279,7 +261,6 @@ captain_hold_cleanup() {
     fm_lock_release "$CAPTAIN_CONTROL_LOCK" || true
     CAPTAIN_CONTROL_LOCK_HELD=0
   fi
-  fm_afk_contract_lock_release || true
 }
 trap captain_hold_cleanup EXIT
 
@@ -1195,7 +1176,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
 }
 
 command_hold() {
-  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
+  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set
   local existing_hold_kind='' existing_held='' preserve_hold_set=0 stored_reason original_body='' hold_status=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1299,8 +1280,6 @@ command_hold() {
   [ "$hold_kind" = captain ] || fail "task $id did not retain its captain hold"
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
-  occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
-  publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
   if [ -n "$origin" ]; then
     write_hold_origin "$id" "$(show_field "$show" body)" "$origin" || exit $?
   fi
@@ -1368,20 +1347,6 @@ apply_pending_retained_artifact() {  # <task-id>
   esac
 }
 
-# A captain hold is released only in an attended session. The away daemon flag
-# (state/.afk, bin/fm-wake-lib.sh fm_afk_mode) and the posture record
-# (state/.afk-contract, bin/fm-afk-contract.sh mode) are both read: either one
-# reading away refuses, a quiet record is a present captain, and no record is
-# attended. The check runs before any write, so a refusal leaves the hold and
-# the body untouched.
-RELEASE_AWAY_REASON='the away-posture record exists, and a captain hold is released only by the captain in an attended session; retry --release after the return archives the record'
-release_attended() {
-  if [ -e "$STATE/.afk" ] && [ "$(fm_afk_mode "$STATE")" = away ]; then
-    return 1
-  fi
-  ! fm_afk_contract_away_present "$STATE"
-}
-
 close_answered() {  # <task-id> <release-0-or-1>
   if [ "$2" = 1 ]; then
     tasks_axi unhold "$1" >/dev/null
@@ -1414,7 +1379,7 @@ remove_interrupted_answer_stamp() {  # <task-id>
 }
 
 command_answer() {
-  local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
+  local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1426,15 +1391,8 @@ command_answer() {
     shift
   done
   validate_slug task-id "$id"
-  if [ "$release" = 1 ] && ! release_attended; then
-    fail "task $id stays held: $RELEASE_AWAY_REASON"
-  fi
   load_decision "$decision_file"
   acquire_task_control_lock "$id"
-  if [ "$release" = 1 ]; then
-    fm_afk_contract_lock_hold "$STATE" || fail "task $id stays held: the away-posture record is locked"
-    release_attended || fail "task $id stays held: $RELEASE_AWAY_REASON"
-  fi
   require_tasks_axi
   task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
   show=$TASK_SHOW_OUTPUT
@@ -1442,9 +1400,8 @@ command_answer() {
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field "$show" body)
   if [ "$release" = 1 ]; then outcome=released; else outcome=answered; fi
-  # The occurrence the parent line names: the record about to be written is
+  # The the parent line names: the record about to be written is
   # one past those already in the body, and a retry names the newest one.
-  occurrence=$(( $(resolution_record_count "$body") + 1 ))
 
   if [ "$state" = "done" ]; then
     if body_has_resolution_record "$body"; then
@@ -1458,9 +1415,9 @@ command_answer() {
         || fail "task $id records this answer with mode ${recorded_mode:-unknown}; --release cannot reopen a closed task"
       remove_interrupted_answer_stamp "$id"
       if [ "$recorded_mode" = repaired ]; then
-        publish_parent_resolution_then_retire "$id" $((occurrence - 1)) "answered (repaired)"
+        reconcile_request_retire "$id"
       else
-        publish_parent_resolution_then_retire "$id" $((occurrence - 1)) answered
+        reconcile_request_retire "$id"
       fi
       printf 'answered: %s\n' "$id"
       return 0
@@ -1478,7 +1435,7 @@ command_answer() {
     [ "$(show_field "$show" state)" = "done" ] || fail "recording the answer reopened closed task $id"
     body_has_resolution_record "$(show_field "$show" body)" \
       || fail "captain-held task $id did not retain its durable resolution record"
-    publish_parent_resolution_then_retire "$id" "$occurrence" "answered (repaired)"
+    reconcile_request_retire "$id"
     printf 'repaired: %s\n' "$id"
     return 0
   fi
@@ -1502,7 +1459,7 @@ command_answer() {
         fail "could not close answered captain-held task $id"
       fi
       remove_interrupted_answer_stamp "$id"
-      publish_parent_resolution_then_retire "$id" $((occurrence - 1)) "$outcome"
+      reconcile_request_retire "$id"
       printf '%s: %s\n' "$outcome" "$id"
       return 0
     fi
@@ -1515,7 +1472,7 @@ command_answer() {
     show=$TASK_SHOW_OUTPUT
     body_has_resolution_record "$(show_field "$show" body)" \
       || fail "captain-held task $id did not retain its durable resolution record"
-    publish_parent_resolution_then_retire "$id" "$occurrence" "$outcome"
+    reconcile_request_retire "$id"
     printf '%s: %s\n' "$outcome" "$id"
     return 0
   fi
@@ -1528,7 +1485,7 @@ command_answer() {
     [ "$recorded_mode" = released ] && [ "$release" = 1 ] \
       || fail "task $id records this answer with mode ${recorded_mode:-unknown}; replay requires matching --release"
     remove_interrupted_answer_stamp "$id"
-    publish_parent_resolution_then_retire "$id" $((occurrence - 1)) released
+    reconcile_request_retire "$id"
     printf 'released: %s\n' "$id"
     return 0
   fi
@@ -1650,7 +1607,7 @@ sanitize_reconcile_provenance() {
 
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
-  local recorded_digest recorded_mode occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
+  local recorded_digest recorded_mode tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
   local resolve_rc
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1702,11 +1659,6 @@ command_answers() {
         continue
         ;;
     esac
-    if [ "$release_flag" = --release ] && ! release_attended; then
-      printf 'refused: %s (%s)\n' "$key" "$RELEASE_AWAY_REASON"
-      skipped=$((skipped + 1))
-      continue
-    fi
     resolve_rc=0
     id=$(resolve_entry "$origin" "$key" 2>"$err") || resolve_rc=$?
     id=${id%% *}
@@ -1757,11 +1709,10 @@ command_answers() {
           && closed_answer_replay_mode_compatible "$recorded_mode" "$body"; } \
         || { [ "$release_flag" = --release ] && [ "$state" != "done" ] \
           && [ "$hold_kind" != captain ] && [ "$recorded_mode" = released ]; }; then
-        occurrence=$(resolution_record_count "$body")
         case "$recorded_mode" in
-          repaired) publish_parent_resolution_then_retire "$id" "$occurrence" "answered (repaired)" ;;
-          released) publish_parent_resolution_then_retire "$id" "$occurrence" released ;;
-          *) publish_parent_resolution_then_retire "$id" "$occurrence" answered ;;
+          repaired) reconcile_request_retire "$id" ;;
+          released) reconcile_request_retire "$id" ;;
+          *) reconcile_request_retire "$id" ;;
         esac
         printf 'closed: %s\n' "$id"
         closed=$((closed + 1))
@@ -1846,16 +1797,6 @@ reconcile_request_read() {  # <task-id>; sets RECONCILE_REQUESTED/RECONCILE_SOUR
 reconcile_request_retire() {  # <task-id>
   rm -f -- "$(reconcile_request_path "$1")" \
     || fail "could not retire the pending reconcile request for $1"
-}
-
-publish_parent_resolution_then_retire() {  # <task-id> <occurrence> <note>
-  local id=$1 occurrence=$2 note=$3 request
-  request=$(reconcile_request_path "$id")
-  publish_parent_hold "$id" "$occurrence" resolved "$note"
-  if [ -e "$request" ] && [ "$PARENT_HOLD_PUBLISHED" != 1 ]; then
-    fail "could not publish the answered captain-held task $id to its parent"
-  fi
-  reconcile_request_retire "$id"
 }
 
 command_reconcile_requests() {
@@ -1948,7 +1889,7 @@ reconcile_list() {
 # The moot outcome. The evidence is what closes the call, and the `reconciled`
 # resolution mode is what keeps the record from claiming the captain answered.
 reconcile_close() {
-  local id=${1:-} evidence_file='' show state hold_kind body occurrence recorded_mode
+  local id=${1:-} evidence_file='' show state hold_kind body recorded_mode
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1969,7 +1910,6 @@ reconcile_close() {
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field "$show" body)
-  occurrence=$(( $(resolution_record_count "$body") + 1 ))
   if [ "$state" = "done" ]; then
     # An exact retry finishes an interrupted close and stays idempotent; a
     # different evidence text on an already closed call is refused.
@@ -1979,11 +1919,7 @@ reconcile_close() {
       || fail "task $id records a different resolution; it cannot be reconciled again"
     [ "$(recorded_resolution_mode "$body" || true)" = reconciled ] \
       || fail "task $id was not closed by reconciliation"
-    occurrence=$(resolution_record_count "$body")
     remove_interrupted_answer_stamp "$id"
-    publish_parent_hold "$id" "$occurrence" resolved reconciled
-    [ "$PARENT_HOLD_PUBLISHED" = 1 ] \
-      || fail "could not publish the reconciled captain-held task $id to its parent"
     reconcile_request_retire "$id"
     printf 'reconciled: %s\n' "$id"
     return 0
@@ -1995,7 +1931,6 @@ reconcile_close() {
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     [ "$recorded_mode" = reconciled ] \
       || fail "task $id records this resolution with mode ${recorded_mode:-unknown}; it is not a reconciliation retry"
-    occurrence=$(resolution_record_count "$body")
   else
     write_resolution_record "$id" reconciled "$body"
   fi
@@ -2004,9 +1939,6 @@ reconcile_close() {
   task_show_or_fail "$id" "task $id disappeared after closing"
   body_has_resolution_record "$(show_field "$show" body)" \
     || fail "captain-held task $id did not retain its durable resolution record"
-  publish_parent_hold "$id" "$occurrence" resolved reconciled
-  [ "$PARENT_HOLD_PUBLISHED" = 1 ] \
-    || fail "could not publish the reconciled captain-held task $id to its parent"
   reconcile_request_retire "$id"
   printf 'reconciled: %s\n' "$id"
 }

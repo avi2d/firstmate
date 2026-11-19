@@ -31,8 +31,6 @@ SCRIPT_DIR="$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd
 . "$SCRIPT_DIR/fm-lease-lib.sh"
 # shellcheck source=bin/fm-supervision-engine-lib.sh
 . "$SCRIPT_DIR/fm-supervision-engine-lib.sh"
-# shellcheck source=bin/fm-afk-contract.sh
-. "$SCRIPT_DIR/fm-afk-contract.sh"
 
 DRAIN_TMP=
 DRAIN_VIEW_TMP=
@@ -587,10 +585,7 @@ EOF
 # main last drained (docs/supervision-host.md "Captain outcomes"). Off Pi this
 # presentation is what the Pi branch's transcript entries are. It runs only for
 # main, only where fm_supervision_host_outcomes_drained holds (the Pi branch
-# extension owns this path on Pi), and never while an away record exists,
-# because those outcomes wait for the return; quiet mode's record is a present
-# captain (bin/fm-afk-contract.sh AWAY OR QUIET). Bounded, and silent when
-# nothing is new or unprocessed.
+# extension owns this path on Pi).
 #   - Captain outcomes come first and never wait behind routine ones. Every
 #     unprocessed captain row is presented on every drain until main
 #     acknowledges it, collapsed to one line per task: the task's newest
@@ -620,9 +615,7 @@ EOF
 # before it prints leaves every row unread. The budgets count bytes. When jq is
 # missing, the store cannot be read or projected, the section cannot be printed, or its read
 # cursor cannot advance, the section says so on stderr and fails, and the drain exits
-# nonzero after the rest of its presentation, so a caller such as the return
-# (bin/fm-afk-return.sh) keeps its catch-up gated instead of clearing over
-# outcomes a later drain would present again.
+# nonzero after printing the rest of its output.
 print_branch_outcomes_section() {
   local config rows through captain routine line seq task task_line target i
   local text='' used=0 shown=0 held=0 bytes item_bytes=600 captain_bytes=4000 routine_bytes=2000
@@ -632,7 +625,6 @@ print_branch_outcomes_section() {
   config=${FM_CONFIG_OVERRIDE:-$FM_HOME/config}
   fm_supervision_host_outcomes_drained "$config" || return 0
   [ -s "$STATE/branch-outcomes.jsonl" ] || return 0
-  ! fm_afk_contract_away_present "$STATE" || return 0
   if ! command -v jq >/dev/null 2>&1; then
     printf 'BRANCH OUTCOMES SKIPPED: jq is not installed, so the outcome store cannot be presented; nothing was marked read, and these outcomes are presented once jq is back.\n' >&2
     return 1
@@ -911,19 +903,11 @@ if [ -n "$ACK_THROUGH" ]; then
       BEGIN { while ((getline line < seqs) > 0) if (line ~ /^[0-9]+$/) keep[line] = 1 }
       NF < 5 || $2 !~ /^[0-9]+$/ || $2 > cutoff || !($2 in keep) { print }
     ' "$FM_WAKE_QUEUE" > "$DRAIN_TMP" || exit 1
-    fm_wake_commit_secondmate_stall_receipts_through "$ACK_THROUGH" "$ELIGIBLE_ROWS_FILE" || {
-      echo "wake drain: secondmate stall receipt could not be recorded safely" >&2
-      exit 1
-    }
   else
     awk -F '\t' -v cutoff="$ACK_THROUGH" -v seqs="$MAIN_ROWS_FILE" '
       BEGIN { while ((getline line < seqs) > 0) owned[line]=1 }
       NF < 5 || $2 !~ /^[0-9]+$/ || $2 > cutoff || !($2 in owned) { print }
     ' "$FM_WAKE_QUEUE" > "$DRAIN_TMP" || exit 1
-    fm_wake_commit_secondmate_stall_receipts_through "$ACK_THROUGH" "$MAIN_ROWS_FILE" || {
-      echo "wake drain: secondmate stall receipt could not be recorded safely" >&2
-      exit 1
-    }
   fi
   HANDOFF_ACK=
   if [ "$ACTOR" = main ] && [ -f "$STATE/.supervision-handoff-pending" ]; then

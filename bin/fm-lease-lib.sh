@@ -66,29 +66,7 @@
 #     first claim of a task no one has leased. An unmarked caller in any other
 #     home with no lease file for the task returns before taking any lock, so a
 #     home that never runs a branch is unchanged byte for byte.
-#   - Role partition (fm_lease_forbid_branch): actions MAIN alone owns -
-#     merging a PR, landing local-only work, spawning workers, answering a
-#     decision, retiring a secondmate - refuse the branch actor outright,
-#     lease or no lease, while the home is attended. While a confirmed,
-#     readable, live away record exists (bin/fm-afk-contract.sh validate and
-#     mode, never quiet mode's record, whose captain is present; docs/pi-
-#     supervision-branch.md "Postures"), main is parked and its STANDING authority
-#     relocates to the branch for exactly the actions whose guarded script
-#     opts in with --away-relocated: a PR merge, a fresh spawn of queued work,
-#     and a decision answer. Each guarded script keeps its own mechanical gate;
-#     bin/fm-branch-prompt.sh "Postures" owns how the branch judges the
-#     captain's away words before invoking one. The
-#     relocation grants nothing beyond what main could do attended: it only
-#     changes which actor may reach the guarded script's own gate. An action
-#     that has no record-side gate of its own - landing local-only work or
-#     retiring a secondmate - is never relocated and keeps refusing the branch
-#     in both postures. An archived, absent, unconfirmed, or unreadable record
-#     is absence: the
-#     attended refusal, byte for byte. The record is validated immediately
-#     before the guarded script's first persistent side effect and the lock is
-#     not held across the operation, so a return's archive is never blocked by
-#     a long spawn; a spawn or answer that completes seconds after archive is
-#     standing-authority work the captain had queued anyway (accepted,
+# MAIN alone may merge, land local work, start new tasks, and answer decisions.
 #     confused-agent-grade, like the merge residuals fm-pr-merge.sh documents).
 #   - "backlog" is a reserved claimable resource name used by the branch
 #     prompt around its own data/backlog.md writes. This is deliberately
@@ -302,32 +280,10 @@ fm_lease_guard_release() {
   fm_lock_release "$lock"
 }
 
-# fm_lease_away_relocated: 0 iff main's standing authority is relocated to the
-# branch actor right now - a confirmed, readable, live away record exists in
-# $STATE, as bin/fm-afk-contract.sh's own validate and mode subcommands judge
-# it (the header's role-partition paragraph). Read fresh on every call, never
-# cached, because the record can be archived between two guarded actions.
-fm_lease_away_relocated() {
-  [ -f "$STATE/.afk-contract" ] || return 1
-  FM_STATE_OVERRIDE="$STATE" "$FM_LEASE_LIB_DIR/fm-afk-contract.sh" validate >/dev/null 2>&1 || return 1
-  [ "$(FM_STATE_OVERRIDE="$STATE" "$FM_LEASE_LIB_DIR/fm-afk-contract.sh" mode 2>/dev/null)" != quiet ]
-}
-
-# fm_lease_forbid_branch <action-label> [--away-relocated]: refuse (exit
-# FM_LEASE_REFUSE_EXIT) when the current actor is the supervision branch.
-# Guards the main-owned role partition; a home with no branch never sets the
-# actor and always passes. With --away-relocated, the branch passes instead
-# while fm_lease_away_relocated holds (main is parked under the away-posture
-# record), and the calling script's own gate decides what may happen next;
-# without the flag the action is never relocated in any posture.
 fm_lease_forbid_branch() {
-  local action=$1 relocatable=${2:-} actor
+  local action=$1 actor
   actor=$(fm_lease_actor) || exit "$FM_LEASE_REFUSE_EXIT"
   [ "$actor" = branch ] || return 0
-  if [ "$relocatable" = --away-relocated ] && fm_lease_away_relocated; then
-    echo "note: $action proceeds for the supervision branch under the away-posture record: main is parked and its standing authority is relocated; this script's own gate still applies (docs/pi-supervision-branch.md \"Postures\")" >&2
-    return 0
-  fi
   echo "error: $action refused - the supervision branch never performs this action; report the outcome and leave it to main (role partition: docs/pi-supervision-branch.md)" >&2
   exit "$FM_LEASE_REFUSE_EXIT"
 }

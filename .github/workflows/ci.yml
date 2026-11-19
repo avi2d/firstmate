@@ -660,7 +660,6 @@ jobs:
           # exit 0 that does not reach FM_TEST_COMPLETE or whose ok count
           # disagrees with the plan. Per-suite totals live in the test files.
           /bin/bash bin/fm-test-tap-verify.sh tests/fm-fleet-snapshot-view.test.sh
-          /bin/bash bin/fm-test-tap-verify.sh tests/fm-bearings-snapshot.test.sh
 
           # The full public-followup suite is not a stock-bash snapshot; run only
           # the empty-lock register regression under real /bin/bash 3.2.

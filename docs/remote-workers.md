@@ -5,15 +5,19 @@ Operators who place projects on an execution home use this reference, and so doe
 
 An execution home is an agentless Firstmate home on an SSH-reachable host.
 It holds project clones, worker worktrees, and the Herdr panes the workers run in.
-This home keeps the backlog, the task records, the status stream, and every captain-facing decision.
-A remote second mate is a different arrangement, where a whole supervising home lives on the other host, and [Remote second mates](remote-secondmates.md) covers it.
+This home keeps the backlog, the task records, the status stream, and every decision for the user.
 
 ## Set up an execution home
 
-1. Prepare the host exactly as [Remote second mates](remote-secondmates.md#prerequisites) describes, including the SSH alias and the fixed remote entrypoint.
-2. Seed the route with `fm-remote-home-seed.sh --exec`.
-   [Execution home routes](configuration.md#execution-home-routes) owns the `data/remote-homes.md` record and the seeded markers.
-3. Annotate each placed project with `host=<route>` in `data/projects.md`.
+1. Configure an SSH alias with public-key authentication and strict host-key verification.
+   Do not enable agent forwarding.
+2. Clone Firstmate on the execution host.
+   Put a symlink to that clone's `bin/fm-remote-entrypoint.sh` on the account's non-interactive SSH `PATH`.
+   The entrypoint accepts encoded arguments for tracked Firstmate commands, not shell command strings.
+   The host needs Herdr, the selected worker tool, and access to the project origins.
+3. Seed the route with `bin/fm-remote-home-seed.sh --exec`.
+   [Execution home routes](configuration.md#execution-home-routes) describes the record and its markers.
+4. Annotate each placed project with `host=<route>` in `data/projects.md`.
    `fm-project-mode.sh --placement <project>` reads that annotation.
 
 ## Lifecycle
@@ -37,29 +41,13 @@ The item then stays queued and is dispatched again at the next queue review.
 `fm-teardown.sh <task>` on a remote worker first asks the execution home to clean up its side.
 That host-side teardown applies the ordinary landed-work test, so unlanded work is refused there exactly as it is for a local worker.
 Only after the host confirms does this home archive the status stream, clear its task records, retire the task's feed cursor, and move the backlog item to Done with its PR link or scout report.
-A scout's report must already have reached this home through the status feed, and this home's captain-call completion gate, `fm-captain-hold.sh verify`, must pass before the host is asked to do anything.
-The execution home holds no backlog or captain-call inventory, so it skips that gate and relies on this home's verdict.
+A scout's report must already have reached this home through the status feed, and this home's waiting-on-you gate, `fm-captain-hold.sh verify`, must pass before the host is asked to do anything.
+The execution home holds no backlog or decision inventory, so it skips that gate and relies on this home's verdict.
 
 An SSH exit 255 or a budget timeout means the host's completion is unknown.
 Every local record then stays as it was, and running the same teardown again reconciles it.
 A host whose record is already gone answers `teardown=absent`, so the rerun finishes the local side.
 A host refusal is relayed with its reason, and nothing local changes.
-
-## Backlog reclaim
-
-`fm-backlog-reclaim.sh <secondmate-id> [--dry-run] --all|<item-key>...` moves Queued items from a remote second mate's backlog into this home's backlog.
-Use it when retiring a remote second mate whose projects now run on an execution home.
-
-- In-flight and Done items are refused, and so is a blocker that the selected set would strand.
-- A blocked-by link whose blocker is Done in the second mate's backlog or its `data/done-archive.md` is already satisfied, so the second mate clears it rather than refusing the move.
-- `--dry-run` reads the second mate's backlog, rehearses the move on scratch copies of both backlogs, and changes nothing.
-- Notes, holds, `--until` dates, and blocked-by links travel with each item.
-
-The move has two legs.
-The second mate stages the selected items into a confined outbox and removes them from its own backlog in one step.
-This home fetches that outbox, inserts the items into its backlog, and then asks the second mate to release the outbox, naming its exact length and SHA-256.
-The outbox is the only copy between those legs, so a lost reply on either leg leaves it in place, and a rerun finishes the same staged set without duplicating an item.
-While a staged set exists, a reclaim that names a different set is refused.
 
 ## Exit codes across the transport
 
@@ -78,10 +66,10 @@ The local-transport end-to-end test drives the whole lifecycle through the real 
 bin/fm-test-run.sh tests/fm-remote-worker-local-e2e.test.sh
 ```
 
-The cleanup, post-merge sync, and reclaim paths have their own tests:
+Cleanup and post-merge sync have their own test:
 
 ```sh
-bin/fm-test-run.sh tests/fm-remote-worker-teardown.test.sh tests/fm-backlog-reclaim.test.sh
+bin/fm-test-run.sh tests/fm-remote-worker-teardown.test.sh
 ```
 
 A real-host proof runs its panes in a named `fm-lab-` Herdr session that only the host's own `bin/fm-herdr-lab.sh` creates and removes, so the execution home's fleet session is never touched.

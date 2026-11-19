@@ -187,7 +187,6 @@ unset CDPATH \
 
 usage() {
   echo "usage: fm-claude-trust.sh <worktree> <project>" >&2
-  echo "       fm-claude-trust.sh --secondmate-home <home> <id>" >&2
   echo "       fm-claude-trust.sh --lab-home <home>" >&2
   exit 2
 }
@@ -196,19 +195,10 @@ usage() {
 # names what the argument was expected to be so every shared refusal below reads
 # correctly in both modes.
 case "${1:-}" in
-  --secondmate-home)
-    [ "$#" -eq 3 ] || usage
-    MODE=secondmate-home
-    TARGET_ARG=$2
-    SUB_ID=$3
-    PROJ_ARG=
-    SCOPE_NOUN="secondmate home"
-    ;;
   --lab-home)
     [ "$#" -eq 2 ] || usage
     MODE=lab-home
     TARGET_ARG=$2
-    SUB_ID=
     PROJ_ARG=
     SCOPE_NOUN="lab home"
     ;;
@@ -219,7 +209,6 @@ case "${1:-}" in
     [ "$#" -eq 2 ] || usage
     MODE=worktree
     TARGET_ARG=$1
-    SUB_ID=
     PROJ_ARG=$2
     SCOPE_NOUN="task worktree"
     ;;
@@ -345,38 +334,6 @@ elif [ "$MODE" = lab-home ]; then
   LAB_COMMON=$(common_dir_of "$TARGET_REAL") || true
   [ -n "$LAB_GIT_DIR" ] && [ "$LAB_GIT_DIR" = "$LAB_COMMON" ] \
     || refuse "'$TARGET_REAL' is a linked worktree, not the primary checkout a lab primary launches in"
-else
-  # The seed evidence, in the order that names the most useful reason first: the
-  # marker decides whether this is a secondmate home at all, the id decides
-  # whose, and the instance files and operational directories decide whether it
-  # is the shape bin/fm-home-seed.sh leaves behind. The marker is the token the
-  # whole boundary rests on, so it is judged as a file rather than as a value: a
-  # symlink is refused outright rather than followed, because a link is a way to
-  # make some other file's bytes stand in for the seed, and a marker this user
-  # does not own was planted by someone else.
-  [ -n "$SUB_ID" ] || refuse "no secondmate id was supplied, so '$TARGET_REAL' cannot be matched against its seed marker"
-  SUB_MARKER="$TARGET_REAL/.fm-secondmate-home"
-  [ ! -L "$SUB_MARKER" ] || refuse "'$SUB_MARKER' is a symlink; a seeded secondmate home carries the marker as a regular file"
-  [ -f "$SUB_MARKER" ] || refuse "'$TARGET_REAL' carries no .fm-secondmate-home marker, so it is not a seeded secondmate home"
-  [ -O "$SUB_MARKER" ] || refuse "'$SUB_MARKER' is not owned by this user"
-  SUB_MARKER_ID=$(cat "$SUB_MARKER" 2>/dev/null) || true
-  [ "$SUB_MARKER_ID" = "$SUB_ID" ] || refuse "'$TARGET_REAL' is marked for secondmate '${SUB_MARKER_ID:-unknown}', not '$SUB_ID'"
-  [ -f "$TARGET_REAL/AGENTS.md" ] || refuse "'$TARGET_REAL' has no AGENTS.md, so it is not a firstmate home"
-  [ -d "$TARGET_REAL/bin" ] || refuse "'$TARGET_REAL' has no bin/, so it is not a firstmate home"
-  for sub_dir_name in data state config projects; do
-    sub_dir="$TARGET_REAL/$sub_dir_name"
-    if [ -L "$sub_dir" ] && [ ! -e "$sub_dir" ]; then
-      refuse "'$sub_dir' is a broken symlink, so this home's $sub_dir_name directory cannot be shown to stay inside it"
-    fi
-    [ -e "$sub_dir" ] || continue
-    [ -d "$sub_dir" ] || refuse "'$sub_dir' is not a directory, so '$TARGET_REAL' is not a seeded secondmate home"
-    sub_dir_real=$(real_dir "$sub_dir") || true
-    [ -n "$sub_dir_real" ] || refuse "'$sub_dir' cannot be resolved"
-    case "$sub_dir_real" in
-      "$TARGET_REAL"/*) ;;
-      *) refuse "'$sub_dir' resolves to '$sub_dir_real', outside the home, so '$TARGET_REAL' is not a safe secondmate home" ;;
-    esac
-  done
 fi
 
 # The store write needs node, and a missing interpreter refuses like every other

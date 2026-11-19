@@ -95,7 +95,6 @@ if ! fm_session_lock_owned_by_self "$STATE"; then
 fi
 
 # Away mode owns the watcher and its own triage; never park and never wake.
-[ -e "$STATE/.afk" ] && allow_stop
 
 # The ceiling bounds hook-driven turns. Reaching it while supervision is still
 # needed is told once, loudly, instead of supervision going quiet unannounced.
@@ -148,7 +147,7 @@ while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
   while kill -0 "$ARM_PID" 2>/dev/null; do
     # Stand down when a newer Stop claimed the baton, the session lock moved,
     # or away mode started and its daemon now owns the watcher.
-    if ! park_still_ours || ! fm_session_lock_owned_by_self "$STATE" || [ -e "$STATE/.afk" ]; then
+    if ! park_still_ours || ! fm_session_lock_owned_by_self "$STATE"; then
       allow_stop
     fi
     if [ "$PARK_TIMEOUT" -gt 0 ] && [ "$waited" -ge "$PARK_TIMEOUT" ]; then
@@ -164,7 +163,6 @@ while [ "$attempt" -lt "$ARM_ATTEMPTS" ]; do
   ARM_PID=
 
   park_still_ours || allow_stop
-  [ -e "$STATE/.afk" ] && allow_stop
 
   if grep -Eq "$ACTIONABLE_RE" "$ARM_OUT" 2>/dev/null; then
     ACTIONABLE=1

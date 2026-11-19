@@ -55,9 +55,6 @@ git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/main
 cat > "$PARENT/data/projects.md" <<EOF
 - scratch [direct-PR] - a fixture scratch project (added $SEED_DATE)
 EOF
-cat > "$PARENT/data/secondmates.md" <<'EOF'
-- winbox - Owns winbox overflow (host: winwsl; root: /home/avi2d/firstmate; home: /home/avi2d/fm-winbox; scope: Overflow work; projects: other; added 2026-09-30)
-EOF
 
 cat > "$FAKEBIN/fake-ssh" <<'SH'
 #!/usr/bin/env bash
@@ -107,17 +104,16 @@ pass "fm-remote-exec-seed: --exec seeds the route and reports the provisioned ho
 REG="$PARENT/data/remote-homes.md"
 [ -f "$REG" ] || fail "the seed wrote no execution-home registry"
 [ "$(grep -c '^- execone ' "$REG")" = 1 ] || fail "the registry holds no single execone record: $(cat "$REG")"
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$ROOT/bin/fm-secondmate-registry-lib.sh"
-[ "$(secondmate_registry_field "$REG" execone host)" = exec-alias ] || fail "the registry host misrecorded"
-[ "$(secondmate_registry_field "$REG" execone root)" = "$REMOTE_ROOT" ] || fail "the registry root misrecorded"
-[ "$(secondmate_registry_field "$REG" execone home)" = "$REMOTE_HOME" ] || fail "the registry home misrecorded"
-[ "$(secondmate_registry_field "$REG" execone session)" = lab-x ] || fail "the registry session misrecorded"
-[ "$(secondmate_registry_field "$REG" execone projects)" = scratch ] || fail "the registry projects misrecorded"
+# shellcheck source=bin/fm-remote-registry-lib.sh
+. "$ROOT/bin/fm-remote-registry-lib.sh"
+[ "$(fm_remote_registry_field "$REG" execone host)" = exec-alias ] || fail "the registry host misrecorded"
+[ "$(fm_remote_registry_field "$REG" execone root)" = "$REMOTE_ROOT" ] || fail "the registry root misrecorded"
+[ "$(fm_remote_registry_field "$REG" execone home)" = "$REMOTE_HOME" ] || fail "the registry home misrecorded"
+[ "$(fm_remote_registry_field "$REG" execone session)" = lab-x ] || fail "the registry session misrecorded"
+[ "$(fm_remote_registry_field "$REG" execone projects)" = scratch ] || fail "the registry projects misrecorded"
 pass "fm-remote-exec-seed: the registry records the route with its per-route session"
 
 [ "$(cat "$REMOTE_HOME/.fm-exec-home")" = execone ] || fail "the execution marker misrecorded"
-[ -e "$REMOTE_HOME/.fm-secondmate-home" ] && fail "the execution home carries a secondmate marker"
 [ "$(cat "$REMOTE_HOME/config/backlog-backend")" = manual ] || fail "the execution home did not opt out of the task board"
 [ "$(cat "$REMOTE_HOME/config/herdr-session")" = lab-x ] || fail "the execution home did not record its Herdr session"
 [ -d "$REMOTE_HOME/projects/scratch/.git" ] || fail "the execution home did not clone its project"
@@ -145,12 +141,6 @@ assert_contains "$(cat "$TMP_ROOT/seed.err")" "already registered to a different
 [ "$(grep -c '^- execone ' "$REG")" = 1 ] || fail "a refused duplicate rewrote the registry"
 pass "fm-remote-exec-seed: an id bound to a different home is refused without dialing"
 
-seed --exec winbox exec-alias "$REMOTE_ROOT" "$TMP_ROOT/remote-clash" scratch > "$TMP_ROOT/seed.out" 2>"$TMP_ROOT/seed.err" \
-  && fail "an id from the secondmate registry seeded instead of being refused"
-assert_contains "$(cat "$TMP_ROOT/seed.err")" "already registered in" "the cross-registry refusal did not name the binding"
-assert_contains "$(cat "$TMP_ROOT/seed.err")" "secondmates.md" "the cross-registry refusal did not name the other registry"
-pass "fm-remote-exec-seed: an id present in the secondmate registry is refused"
-
 before=$(ssh_count)
 seed --exec --session 'bad name' badid exec-alias "$REMOTE_ROOT" "$TMP_ROOT/remote-bad" scratch > "$TMP_ROOT/seed.out" 2>"$TMP_ROOT/seed.err" \
   && fail "an unsafe session seeded instead of being refused"
@@ -168,9 +158,6 @@ mkdir -p "$KINDHOME"
 printf 'execone\n' > "$KINDHOME/.fm-exec-home"
 exec_out=$(FM_HOME="$KINDHOME" "$ROOT/bin/fm-remote-doctor.sh" 2>&1) || true
 assert_contains "$exec_out" "execution home" "the readiness report did not name the execution home kind"
-rm -f -- "$KINDHOME/.fm-exec-home"
-mate_out=$(FM_HOME="$KINDHOME" "$ROOT/bin/fm-remote-doctor.sh" 2>&1) || true
-assert_contains "$mate_out" "second mate" "the readiness report stopped naming the secondmate kind"
 pass "fm-remote-exec-seed: the real readiness report names the home kind it inspected"
 
 echo "# fm-remote-exec-seed.test.sh: all assertions passed"
