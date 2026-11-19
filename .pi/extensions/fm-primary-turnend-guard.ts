@@ -506,7 +506,7 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
     let child: ChildProcess;
     try {
       child = spawn(invocation.command, invocation.args, {
-        stdio: ["pipe", "ignore", "pipe"],
+        stdio: ["ignore", "ignore", "pipe"],
       });
     } catch {
       resolveResult({ code: 0, stderr: "" });
@@ -518,8 +518,6 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
     });
     child.on("error", () => resolveResult({ code: 0, stderr: "" }));
     child.on("close", (code) => resolveResult({ code: code ?? 0, stderr }));
-    child.stdin?.on("error", () => {});
-    child.stdin?.end('{"stop_hook_active":false}');
   });
 }
 
