@@ -710,37 +710,6 @@ if [ "$PRIMARY_HARNESS" = pi ] || [ "$PRIMARY_HARNESS" = pi-signed ]; then
     printf 'PI_WATCH_EXTENSION: not loaded - approve Pi project trust once per clone, then restart %s so %s and %s auto-load for turn-end guard and background wake coverage; use -e %s -e %s only if project hooks are not trusted\n' "$PI_RESTART_COMMAND" "$PI_TURNEND_EXT" "$PI_EXT" "$PI_TURNEND_EXT" "$PI_EXT"
   fi
 fi
-# omp (Oh My Pi) has no project-trust gate: it auto-discovers <cwd>/.omp/extensions
-# with no dialog, so the only ways both tracked primary extensions fail to load
-# are a session started outside this home, an extension disabled in the omp
-# config, or a build older than the tracked file. The markers carry the loaded
-# build plus the loading pid, exactly as the Pi ones do (bin/fm-wake-lib.sh).
-if [ "$PRIMARY_HARNESS" = omp ]; then
-  OMP_EXT="$FM_ROOT/.omp/extensions/fm-primary-omp-watch.ts"
-  OMP_TURNEND_EXT="$FM_ROOT/.omp/extensions/fm-primary-turnend-guard.ts"
-  OMP_WATCH_MARKER="$STATE/.omp-watch-extension-loaded"
-  OMP_TURNEND_MARKER="$STATE/.omp-turnend-extension-loaded"
-  OMP_LOCK="$STATE/.lock"
-  OMP_WATCH_VERSION=$(fm_pi_extension_version "$OMP_EXT" || printf '')
-  OMP_TURNEND_VERSION=$(fm_pi_extension_version "$OMP_TURNEND_EXT" || printf '')
-  if ! fm_pi_extension_loaded "$OMP_WATCH_MARKER" "$OMP_WATCH_VERSION" "$OMP_LOCK" \
-    || ! fm_pi_extension_loaded "$OMP_TURNEND_MARKER" "$OMP_TURNEND_VERSION" "$OMP_LOCK"; then
-    OMP_HOME_PHYS=$(cd -P "$FM_HOME" 2>/dev/null && pwd -P || printf '%s' "$FM_HOME")
-    OMP_ROOT_PHYS=$(cd -P "$FM_ROOT" 2>/dev/null && pwd -P || printf '%s' "$FM_ROOT")
-    if [ "$OMP_HOME_PHYS" = "$OMP_ROOT_PHYS" ]; then
-      printf 'OMP_WATCH_EXTENSION: not loaded - restart omp with this home as its working directory so %s and %s auto-load from .omp/extensions/ for turn-end guard and background wake coverage; pass -e %s -e %s only when omp must start from another directory, never together with auto-discovery (omp loads a file named both ways twice)\n' "$OMP_TURNEND_EXT" "$OMP_EXT" "$OMP_TURNEND_EXT" "$OMP_EXT"
-    else
-      # shellcheck disable=SC2016  # backticks are literal text in the diagnostic
-      printf 'OMP_WATCH_EXTENSION: not loaded - exit omp and relaunch through `fm <project>` (the launcher sets FM_HOME and --cwd) so %s and %s auto-load for this home; a bare omp or /resume from the firstmate checkout does not register the extensions for this home\n' "$OMP_TURNEND_EXT" "$OMP_EXT"
-    fi
-    # Warning only: name the cause when existing facts establish it.
-    OMP_MARKER_PID=$(sed -n '2p' "$OMP_WATCH_MARKER" 2>/dev/null || true)
-    OMP_CURRENT_PID=${REBUILDING_SESSION_PID:-$(sed -n '1p' "$OMP_LOCK" 2>/dev/null || true)}
-    if [ -n "$OMP_MARKER_PID" ] && [ -n "$OMP_CURRENT_PID" ] && [ "$OMP_MARKER_PID" != "$OMP_CURRENT_PID" ]; then
-      printf 'OMP_WATCH_CAUSE: the extension marker %s names pid %s, which is not this session (pid %s)\n' "$OMP_WATCH_MARKER" "$OMP_MARKER_PID" "$OMP_CURRENT_PID"
-    fi
-  fi
-fi
 "$SCRIPT_DIR/fm-supervision-instructions.sh" \
   --harness "$PRIMARY_HARNESS" \
   --read-only "$READ_ONLY"
