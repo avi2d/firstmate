@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-fmx_env_get() {
+fm_env_get() {
   local key=$1 file=$2 line val
   [ -f "$file" ] || return 0
   line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$file" 2>/dev/null | tail -n1) || return 0

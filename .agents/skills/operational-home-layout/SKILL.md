@@ -19,7 +19,7 @@ README.md            public overview and development notes
 .claude/mods/        Claude Code mods (function-hooks plugins), committed; Calm's module may load through CLAUDE_CODE_ENABLE_FUNCTION_HOOKS or tengu_plugin_hooks_modules, but activates only when CLAUDE_CODE_ENABLE_FUNCTION_HOOKS is exactly "1" and is otherwise a complete no-op (docs/calm.md)
 skills/              standalone public installer-facing skills, committed; not loaded by firstmate
 bin/                 helper scripts, committed; read each script's header before first use
-.env                 optional Relay pairing token (presence-gates section 14), typed dispatch provider, model, and key settings (docs/configuration.md "Typed dispatch resolution"); LOCAL, gitignored
+.env                 optional typed dispatch provider, model, and key settings (docs/configuration.md "Typed dispatch resolution"); LOCAL, gitignored
 config/crew-harness  crewmate harness override; LOCAL, gitignored; absent or "default" = same as firstmate. Inherited as the literal file: a concrete primary adapter value also controls a secondmate home's own crewmates (section 4)
 config/claude-permission-mode  optional worker permission posture; LOCAL, gitignored; schema and failover: docs/configuration.md "Claude permission mode" and "Persistent managed-policy failover"
 config/codex-approval-mode    optional worker approval posture; LOCAL, gitignored; schema and failover: docs/configuration.md "Codex automatic approval review" and "Persistent managed-policy failover"
@@ -67,9 +67,8 @@ config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitig
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/watched-tools.json  optional list of the tools this home depends on, read by the update check armed with bin/fm-tool-update-check.sh; LOCAL, gitignored, firstmate-maintained but human-editable, and NOT inherited by secondmate homes; see docs/configuration.md "Watched tool updates"
 config/self-update-source  optional one-line "<remote> <branch>" that /updatefirstmate follows instead of origin, and nothing else does; LOCAL, gitignored, and not inherited; an unusable file stops the update, so report it to the captain and never edit or remove it; see docs/configuration.md "Self-update source"
-config/watch.env     optional home-local watcher tuning as exported shell assignments; LOCAL, gitignored, never removed by bootstrap; loaded by bin/fm-watch-arm.sh before x-mode.env; see docs/configuration.md "Relay (.env)"
+config/watch.env     optional home-local watcher tuning as exported shell assignments; LOCAL, gitignored; see docs/configuration.md "Open-decision reminders"
 config/usage-warner  optional Claude usage-window thresholds for the opt-in macOS threshold warner armed with bin/fm-usage-warner.sh; LOCAL, gitignored, and NOT inherited by secondmate homes; see docs/configuration.md "Local Claude usage warner"
-config/x-mode.env    generated Relay watcher cadence; LOCAL, gitignored; source before arming watcher when present
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
   captain.md         this home's domain-local captain preferences and working style; LOCAL, gitignored, canonical even if harness memory mirrors it, and updated with inspect-then-update
@@ -104,7 +103,7 @@ state/               runtime records and signals; gitignored
   <id>.meta          task metadata; each producer script's header owns its exact fields and mutation contract, with docs/configuration.md routing operator-facing backend and trace-context details
   .rex-mark-<id> .rex-progress-<id> .rex-tint-<id>  opt-in Rex attention-mark, validation-progress, and tint caches written by bin/fm-rex-marks.sh so a sync writes only on change; never task or endpoint authority; see docs/rex-backend.md "Attention marks"
   <id>.herdr-presentation  quarantinable attempt and restart-binding journal for Herdr's optional visual projection; never task or endpoint authority; see docs/herdr-backend.md "Presentation spaces"
-  <id>.check.sh      authenticated slow poll; the watcher dispatches validated PR data and the byte-identified Relay shim through trusted repository scripts, runs registered custom checks from hash-validated private snapshots, and rejects every other state check without execution
+  <id>.check.sh      authenticated slow poll; the watcher dispatches validated PR data through trusted repository scripts, runs registered custom checks from hash-validated private snapshots, and rejects every other state check without execution
   <id>.check-trust   private content binding created by fm-check-register.sh for an intentional custom check
   <id>.pr-poll       private validated data sidecar for the byte-static PR merge poll
   <id>.pr-poll-registration  private transactional provenance record binding the task, canonical metadata identity, sidecar, and static poll publication
@@ -117,7 +116,6 @@ state/               runtime records and signals; gitignored
   .supervision-host*  supervision host process record, engine conversation, current turn scope and report receipts, and bounded ledger of every close and engine turn; bin/fm-supervision-host.sh owns them; never touch
   .supervision-handoff-pending .supervision-handoff-owner .supervision-handoff.log  the opt-in acknowledged hand-back's unacknowledged token, retry-owner process record, and bounded retry log; bin/fm-supervision-handoff.sh owns them; never touch
   .lease-<task>        per-task supervision lease naming which actor (main or branch) may change that task; bin/fm-lease-lib.sh owns the contract the guarded scripts enforce
-  x-watch.check.sh   generated Relay poll shim; present only when opted in (section 14)
   tool-updates.check.sh  generated watched-tool update poll shim and its .check-trust binding; present only after bin/fm-tool-update-check.sh arm; its report record .tool-updates is what keeps one pending update from being reported on every poll
   usage-warner.check.sh  generated Claude usage threshold poll shim and its .check-trust binding; present only after bin/fm-usage-warner.sh arm; its de-dupe record .usage-warner is what keeps one threshold crossing from warning on every poll, and .usage-warner.lock serializes overlapping checks
   startup-growth.check.sh  generated daily startup-growth poll shim and its .check-trust binding; present only after bin/fm-startup-growth-check.sh arm; its record .startup-growth-check holds the daily gate, the per-file growth baselines, and the last reported finding set, so removing it re-baselines growth silently and repeats a standing finding such as a budget overrun once (docs/configuration.md "Daily startup growth check")
@@ -129,11 +127,6 @@ state/               runtime records and signals; gitignored
   <id>.merge-on-green  the task's latest merge-on-green verdict, the head it was read at, and its last merge or update attempt; merge-on-green.log beside it is the bounded record of every verdict change and action; bin/fm-merge-on-green.sh owns both (docs/configuration.md "Merge on green")
   when/              private condition->action watch specs, their trust bindings, and single-fire markers; written only by bin/fm-procevent-when.sh (`process-event-sources` skill)
   inbox/             captain notes captured out of band by bin/fm-inbox.sh, each note appends one `check` wake and stays pending until acknowledged with `bin/fm-inbox.sh drain --ack <id>`, which moves it to inbox/handled/; request-id reservations, announcement markers, and primary replies live beside the notes (bin/fm-inbox.sh)
-  x-inbox/           generated Relay pending mention payloads; fmx-respond drains it (section 14)
-  x-context/         generated Relay durable per-request reply context and one-wake offer markers, keyed by request_id; survives inbox cleanup and expires within seven days (section 14; bin/fm-x-lib.sh)
-  x-outbox/          generated Relay dry-run reply and dismiss previews; inspect it when FMX_DRY_RUN is set (section 14)
-  public-followup/   generated private transport for promised public replies: retained open-loop registrations, typed terminal-result inbox, results staged for an owning home on another machine, accepted/rejected ledgers, and retirement receipts (section 14; bin/fm-public-followup.sh)
-  x-poll.error x-poll.claim-error  generated Relay and offer-claim diagnostic dedupe markers
   .startup-network.*  status, report, per-step elapsed timings, inline-print claim, and lock for the deferred startup stage that runs network checks and the inactive-outcome scan off the digest's blocking path; bin/fm-startup-network.sh
   .wake-queue        durable queued wakes retained until post-handling acknowledgement: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload
   .watcher-down      private generation-bound recovery state coupling watcher downtime, durable wake presentation, and post-handling acknowledgement; never touch

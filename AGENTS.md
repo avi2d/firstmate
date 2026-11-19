@@ -203,7 +203,6 @@ Scaffold a task that drives Herdr lifecycle with `--herdr-lab`.
 ## 12. Other skills
 
 Skill descriptions are the trigger list, so load a skill when its description fires.
-When Relay is enabled, load `fmx-respond` on its notifications and before a linked task's milestone or final follow-up.
 
 ## The user's instruction comes first
 

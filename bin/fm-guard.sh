@@ -253,7 +253,7 @@ elif [ "$watcher_healthy" = false ]; then
       elif [ "$checks" -gt 0 ]; then
         printf '●  %s registered custom check(s), but %s.\n' "$checks" "$watcher_cause"
       else
-        printf '●  X-mode relay polling needs supervision, but %s.\n' "$watcher_cause"
+        printf '●  Supervision is required, but %s.\n' "$watcher_cause"
       fi
       if [ "$mac_slept" = 1 ]; then
         printf '●  Idle sleep freezes every worker and the watcher with it, so this reads as a slept Mac rather than a wedged watcher.\n'

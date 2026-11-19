@@ -481,7 +481,7 @@ assert_absent "$LOG/quota-axi.calls" "absent key never reads quota-axi"
 pass "absent secret id is off: one stderr line, exit 0, no bws or network call"
 
 # --- the key comes only from bws: a plain .env or environment value is never read ---
-printf '%s\n' '# local secrets' 'FMX_PAIRING_TOKEN=abc' "export TYPESAFE_API_KEY=\"$KEY\"" > "$HOME_DIR/.env"
+printf '%s\n' '# local secrets' 'OTHER_TOKEN=abc' "export TYPESAFE_API_KEY=\"$KEY\"" > "$HOME_DIR/.env"
 rm -f "$HOME_DIR/config/bws-typesafe-secret-id"
 reset_log
 run code out err "$BRIEF" --project pager

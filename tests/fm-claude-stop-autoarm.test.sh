@@ -905,16 +905,6 @@ test_owner_mutex_contention_preserves_failure_episode_reset() {
   pass "auto-arm: owner-mutex contention preserves successor episode state"
 }
 
-test_arms_for_x_mode_poll_need_without_inflight() {
-  local dir out status
-  dir=$(make_primary_dir "$TMP_ROOT/x-need")
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$dir/state/x-watch.check.sh"
-  write_arm_fixture "$dir" actionable
-  out=$(run_autoarm "$dir" 2>/dev/null); status=$?
-  expect_code 2 "$status" "an X-mode relay poll need must keep the auto-arm active with zero tasks in flight"
-  [ -e "$dir/state/arm-ran" ] || fail "hook did not arm for the X-mode poll need"
-  pass "auto-arm: X-mode poll need arms the cycle even with no tasks in flight"
-}
 
 test_arms_for_registered_custom_check_without_inflight() {
   local dir out status
@@ -2358,7 +2348,6 @@ test_post_alarm_actionable_close_is_suppressed
 test_benign_cycle_end_with_live_watcher_is_silent
 test_positive_recovery_budget_contention_preserves_episode
 test_owner_mutex_contention_preserves_failure_episode_reset
-test_arms_for_x_mode_poll_need_without_inflight
 test_arms_for_registered_custom_check_without_inflight
 test_single_flight_admits_exactly_one_owner
 test_term_mid_arm_commits_failure_and_rewakes

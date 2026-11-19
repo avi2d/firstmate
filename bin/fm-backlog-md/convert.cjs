@@ -64,9 +64,6 @@ function prepare(sources) {
     const key = id.toUpperCase();
     if (ids.has(key)) throw new Error(`${file}: duplicate ticket ID ${id} (also in ${ids.get(key)})`);
     ids.set(key, file);
-    if (task.kind === 'public-followup') {
-      throw new Error(`${file}: ${id}: the lab board cannot represent a public-followup obligation`);
-    }
     let draft;
     try {
       draft = toDraft(task);

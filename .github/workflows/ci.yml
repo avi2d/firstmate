@@ -661,11 +661,6 @@ jobs:
           # disagrees with the plan. Per-suite totals live in the test files.
           /bin/bash bin/fm-test-tap-verify.sh tests/fm-fleet-snapshot-view.test.sh
 
-          # The full public-followup suite is not a stock-bash snapshot; run only
-          # the empty-lock register regression under real /bin/bash 3.2.
-          FM_TEST_STOCK_BASH=1 /bin/bash bin/fm-test-tap-verify.sh \
-            tests/fm-public-followup.test.sh
-
           # Same shape for the watcher's churn-deferral regression: an already-
           # marked churn window expands an empty array that only stock Bash
           # treats as an unbound variable under set -u.
