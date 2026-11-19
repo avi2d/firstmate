@@ -667,6 +667,13 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 {FIRSTMATE_SPEC}
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
+if [ -f "$DATA/backlog/decisions/.fm-memory" ]; then
+  DECISION_CONTEXT=$(node "$SCRIPT_DIR/fm-backlog-md/decisions.cjs" render-full "$DATA/backlog/decisions" "$REPO") || {
+    echo 'error: decision memory could not be loaded' >&2
+    exit 1
+  }
+  TASK_SECTION="$TASK_SECTION"$'\n\n'"## Decision memory"$'\n'"$DECISION_CONTEXT"
+fi
 [ -z "$REMOTE_MARKER" ] || TASK_SECTION="$REMOTE_MARKER"$'\n'"$TASK_SECTION"
 
 # One shared string keeps the ship and scout infrastructure rule identical.

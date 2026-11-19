@@ -506,6 +506,30 @@ It keeps archived tasks in the archive and retains non-blocking relations and bl
 The converter rejects duplicate ticket IDs and public follow-up obligations rather than dropping records.
 Keep both source copies if an import stops partway through, and retry in a fresh lab board.
 
+### Decision memory in Backlog.md
+
+Use copies of `captain.md`, `captain-shared.md`, `learnings.md`, and `projects.md` as the input to `node bin/fm-backlog-md/decisions.cjs convert SOURCE_DIR NEW_DECISIONS_DIR TOPIC_MAP.json SUMMARIES.json`.
+The JSON topic map assigns a topic key to each source entry by its filename without the extension and its line number, such as `captain-7`.
+Entries omitted from the map get distinct topic keys, so review the map for related entries before relying on the check.
+The summaries JSON maps every source entry to an authored, single-line summary of at most 120 characters.
+The converter reports each entry with an unknown date and retains the source text without claiming that it is a direct quotation.
+The source records remain unchanged.
+
+Run `node bin/fm-backlog-md/decisions.cjs check DECISIONS_DIR` to find invalid summaries, duplicate active topics, missing or inconsistent replacement links, and cycles.
+For a replacement, set the older record's status to `superseded` and its `superseded_by` to the new record ID.
+Add the older ID to the new record's `supersedes` list.
+Preserve unrelated text from an older entry in separate records when only part of it is superseded.
+Run the check again before activating the memory.
+
+Place the checked records in the lab home's `data/backlog/decisions` directory.
+Run `node bin/fm-backlog-md/decisions.cjs activate DECISIONS_DIR` once to select decision memory at startup.
+Startup regenerates `data/decision-current.md` from the active global records and loads it instead of the four prose files.
+A read-only startup renders the same view without writing it.
+A failed check reports the error rather than loading the old prose.
+Run `node bin/fm-backlog-md/decisions.cjs render DECISIONS_DIR PROJECT` to include summaries scoped to a project.
+Use `render-full` in place of `render` to include the source text for global and matching project records.
+A missing date or provenance is recorded as `unknown`.
+
 ### Captain holds on Beads
 
 Captain-hold row creation is owned by [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) `hold`: when no work item exists, it creates an ordinary backlog row (`--kind captain` metadata; Beads native type `task`) and then applies the captain hold.
