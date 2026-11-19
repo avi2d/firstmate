@@ -645,6 +645,7 @@ CONTROL_LOCK="$STATE/.control-$ID.lock"
 CONTROL_LOCK_HELD=0
 META_LOCK=
 META_LOCK_HELD=0
+TEARDOWN_HERDR_LOCK_RECORDS=
 teardown_release_locks() {
   local status=$?
   if declare -F teardown_release_herdr_locks >/dev/null 2>&1; then
