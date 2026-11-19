@@ -146,7 +146,16 @@ worker_control_hop() {  # <id> <verb> [control args]
   route "$id"
 }
 
-# A missing record answers teardown=absent, so a rerun after a lost reply converges.
+worker_teardown_result() {
+  local id=$1 archive="$TARGET_HOME/state/status-archive" file endpoint result
+  file="$archive/$id/result"
+  [ ! -L "$archive" ] && [ ! -L "$archive/$id" ] && [ -f "$file" ] && [ ! -L "$file" ] || return 0
+  endpoint=$(fm_meta_get "$file" endpoint)
+  result=$(fm_meta_get "$file" result)
+  case "$endpoint" in ''|*[[:space:][:cntrl:]]*) return 0 ;; esac
+  case "$result" in accepted|failed|dropped|missing) printf 'task-result %s %s\n' "$endpoint" "$result" ;; esac
+}
+
 worker_teardown() {  # <id> [--force]
   local id=$1 force=${2:-} rc=0
   local -a args
@@ -154,6 +163,7 @@ worker_teardown() {  # <id> [--force]
   validate_home
   if [ ! -e "$TARGET_HOME/state/$id.meta" ] && [ ! -L "$TARGET_HOME/state/$id.meta" ]; then
     printf 'teardown=absent\n'
+    worker_teardown_result "$id"
     return 0
   fi
   worker_endpoint_require "$id"
@@ -165,7 +175,10 @@ worker_teardown() {  # <id> [--force]
     FM_HOME="$TARGET_HOME" "$SCRIPT_DIR/fm-teardown.sh" "${args[@]}" >&2 || rc=$?
   fi
   case "$rc" in
-    0|4) printf 'teardown=done rc=%s\n' "$rc" ;;
+    0|4)
+      printf 'teardown=done rc=%s\n' "$rc"
+      worker_teardown_result "$id"
+      ;;
   esac
   return "$rc"
 }

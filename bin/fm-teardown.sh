@@ -463,6 +463,71 @@ teardown_prune_status_archives() {  # <task-directory>
   return 0
 }
 
+teardown_task_result() {
+  local kind=$1 mode=$2 pr_url=$3 observed_result=${4:-} line verb last_terminal='' ready=0
+  if [ "$kind" = scout ] && [ -f "$DATA/$ID/report.md" ]; then
+    printf 'accepted\n'
+    return
+  fi
+  if [ "$kind" = ship ] && [ "$mode" != local-only ] && fm_pr_url_parse "$pr_url" \
+    && fm_pr_poll_merge_already_notified "$STATE" "$ID" \
+      "$FM_PR_PROVIDER" "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER"; then
+    printf 'accepted\n'
+    return
+  fi
+  case "$observed_result" in accepted|dropped) printf '%s\n' "$observed_result"; return ;; esac
+
+  if [ "$kind" = ship ] && [ "$mode" = local-only ] && local_delivery_landed; then
+    printf 'accepted\n'
+    return
+  fi
+  if [ -f "$STATE/$ID.status" ] && [ ! -L "$STATE/$ID.status" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in *:*) ;; *) continue ;; esac
+      status_line_verb "$line" verb
+      case "$verb" in
+        working) last_terminal='' ;;
+        done) ready=1; last_terminal=$verb ;;
+        failed|dropped|cancelled|stopped) last_terminal=$verb ;;
+      esac
+    done < "$STATE/$ID.status"
+  fi
+  case "$last_terminal" in dropped|cancelled|stopped) printf 'dropped\n'; return ;; esac
+  if { [ "$last_terminal" = failed ] || [ "$observed_result" = failed ]; } \
+    && [ "$ready" = 0 ] && [ -z "$pr_url" ]; then
+    printf 'failed\n'
+  elif [ "$FORCE" = --force ]; then
+    printf 'dropped\n'
+  else
+    printf 'missing\n'
+  fi
+}
+
+teardown_archive_result() {
+  local kind=$1 mode=$2 result=$3 generation endpoint
+  local archive="$STATE/status-archive" dir file tmp
+  case "$kind" in ship) ;; scout) mode='' ;; *) return 0 ;; esac
+  fm_task_id_path_safe "$ID" || return 1
+  generation=$(fm_meta_get "$META" spawn_gen)
+  endpoint=$(fm_meta_get "$META" window)
+  dir="$archive/$ID"
+  file="$dir/result"
+  teardown_archive_directory "$archive" && teardown_archive_directory "$dir" || return 1
+  if [ -L "$file" ] || { [ -e "$file" ] && [ ! -f "$file" ]; }; then
+    return 1
+  fi
+  if [ -n "$generation" ] && [ -f "$file" ] && [ "$(fm_meta_get "$file" spawn_gen)" = "$generation" ]; then
+    return 0
+  fi
+  tmp=$(mktemp "$dir/.result.XXXXXX") || return 1
+  if ! printf 'spawn_gen=%s\nkind=%s\nmode=%s\nendpoint=%s\nresult=%s\n' \
+    "$generation" "$kind" "$mode" "$endpoint" "$result" > "$tmp" \
+    || ! mv -f -- "$tmp" "$file"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+}
+
 teardown_retire_status() {  # <state> <task-id> [<archive-relative-directory>]
   local state=$1 task=$2 relative=${3:-$2} dir part archive n=0 entry
   if [ ! -e "$CONFIG/status-archive" ]; then
@@ -1225,7 +1290,8 @@ home_is_execution_home() {
 # The host-side teardown owns the landed-work test, the slot return, and the
 # pane close. A 255 or 124 leaves its completion unknown, so nothing local changes.
 remote_worker_teardown() {
-  local route host kind mode project_name pr_url window busy_gen out rc=0 marker data_relative
+  local route host kind mode project_name pr_url window busy_gen out rc=0 marker data_relative result
+  local remote_target remote_result='' candidate
   local -a done_args flags hop_args
   route=$(fm_meta_get "$META" remote_route)
   host=$(fm_meta_get "$META" remote_host)
@@ -1281,6 +1347,20 @@ remote_worker_teardown() {
     return 1
   fi
   teardown_export_records "$STATE" "$ID" || return 1
+  remote_target=$(fm_meta_get "$META" remote_target)
+  if [ -n "$remote_target" ]; then
+    for candidate in accepted dropped failed; do
+      if grep -Fxq -- "task-result $remote_target $candidate" <<< "$out"; then
+        if [ -n "$remote_result" ]; then remote_result=''; break; fi
+        remote_result=$candidate
+      fi
+    done
+  fi
+  result=$(teardown_task_result "$kind" "$mode" "$pr_url" "$remote_result")
+  teardown_archive_result "$kind" "$mode" "$result" || {
+    echo "error: could not archive the result for $ID; retaining task records for retry" >&2
+    return 1
+  }
   remove_pr_poll_artifacts "$STATE" "$ID" || return 1
   busy_gen=$(fm_meta_get "$META" busy_gen)
   retire_busy_state "$STATE" "$ID" "$busy_gen" || return 1
@@ -1829,6 +1909,14 @@ $unpushed
 EOF
 }
 
+local_delivery_landed() {
+  local head target
+  head=$(fm_meta_get "$META" local_done_head)
+  fm_pr_head_valid "$head" || return 1
+  target=$(default_branch) || return 1
+  git -C "$PROJ" merge-base --is-ancestor "$head" "refs/heads/$target" 2>/dev/null
+}
+
 # Is the worktree's PR merged for local work contained in that PR? Resolves the
 # PR from the recorded pr= URL first, then from the branch name, and asks the
 # forge for both the PR state and head: a recorded Forgejo URL is read through
@@ -1847,7 +1935,11 @@ pr_is_merged() {
   [ -n "$target" ] || return 1
   if fm_pr_url_parse "$target" && [ "$FM_PR_PROVIDER" = forgejo ]; then
     fm_pr_forgejo_read_record "$FM_PR_HOST" "$FM_PR_PATH" "$FM_PR_NUMBER" || return 1
-    if [ "$FM_PR_RECORD_MERGED" != true ]; then PR_MERGE_LOOKUP=open; return 1; fi
+    if [ "$FM_PR_RECORD_MERGED" != true ]; then
+      [ "$FM_PR_RECORD_STATE" != CLOSED ] || TEARDOWN_PR_RESULT=dropped
+      PR_MERGE_LOOKUP=open
+      return 1
+    fi
     head=$FM_PR_RECORD_HEAD
     fm_pr_head_valid "$head" || return 1
     resolved_url=$FM_PR_URL
@@ -1861,9 +1953,11 @@ pr_is_merged() {
     [ "$head" != "$remainder" ] || return 1
     case "$state" in
       MERGED|merged) ;;
+      CLOSED|closed) TEARDOWN_PR_RESULT=dropped; PR_MERGE_LOOKUP=open; return 1 ;;
       *) PR_MERGE_LOOKUP=open; return 1 ;;
     esac
   fi
+  TEARDOWN_PR_RESULT=accepted
   [ -n "$head" ] || return 1
   ensure_commit_object "$target" "$head" || return 1
   current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
@@ -1893,10 +1987,12 @@ open_pr_for_branch() {
   url=${view##*$'\t'}
   case "$state" in
     OPEN|open) ;;
+    CLOSED|closed) TEARDOWN_PR_RESULT=dropped; return 1 ;;
+    MERGED|merged) TEARDOWN_PR_RESULT=accepted; return 1 ;;
     *) return 1 ;;
   esac
   [ -n "$url" ] && [ "$url" != "$view" ] || return 1
-  printf '%s\n' "$url"
+  OPEN_PR_URL=$url
 }
 
 up_to_date_default_ref() {
@@ -2331,7 +2427,7 @@ read_worktree_dirt() {
 }
 
 validate_worktree_teardown_safety() {
-  local dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch open_url
+  local dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch OPEN_PR_URL
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   case "$KIND" in
@@ -2425,8 +2521,8 @@ validate_worktree_teardown_safety() {
       branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
       TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
     fi
-    if open_url=$(open_pr_for_branch "$branch"); then
-      echo "REFUSED: PR $open_url is still open; cleanup waits for it to merge, because bin/fm-pr-merge.sh needs this task record." >&2
+    if open_pr_for_branch "$branch"; then
+      echo "REFUSED: PR $OPEN_PR_URL is still open; cleanup waits for it to merge, because bin/fm-pr-merge.sh needs this task record." >&2
       return 1
     fi
     return 0
@@ -4062,6 +4158,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] &&
   ORCA_PATH_MATCH_VERIFIED=1
 fi
 
+TEARDOWN_PR_RESULT=
 if teardown_owns_worktree && [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
   if validate_worktree_teardown_safety; then
     :
@@ -4466,6 +4563,13 @@ teardown_launch_home_token() {
 LAUNCH_HOME_TOKEN=$(teardown_launch_home_token "$FM_HOME") || LAUNCH_HOME_TOKEN=
 if [ -n "$LAUNCH_HOME_TOKEN" ]; then
   rm -rf "/tmp/fm-$ID+$LAUNCH_HOME_TOKEN"
+fi
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  TASK_RESULT=$(teardown_task_result "$KIND" "$MODE" "$PR_URL" "$TEARDOWN_PR_RESULT")
+  teardown_archive_result "$KIND" "$MODE" "$TASK_RESULT" || {
+    echo "error: could not archive the result for $ID; retaining task records for retry" >&2
+    exit 1
+  }
 fi
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
