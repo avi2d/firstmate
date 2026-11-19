@@ -819,7 +819,6 @@ tests/fm-opencode-abs-cwd-rail-live-e2e.test.sh 50
 tests/fm-opencode-primary-live-e2e.test.sh 47
 tests/fm-operational-input.test.sh 5337
 tests/fm-pane-hash-lib.test.sh 1443
-tests/fm-osc7501.test.sh 14000
 tests/fm-peek-remote.test.sh 1082
 tests/fm-pi-1-1-0-small-fixes.test.sh 1855
 tests/fm-pi-branch-extension.test.sh 77218
@@ -1594,11 +1593,7 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       ;;
-    tests/t3-fake-*)
-      families_for_test_reference "$(basename "$path")" t3-fake-lib.sh \
-        || printf '%s\n' "__unmapped__:$path"
-      ;;
-    bin/fm-backend.sh|bin/fm-backend-hometag-lib.sh)
+    bin/fm-backend.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
       ;;
