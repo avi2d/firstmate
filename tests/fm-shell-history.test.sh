@@ -9,7 +9,7 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT=$(fm_test_tmproot fm-shell-history-tests)
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr/zellij adapters)"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
 
 SHELL_LINE='export FM_TASK_ID=fixture-1'
 SOURCE_LINE=". '/tmp/fm-fixture-1/launch.s1.sh'"
@@ -61,32 +61,6 @@ SH
   printf '%s\n' "$fb"
 }
 
-make_zellij_fakebin() {  # <dir> -> echoes fakebin dir
-  local fb="$1/fakebin"
-  mkdir -p "$fb"
-  cat > "$fb/zellij" <<'SH'
-#!/usr/bin/env bash
-set -u
-LOG="${FM_ZELLIJ_LOG:?}"
-{
-  printf 'zellij'
-  for a in "$@"; do printf '\x1f%s' "$a"; done
-  printf '\n'
-} >> "$LOG"
-if [ "${1:-}" = list-sessions ]; then
-  printf 'testsession\n'
-  exit 0
-fi
-if [ "${3:-}" = action ] && [ "${4:-}" = list-panes ]; then
-  printf '[{"id":7,"is_plugin":false}]\n'
-  exit 0
-fi
-exit 0
-SH
-  chmod +x "$fb/zellij"
-  printf '%s\n' "$fb"
-}
-
 test_helper_prefixes_one_space() {
   local out
   # shellcheck source=/dev/null
@@ -126,19 +100,6 @@ test_herdr_shell_lines_carry_the_space() {
   pass "herdr: shell lines guarded, literal transport verbatim"
 }
 
-test_zellij_shell_lines_carry_the_space() {
-  local dir="$TMP_ROOT/zellij" fb log
-  mkdir -p "$dir"
-  fb=$(make_zellij_fakebin "$dir")
-  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" \
-    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_send_text_line "testsession:7" "$1"; fm_backend_zellij_send_literal "testsession:7" "$2"' "$ROOT" "$SHELL_LINE" "$SOURCE_LINE"
-  log=$(cat "$dir/log")
-  assert_contains "$log" "$(printf '\x1fpaste\x1f--pane-id\x1f7\x1f--\x1f %s' "$SHELL_LINE")" "zellij send_text_line did not guard its shell line from history"
-  assert_contains "$log" "$(printf '\x1fpaste\x1f--pane-id\x1f7\x1f--\x1f%s' "$SOURCE_LINE")" "zellij send_literal must stay a verbatim transport"
-  assert_not_contains "$log" "$(printf '\x1fpaste\x1f--pane-id\x1f7\x1f--\x1f %s' "$SOURCE_LINE")" "zellij send_literal must not guard composer-bound bytes"
-  pass "zellij: shell lines guarded, literal transport verbatim"
-}
-
 test_composer_text_stays_verbatim() {
   local dir="$TMP_ROOT/composer" fb log
   mkdir -p "$dir"
@@ -154,5 +115,4 @@ test_composer_text_stays_verbatim() {
 test_helper_prefixes_one_space
 test_tmux_shell_lines_carry_the_space
 test_herdr_shell_lines_carry_the_space
-test_zellij_shell_lines_carry_the_space
 test_composer_text_stays_verbatim

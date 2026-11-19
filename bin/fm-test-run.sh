@@ -431,9 +431,6 @@ family_for_basename() {
     fm-backend-rex.test.sh|fm-backend-rex-smoke.test.sh|fm-backend-rex-eventwait-smoke.test.sh)
       printf '%s\n' rex
       ;;
-    fm-backend-zellij.test.sh|fm-backend-zellij-smoke.test.sh)
-      printf '%s\n' zellij
-      ;;
     fm-backend-tern.test.sh|fm-backend-tern-smoke.test.sh)
       printf '%s\n' tern
       ;;
@@ -468,7 +465,7 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    zellij|paseo|rex|tern|hc) printf '%s\n' optional-binary ;;
+    paseo|rex|tern|hc) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -486,7 +483,6 @@ backend-dispatch
 pr-forge
 afk
 snapshot-bearings
-zellij
 paseo
 rex
 tern
@@ -736,8 +732,6 @@ tests/fm-backend-t3code-pr-tools-live-e2e.test.sh 52
 tests/fm-backend-tern-smoke.test.sh 60
 tests/fm-backend-tern.test.sh 6000
 tests/fm-backend-tmux-smoke.test.sh 829
-tests/fm-backend-zellij-smoke.test.sh 23
-tests/fm-backend-zellij.test.sh 10453
 tests/fm-backend.test.sh 28709
 tests/fm-backlog-atomicity.test.sh 219379
 tests/fm-backlog-read-bound.test.sh 24743
@@ -1641,10 +1635,6 @@ families_for_changed_path() {
     bin/fm-herdr-session-cleanup.sh)
       printf '%s\n' session-bootstrap
       printf '%s\n' real-herdr-gated
-      printf '%s\n' backend-dispatch
-      ;;
-    bin/backends/zellij*|tests/zellij-test-safety.sh)
-      printf '%s\n' zellij
       printf '%s\n' backend-dispatch
       ;;
     bin/backends/paseo*)
