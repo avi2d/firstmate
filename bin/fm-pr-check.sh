@@ -377,15 +377,6 @@ fi
 # The merge-time re-record is not a new review-ready PR, so it writes nothing.
 [ ! -e "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-ledger" ] || [ "${FM_PR_CHECK_MERGE:-}" = 1 ] \
   || FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-fleet-ledger.sh" pr_ready "$ID" "$URL" || true
-# The contribution observer uses the same authenticated check mechanism and
-# owns verdict freshness, required actors and external feedback separately from
-# the exact merged-state poll. Registration is local and performs no forge read.
-if command -v jq >/dev/null 2>&1; then
-  "$SCRIPT_DIR/fm-contributions.sh" arm >/dev/null \
-    || printf 'contributions: observation not armed; coverage is unconfirmed\n' >&2
-else
-  printf 'contributions: jq unavailable; coverage is unconfirmed\n' >&2
-fi
 PR_YOLO=$(grep '^yolo=' "$META" | tail -1 | cut -d= -f2- || true)
 if [ "$PROVIDER" = github ] && [ "$PR_YOLO" = on ] && [ "${FM_PR_CHECK_MERGE:-}" != 1 ]; then
   "$SCRIPT_DIR/fm-procevent-merge-on-green.sh" arm >/dev/null \
