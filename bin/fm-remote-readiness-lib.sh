@@ -11,12 +11,6 @@
 # owner of every check, every repair, and every message; nothing here restates
 # them.
 #
-# <backend> is herdr, rex, or any (the default). A concrete backend is passed
-# to the doctor's --backend flag; `any` invokes it bare, which resolves
-# whichever supported backend that host provides. A remote still on the
-# herdr-only doctor exits 2 on the unknown flag; an explicit herdr request then
-# retries bare, whose only selectable backend there is herdr. rex has no such
-# fallback: a remote that old cannot run it.
 #
 # Returns 0 when the host is ready, 1 when a gap remains, and 255 when SSH could
 # not complete. 255 means unknown remote completion, so a caller preserves its
@@ -40,7 +34,11 @@ fm_remote_readiness_probe() { # <bin-dir> <route> [doctor-args...]
 fm_remote_readiness_ensure() { # <bin-dir> <route> [backend]
   local bin_dir=$1 id=$2 backend=${3:-any} rc
   local -a doctor_args=()
-  [ "$backend" = any ] || doctor_args=(--backend "$backend")
+  case "$backend" in
+    any) ;;
+    herdr) doctor_args=(--backend herdr) ;;
+    *) echo "error: unsupported remote backend '$backend'" >&2; return 1 ;;
+  esac
 
   fm_remote_readiness_probe "$bin_dir" "$id" ${doctor_args[@]+"${doctor_args[@]}"}
   rc=$?
