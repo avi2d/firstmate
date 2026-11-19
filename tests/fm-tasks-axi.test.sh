@@ -319,6 +319,56 @@ test_backlog_md_lifecycle_does_not_leave_a_held_task_in_flight() {
   pass "Backlog.md lifecycle retains a held task as queued and completes it"
 }
 
+test_decisions_reject_duplicate_active_topics_and_hide_superseded_entries() {
+  local dir="$TMP_ROOT/decision-memory" tool="$ROOT/bin/fm-backlog-md/decisions.cjs" output status=0
+  mkdir -p "$dir/source"
+  printf '%s\n' '# Preferences' '- Old choice' '- New choice 2026-11-19' > "$dir/source/captain.md"
+  printf '%s\n' '# Shared' '- Shared choice' > "$dir/source/captain-shared.md"
+  printf '%s\n' '# Learnings' '- A fact' > "$dir/source/learnings.md"
+  printf '%s\n' '# Projects' '- A project' > "$dir/source/projects.md"
+  printf '%s\n' '{"captain-2":"choice","captain-3":"choice"}' > "$dir/topics.json"
+  printf '%s\n' '{"captain-2":"Old choice","captain-3":"New choice","captain-shared-2":"Shared choice","learnings-2":"A fact","projects-2":"A project"}' > "$dir/summaries.json"
+  node "$tool" convert "$dir/source" "$dir/decisions" "$dir/topics.json" "$dir/summaries.json" > "$dir/import.out" || fail "conversion failed"
+  output=$(node "$tool" check "$dir/decisions" 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "duplicate active topics were accepted"
+  assert_contains "$output" "multiple active records for choice" "duplicate topic not named"
+  node - "$dir/decisions" "$ROOT/bin/fm-backlog-md/node_modules/yaml" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const yaml = require(process.argv[3]);
+const dir = process.argv[2];
+for (const [name, update] of [
+  ['decision-1 - captain-2.md', { status: 'superseded', superseded_by: 'decision-2' }],
+  ['decision-2 - captain-3.md', { supersedes: ['decision-1'] }],
+]) {
+  const file = path.join(dir, name);
+  const text = fs.readFileSync(file, 'utf8');
+  const match = /^---\n([^]*?)\n---\n([^]*)$/.exec(text);
+  const fields = Object.assign(yaml.parse(match[1]), update);
+  fs.writeFileSync(file, '---\n' + yaml.stringify(fields) + '---\n' + match[2]);
+}
+NODE
+  node "$tool" check "$dir/decisions" >/dev/null || fail "linked replacement was rejected"
+  output=$(node "$tool" render "$dir/decisions") || fail "render failed"
+  assert_contains "$output" "New choice" "active record is absent"
+  assert_not_contains "$output" "Old choice" "superseded record was loaded"
+  node - "$dir/decisions/decision-2 - captain-3.md" "$ROOT/bin/fm-backlog-md/node_modules/yaml" <<'NODE'
+const fs = require('fs');
+const yaml = require(process.argv[3]);
+const file = process.argv[2];
+const text = fs.readFileSync(file, 'utf8');
+const match = /^---\n([^]*?)\n---\n([^]*)$/.exec(text);
+const fields = yaml.parse(match[1]);
+fields.summary = 'x'.repeat(121);
+fs.writeFileSync(file, '---\n' + yaml.stringify(fields) + '---\n' + match[2]);
+NODE
+  status=0
+  node "$tool" check "$dir/decisions" > /dev/null 2>&1 || status=$?
+  [ "$status" -ne 0 ] || fail "oversized summary was accepted"
+  pass "decision memory rejects duplicate active topics, hides superseded entries, and rejects oversized summaries"
+}
+
+test_decisions_reject_duplicate_active_topics_and_hide_superseded_entries
 test_backlog_md_lifecycle_does_not_leave_a_held_task_in_flight
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
