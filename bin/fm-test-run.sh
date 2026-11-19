@@ -393,7 +393,6 @@ family_for_basename() {
     fm-calm-pi-queue-retention-live-e2e.test.sh|\
     fm-herdr-submit-confirm-live-e2e.test.sh|\
     fm-agent-sandbox-live-e2e.test.sh|\
-    fm-backend-rex-composer-live-e2e.test.sh|\
     fm-watch-wedge-cap-live.test.sh|fm-read-repetition-live.test.sh)
       printf '%s\n' live-harness-optin
       ;;
@@ -425,9 +424,6 @@ family_for_basename() {
     fm-fleet-snapshot-view.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
-    fm-backend-rex.test.sh|fm-backend-rex-smoke.test.sh|fm-backend-rex-eventwait-smoke.test.sh)
-      printf '%s\n' rex
-      ;;
     fm-branch-supervision.test.sh|fm-busy-adapter-wiring.test.sh|\
     fm-busy-state.test.sh|fm-capacity.test.sh|fm-classify-corr-token.test.sh|\
     fm-claude-stop-autoarm.test.sh|fm-cursor-harness.test.sh|\
@@ -456,7 +452,6 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    rex) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -474,7 +469,6 @@ backend-dispatch
 pr-forge
 afk
 snapshot-bearings
-rex
 standalone
 unclassified
 EOF
@@ -705,10 +699,6 @@ tests/fm-approval-failover.test.sh 9826
 tests/fm-ask-user-authority.test.sh 481
 tests/fm-assertions.test.sh 115
 tests/fm-backend-herdr-server-detach.test.sh 1460
-tests/fm-backend-rex-composer-live-e2e.test.sh 54
-tests/fm-backend-rex-eventwait-smoke.test.sh 40
-tests/fm-backend-rex-smoke.test.sh 42
-tests/fm-backend-rex.test.sh 15552
 tests/fm-backend-t3code-live-e2e.test.sh 51
 tests/fm-backend-t3code-pr-tools-live-e2e.test.sh 52
 tests/fm-backend-tmux-smoke.test.sh 829
@@ -1616,10 +1606,6 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       ;;
-    bin/backends/rex*|bin/fm-rex-marks.sh|tests/rex-test-safety.sh)
-      printf '%s\n' rex
-      printf '%s\n' backend-dispatch
-      ;;
     bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
       ;;
@@ -1807,13 +1793,8 @@ families_for_changed_path() {
       printf '%s\n' pr-forge
       ;;
     bin/fm-nm-run-lib.sh)
-      # Shared no-mistakes run-attribution primitives, sourced by
-      # bin/fm-crew-state.sh (pure-contract-unit), bin/fm-teardown.sh's
-      # pre-teardown run abort (pr-forge), and bin/fm-rex-marks.sh's
-      # validation progress (rex).
       printf '%s\n' pure-contract-unit
       printf '%s\n' pr-forge
-      printf '%s\n' rex
       ;;
     bin/fm-control-lib.sh)
       printf '%s\n' backend-dispatch
