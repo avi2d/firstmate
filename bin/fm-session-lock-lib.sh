@@ -16,16 +16,6 @@
 # delegate that question instead of re-deriving liveness from the fields.
 # This file is sourced by scripts and has no side effects on source.
 
-# Cursor process identity is NOT expressible as a command-name pattern and is
-# deliberately not added to the tables below: Cursor's installed names are
-# cursor-agent and the far-too-generic legacy alias `agent`, and it runs as a
-# bundled node script. bin/fm-cursor-lib.sh is the fleet's single owner of that
-# decision, so this file delegates to it rather than widening the name match.
-_FM_SESSION_LOCK_LIB_DIR=${BASH_SOURCE[0]%/*}
-[ "$_FM_SESSION_LOCK_LIB_DIR" != "${BASH_SOURCE[0]}" ] || _FM_SESSION_LOCK_LIB_DIR=.
-# shellcheck source=bin/fm-cursor-lib.sh
-. "${_FM_SESSION_LOCK_LIB_DIR:-/}/fm-cursor-lib.sh"
-unset _FM_SESSION_LOCK_LIB_DIR
 
 # Known harness command names; extend when a new adapter is verified. omp and
 # agy are anchored exactly like pi: their process names are the bare words `omp`
@@ -105,7 +95,6 @@ fm_ps_ppid() {  # <pid> -> parent pid
 #      name and ignores argv[0] entirely, so a version-named Claude Code binary
 #      is identified by its install path on macOS and by argv[0] on Linux.
 #   3. a bare interpreter (node, python) running a harness script path.
-#   4. Cursor's own structural identity, owned by bin/fm-cursor-lib.sh.
 FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
   local comm=$1 args=$2 base argv0 name
@@ -129,11 +118,6 @@ fm_harness_process_matches() {  # <comm> <args>
       fi
       ;;
   esac
-  # Cursor: its own owner decides, from Cursor's name or versioned install tree
-  # in the command path or argv[0]. Without this a Cursor primary can never
-  # locate its own harness in the ancestry, so every session start refuses the
-  # fleet lock as read-only and the park can never arm.
-  fm_cursor_process_matches "$comm" "$args" "$argv0" && return 0
   return 1
 }
 

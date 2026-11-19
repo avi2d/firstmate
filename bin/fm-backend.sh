@@ -29,11 +29,7 @@ fm_backend_is_known() {  # <name>
 }
 
 fm_backend_detect() {
-  FM_BACKEND_DETECTED=""
-  FM_BACKEND_DETECT_SIGNAL=""
   if [ "${HERDR_ENV:-}" = "1" ]; then
-    FM_BACKEND_DETECTED=herdr
-    FM_BACKEND_DETECT_SIGNAL=HERDR_ENV
     printf 'herdr'
     return 0
   fi
@@ -58,10 +54,7 @@ fm_backend_explicit_name() {
 }
 
 fm_backend_resolve() {
-  FM_BACKEND_DETECTED=""
-  FM_BACKEND_DETECT_SIGNAL=""
   FM_BACKEND_RESOLVED=$(fm_backend_explicit_name) && return 0
-  fm_backend_detect >/dev/null || true
   FM_BACKEND_RESOLVED=herdr
 }
 
@@ -281,7 +274,9 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: Herdr endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
     return 1
   fi
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
   FM_BACKEND_VALIDATED_BACKEND=$backend
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
   FM_BACKEND_VALIDATED_TARGET=$window
   return 0
 }
@@ -354,7 +349,7 @@ fm_backend_source() {
   local name=$1 adapter rel sibling
   fm_backend_validate "$name" || return 1
   adapter="$FM_BACKEND_LIB_DIR/backends/herdr.sh"
-  set -- fm-composer-lib.sh fm-transition-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh fm-shell-line-lib.sh fm-hermes-process-lib.sh
+  set -- fm-composer-lib.sh fm-transition-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-shell-line-lib.sh
   fm_backend_source_readable "$adapter" || return 1
   for rel in "$@"; do
     sibling="$FM_BACKEND_LIB_DIR/$rel"
