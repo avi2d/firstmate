@@ -367,7 +367,7 @@ family_for_basename() {
     fm-grok-continuity-live-e2e.test.sh|\
     fm-cursor-primary-live-e2e.test.sh|fm-agy-primary-live-e2e.test.sh|\
     fm-grok-stop-live-e2e.test.sh|fm-harness-adapter-instructions-live-e2e.test.sh|\
-    fm-harness-liveness-drift-live-e2e.test.sh|fm-backend-hc-liveness-live-e2e.test.sh|\
+    fm-harness-liveness-drift-live-e2e.test.sh|\
     fm-kimi-trust-prompt-live-e2e.test.sh|\
     fm-devin-signals-live-e2e.test.sh|fm-commandcode-signals-live-e2e.test.sh|fm-cortex-signals-live-e2e.test.sh|fm-hermes-signals-live-e2e.test.sh|fm-hermes-profile-safety-live-e2e.test.sh|fm-hermes-gateway-coexistence-live-e2e.test.sh|fm-muse-signals-live-e2e.test.sh|fm-rovo-signals-live-e2e.test.sh|fm-agy-signals-live-e2e.test.sh|fm-kiro-signals-live-e2e.test.sh|fm-polytoken-signals-live-e2e.test.sh|\
     fm-launch-prompt-signals-live-e2e.test.sh|fm-backend-t3code-live-e2e.test.sh|\
@@ -428,9 +428,6 @@ family_for_basename() {
     fm-backend-rex.test.sh|fm-backend-rex-smoke.test.sh|fm-backend-rex-eventwait-smoke.test.sh)
       printf '%s\n' rex
       ;;
-    fm-backend-hc.test.sh|fm-backend-hc-smoke.test.sh|fm-backend-hc-appdetect-smoke.test.sh)
-      printf '%s\n' hc
-      ;;
     fm-branch-supervision.test.sh|fm-busy-adapter-wiring.test.sh|\
     fm-busy-state.test.sh|fm-capacity.test.sh|fm-classify-corr-token.test.sh|\
     fm-claude-stop-autoarm.test.sh|fm-cursor-harness.test.sh|\
@@ -459,7 +456,7 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    rex|hc) printf '%s\n' optional-binary ;;
+    rex) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -478,7 +475,6 @@ pr-forge
 afk
 snapshot-bearings
 rex
-hc
 standalone
 unclassified
 EOF
@@ -708,11 +704,7 @@ tests/fm-agy-signals-live-e2e.test.sh 53
 tests/fm-approval-failover.test.sh 9826
 tests/fm-ask-user-authority.test.sh 481
 tests/fm-assertions.test.sh 115
-tests/fm-backend-hc-appdetect-smoke.test.sh 45
 tests/fm-backend-herdr-server-detach.test.sh 1460
-tests/fm-backend-hc-liveness-live-e2e.test.sh 9000
-tests/fm-backend-hc-smoke.test.sh 3700
-tests/fm-backend-hc.test.sh 4000
 tests/fm-backend-rex-composer-live-e2e.test.sh 54
 tests/fm-backend-rex-eventwait-smoke.test.sh 40
 tests/fm-backend-rex-smoke.test.sh 42
@@ -797,7 +789,6 @@ tests/fm-harness-adapter-instructions-live-e2e.test.sh 72
 tests/fm-harness-adapter-references.test.sh 149
 tests/fm-harness-liveness-drift-live-e2e.test.sh 1309
 tests/fm-harness-precedence.test.sh 7769
-tests/fm-hc-lab.test.sh 729
 tests/fm-herdr-groups.test.sh 5418
 tests/fm-herdr-pi-fullscreen-scrollbar-live-e2e.test.sh 17265
 tests/fm-herdr-pi-sandbox-live-e2e.test.sh 55
@@ -1628,17 +1619,6 @@ families_for_changed_path() {
     bin/backends/rex*|bin/fm-rex-marks.sh|tests/rex-test-safety.sh)
       printf '%s\n' rex
       printf '%s\n' backend-dispatch
-      ;;
-    bin/backends/hc.sh|bin/fm-hc-lab.sh|tests/hc-test-safety.sh)
-      printf '%s\n' hc
-      printf '%s\n' backend-dispatch
-      printf '%s\n' "__script__:fm-backend-hc-liveness-live-e2e.test.sh"
-      ;;
-    bin/fm-install-hc.sh|bin/fm-hc-ci-cleanup.sh)
-      printf '%s\n' pure-contract-unit
-      # Pin or cleanup changes also select the hc family so the real lane's
-      # coverage re-runs, mirroring the real-herdr-gated arm above.
-      printf '%s\n' hc
       ;;
     bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
