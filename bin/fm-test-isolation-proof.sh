@@ -100,9 +100,6 @@ exclusion_reason() {
     fm-test-isolation-proof.test.sh)
       printf '%s\n' 'isolation-proof harness contract itself; must not re-enter concurrent matrix'
       ;;
-    fm-backend-tmux-smoke.test.sh)
-      printf '%s\n' 'real tmux on a private socket; keep exclusive of default-server contention class'
-      ;;
     fm-backend.test.sh)
       printf '%s\n' 'old-vs-new main checkout diff fixture; gray-zone concurrent git/worktree cost'
       ;;
@@ -190,7 +187,6 @@ list_exclusions_for_report() {
     fi
   done <<'EOF'
 fm-test-isolation-proof.test.sh
-fm-backend-tmux-smoke.test.sh
 fm-backend.test.sh
 fm-spawn-dispatch-profile.test.sh
 fm-spawn-worktree-settle.test.sh

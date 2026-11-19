@@ -396,8 +396,8 @@ family_for_basename() {
     fm-watch-wedge-cap-live.test.sh|fm-read-repetition-live.test.sh)
       printf '%s\n' live-harness-optin
       ;;
-    fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
-    fm-backend-t3code.test.sh|fm-t3-mcp.test.sh|fm-tmux-agent-liveness.test.sh|\
+    fm-backend-herdr.test.sh|fm-backend.test.sh|\
+    fm-backend-t3code.test.sh|fm-t3-mcp.test.sh|\
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
@@ -701,7 +701,6 @@ tests/fm-assertions.test.sh 115
 tests/fm-backend-herdr-server-detach.test.sh 1460
 tests/fm-backend-t3code-live-e2e.test.sh 51
 tests/fm-backend-t3code-pr-tools-live-e2e.test.sh 52
-tests/fm-backend-tmux-smoke.test.sh 829
 tests/fm-backend.test.sh 28709
 tests/fm-backlog-atomicity.test.sh 219379
 tests/fm-backlog-read-bound.test.sh 24743
@@ -956,7 +955,6 @@ tests/fm-test-isolation-proof.test.sh 5640
 tests/fm-test-linux.test.sh 1500
 tests/fm-test-tap-verify.test.sh 1000
 tests/fm-timeout-lib.test.sh 36444
-tests/fm-tmux-agent-liveness.test.sh 7524
 tests/fm-tool-update-check.test.sh 14383
 tests/fm-trace-context-lib.test.sh 717
 tests/fm-trace-context-spawn.test.sh 57488
@@ -1604,9 +1602,6 @@ families_for_changed_path() {
     bin/fm-herdr-session-cleanup.sh)
       printf '%s\n' session-bootstrap
       printf '%s\n' real-herdr-gated
-      printf '%s\n' backend-dispatch
-      ;;
-    bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
       ;;
     bin/backends/t3code*|bin/fm-t3-mcp.mjs)
