@@ -127,7 +127,6 @@ exclusion_reason() {
       printf '%s\n' 'AFK lifecycle / inject path; exclusive daemon and pane control'
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
-    fm-codex-continuity-live-e2e.test.sh|\
     fm-pi-primary-live-e2e.test.sh|\
     fm-quota-array-dispatch-live-e2e.test.sh|fm-send-secondmate-marker-herdr-e2e.test.sh|\
     fm-sessionstart-instruction-refresh-live-e2e.test.sh)
@@ -154,7 +153,6 @@ tests/fm-arm-pretool-check.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-brief.test.sh
 tests/fm-cd-pretool-check.test.sh
-tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-ensure-agents-md.test.sh
@@ -169,7 +167,6 @@ tests/fm-send-strict.test.sh
 tests/fm-spawn-batch.test.sh
 tests/fm-supervision-instructions.test.sh
 tests/fm-test-run.test.sh
-tests/fm-tmux-submit-busy.test.sh
 tests/fm-transition-lib.test.sh
 EOF
 }
