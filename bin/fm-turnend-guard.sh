@@ -249,9 +249,7 @@ fi
 
 
 block_stop() {
-  local x_mode reason rule msg max_blocks cur_blocks
-  x_mode=0
-  [ -f "$CONFIG/x-mode.env" ] && x_mode=1
+  local reason rule msg max_blocks cur_blocks
   if [ "$AGY_MODE" -eq 1 ]; then
     max_blocks=${FM_TURNEND_MAX_BLOCKS:-3}
     case "$max_blocks" in ''|*[!0-9]*|0) max_blocks=3 ;; esac
@@ -264,10 +262,10 @@ block_stop() {
     cur_blocks=$((cur_blocks + 1))
     mkdir -p "$STATE" 2>/dev/null || true
     printf '%s\n' "$cur_blocks" > "$STATE/.turnend-blocks"
-    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --harness agy --x-mode "$x_mode" --repair-line 2>/dev/null \
+    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --harness agy --repair-line 2>/dev/null \
       || printf '%s\n' 'tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn')
   else
-    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --x-mode "$x_mode" --repair-line 2>/dev/null \
+    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --repair-line 2>/dev/null \
       || printf '%s\n' 'tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn')
   fi
   rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'

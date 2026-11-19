@@ -116,14 +116,11 @@ test_conditional_stanzas() {
   home="$TMP_ROOT/conditional-home"
   config="$TMP_ROOT/conditional-config"
   mkdir -p "$home/state" "$home/config" "$config"
-  out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness codex --read-only 1 --afk 1 --x-mode 1)
+  out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness codex --read-only 1 --afk 1)
   assert_contains "$out" "- Lock: read-only" "read-only stanza missing"
   assert_contains "$out" "- Away mode: active" "afk stanza missing"
-  assert_contains "$out" "- X mode: active" "x-mode stanza missing"
-  assert_contains "$out" "$config/x-mode.env" "x-mode stanza did not render the effective config path"
   assert_contains "$out" 'Mode: Codex foreground checkpoint.' "codex snippet missing"
-  assert_not_contains "$out" "Source \`config/x-mode.env\`" "snippet kept the repo-relative x-mode config path"
-  pass "renderer includes read-only, afk, and effective x-mode current-state stanzas"
+  pass "renderer includes read-only and afk current-state stanzas"
 }
 
 test_quiet_mode_stanzas() {
@@ -166,10 +163,8 @@ test_repair_lines() {
   assert_not_contains "$out" "manual background" "claude pre-verification repair line directed a manual background arm"
   assert_not_contains "$out" "bin/fm-watch-arm.sh" "claude pre-verification repair line directed an arm command"
 
-  : > "$home/config/x-mode.env"
-  out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness codex --x-mode 1 --repair-line)
-  assert_contains "$out" "source '$home/config/x-mode.env' first" "x-mode repair line did not source the effective cadence config"
-  assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "x-mode codex repair line lost the checkpoint helper"
+  out=$(FM_HOME="$home" FM_CODEX_WATCH_CHECKPOINT=7 "$RENDER" --harness codex --repair-line)
+  assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "codex repair line lost the checkpoint helper"
 
   out=$(FM_HOME="$home" "$RENDER" --harness opencode --read-only 1 --repair-line)
   assert_contains "$out" "session holding the fleet lock" "read-only repair line missing"
@@ -333,21 +328,10 @@ test_grok_is_background_notify() {
   assert_contains "$out" "background: true" "grok snippet missing tracked background tool instruction"
   assert_contains "$out" "synthetic_reason: task_completed" "grok snippet missing auto-wake synthetic prompt detail"
   assert_contains "$out" "bin/fm-watch-arm.sh" "grok snippet missing watcher arm"
-  assert_not_contains "$out" "__FM_X_MODE_ENV" "renderer leaked an x-mode path placeholder"
   assert_not_contains "$out" "foreground checkpoint" "grok snippet must not be Codex-style foreground checkpoint"
   out=$("$RENDER" --harness grok --repair-line)
   assert_contains "$out" "Grok tracked background task" "grok repair line is not background-notify shaped"
   pass "grok supervision is Claude-shaped background notify with passive Stop-hook backstop"
-}
-
-test_grok_command_sources_effective_config() {
-  local home config out
-  home="$TMP_ROOT/grok-home"
-  config="$TMP_ROOT/grok-config"
-  mkdir -p "$home/state" "$config"
-  out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness grok --x-mode 1)
-  assert_contains "$out" "[ -f '$config/x-mode.env' ] && . '$config/x-mode.env'; exec bin/fm-watch-arm.sh" "grok arm command did not use the effective x-mode config path"
-  pass "grok rendered command sources the effective x-mode config"
 }
 
 test_pi_snippet_uses_effective_extension_path() {
@@ -369,14 +353,13 @@ test_pi_snippet_uses_effective_extension_path() {
 }
 
 test_literal_paths_in_rendered_snippets() {
-  local name home harness out quoted_config
+  local name home harness out
   for name in normal 'R&D "double" '\''single'\'' home'; do
     home="$TMP_ROOT/$name"
     mkdir -p "$home/config" "$home/state"
     : > "$home/config/supervision-host-off"
-    quoted_config="'$(printf '%s' "$home/config/x-mode.env" | sed "s/'/'\\\\''/g")'"
     for harness in pi pi-signed omp codex grok cursor opencode claude; do
-      out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$RENDER" --harness "$harness" --x-mode 1)
+      out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$RENDER" --harness "$harness")
       assert_not_contains "$out" '__FM_' "$harness: literal path leaked a placeholder"
       case "$harness" in
         pi|pi-signed)
@@ -386,9 +369,6 @@ test_literal_paths_in_rendered_snippets() {
         omp)
           assert_contains "$out" "$home/.omp/extensions/fm-primary-omp-watch.ts" "omp watch path changed"
           assert_contains "$out" "$home/.omp/extensions/fm-primary-turnend-guard.ts" "omp turn-end path changed"
-          ;;
-        grok)
-          assert_contains "$out" "[ -f $quoted_config ] && . $quoted_config; exec bin/fm-watch-arm.sh" "quoted config path changed"
           ;;
       esac
     done
@@ -409,5 +389,4 @@ test_cross_harness_ordinary_continuation_and_repair_matrix
 test_codex_park_ordinary_wake_line_leaves_continuity_to_the_stop_hook
 test_pi_signed_preserves_identity_with_pi_supervision_protocol
 test_grok_is_background_notify
-test_grok_command_sources_effective_config
 test_pi_snippet_uses_effective_extension_path
