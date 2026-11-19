@@ -2740,31 +2740,9 @@ A sweep runs at the first check after the daily sweep hour, and the first check 
 The whole sweep must finish inside `FM_CHECK_TIMEOUT`, which defaults to 30, so a budget that leaves less than three seconds for judging the reads is cut down to fit.
 A read that runs out of time is printed as unreadable.
 
-## Daily session reset
-
-Supervisor sessions accumulate context, so the fleet resets them once a day.
-`config/daily-session-reset` is an optional local gitignored file holding `HH:MM` in home-local 24-hour time.
-When it is absent the reset is due daily after 04:00.
-The word `off` disables it.
-A malformed file is reported once until edited.
-
-Arm the check once per home with `bin/fm-daily-reset.sh arm`.
-That writes `state/daily-reset.check.sh` and binds its bytes with `bin/fm-check-register.sh`, so the existing watcher polls it on its normal cadence and turns its one line into a `check:` wake.
-`bin/fm-daily-reset.sh disarm` removes the shim, its trust binding, and the report record.
-
-Handle the wake by running `bin/fm-daily-reset.sh run`.
-It restarts each registered secondmate through `bin/fm-secondmate-restart.sh`, which asks the mate to persist its open records first and only restarts after that answer lands.
-A mate proven mid-turn is skipped and retried the next day.
-Skip a mate supervising an active validation run by naming only the other ids on the command line.
-The pass stamps `state/.daily-reset` with the date, so each day fires once and a skipped or failed mate is retried tomorrow.
-
-The main session resets itself: persist its open work following the /stow skill's open-record persistence half, then start a fresh session.
-The check stays silent while `state/.afk` exists and retries after the record clears.
-
 ## Day review
 
 The day review is a short evening board for the captain: where the time and the API price went per finished task, the quality signals, three recommendations, lessons from repeated mistakes, and whether the last advice helped.
-It is separate from the daily session reset and runs on its own schedule.
 `config/day-review` is an optional local gitignored file holding `HH:MM` with an optional IANA time zone, such as `21:00 Europe/Moscow`.
 When it is absent the review is due daily after 21:00 Europe/Moscow, whatever the host clock's zone.
 A bare `HH:MM` uses Europe/Moscow.
