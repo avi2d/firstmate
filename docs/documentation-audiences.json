@@ -26,16 +26,7 @@
   "readmeSetupTargets": [
     "docs/configuration.md",
     "docs/wedge-alarm.md",
-    "docs/tmux-backend.md",
     "docs/herdr-backend.md",
-    "docs/zellij-backend.md",
-    "docs/orca-backend.md",
-    "docs/cmux-backend.md",
-    "docs/paseo-backend.md",
-    "docs/rex-backend.md",
-    "docs/t3code-backend.md",
-    "docs/tern-backend.md",
-    "docs/hc-backend.md",
     "docs/remote-secondmates.md"
   ],
   "requiredOwnerPointers": [
@@ -323,6 +314,10 @@
     },
     {
       "path": "VISION.md",
+      "audience": "public-product"
+    },
+    {
+      "path": "docs/guide-index.md",
       "audience": "public-product"
     },
     {
