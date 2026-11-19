@@ -1,34 +1,5 @@
 #!/usr/bin/env bash
-# tests/fm-session-start.test.sh - behavior tests for bin/fm-session-start.sh,
-# the single command that collapses AGENTS.md sections 3 (bootstrap) and 5
-# (recovery) into one ordered digest.
-#
-# Coverage:
-#   - absent-file markers vs empty-but-present files in the context digest
-#   - the lock-refusal read-only path: banner leads, every mutating step is
-#     skipped (including bootstrap's seven mutating sweeps, verified by their
-#     ABSENCE), the digest still completes
-#   - output section ordering: the safety preamble leads unchanged, live fleet
-#     state precedes the curated memory a truncated tail may take, and the
-#     read-once contract precedes both
-#   - context-aware next-step guidance for read-only, AFK, X mode, and normal
-#     watcher ownership
-#   - status-tail bounding, default and FM_SESSION_START_STATUS_TAIL override
-#   - the per-line status-tail cap and its truncation marker
-#   - startup backlog composition: done rows dropped, every in-flight/held/
-#     blocked row kept whole, the dispatchable queued listing bounded with an
-#     exact disclosed remainder
-#   - orphan status logs whose task meta has already disappeared
-#   - per-task endpoint-liveness lines for a live and a dead recorded target,
-#     tmux and herdr both
-#   - composition: the script invokes the real fm-lock.sh/fm-bootstrap.sh/
-#     fm-wake-drain.sh (their real, distinctive output appears verbatim), it
-#     does not reimplement their logic
-#   - the deferred startup stage: slow network and inactive current-state reads
-#     do not delay the digest, the work still runs and lands durable findings, a
-#     network result surfaces exactly once (inline or as a wake, never both), a
-#     read-only session declares the checks it skipped, and the tasks-axi
-#     compatibility verdict is paid for once per session start
+# Behavior tests for bin/fm-session-start.sh.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -195,12 +166,24 @@ case "${1:-}" in
         printf '%s\n' '  compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending'
         ;;
       *'--state held'*)
-        task_header 1
+        held_count=${FM_FAKE_TASKS_AXI_HELD:-1}
+        task_header "$held_count"
         printf '%s\n' '  held-queued,queued,ship,firstmate,Held queued work,none,captain,captain choice pending'
+        i=2
+        while [ "$i" -le "$held_count" ]; do
+          printf '  held-%s,queued,ship,firstmate,Held item %s,none,captain,pick one\n' "$i" "$i"
+          i=$((i + 1))
+        done
         ;;
       *'--state queued'*'--blocked'*)
-        task_header 1
+        blocked_count=${FM_FAKE_TASKS_AXI_BLOCKED:-1}
+        task_header "$blocked_count"
         printf '%s\n' '  blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,"-","-"'
+        i=2
+        while [ "$i" -le "$blocked_count" ]; do
+          printf '  blocked-%s,queued,ship,firstmate,Blocked item %s,compact-startup,"-","-"\n' "$i" "$i"
+          i=$((i + 1))
+        done
         ;;
       *)
         printf '%s\n' 'startup recovery must not request an unfiltered whole-backlog listing' >&2
@@ -1219,11 +1202,11 @@ SH
   pass "session start: configured and auto-detected Herdr homes never require tmux"
 }
 
-# --- status tail bounding -----------------------------------------------------
+# --- one line per task under way ---------------------------------------------
 
-test_status_tail_bounding() {
+test_task_line_prints_latest_status_not_older_lines_or_meta_body() {
   local rec root home fakebin out
-  rec=$(new_world status-tail)
+  rec=$(new_world status-latest)
   IFS='|' read -r root home fakebin <<EOF
 $rec
 EOF
@@ -1231,30 +1214,27 @@ EOF
   make_fake_ps_claude "$fakebin"
   make_fake_tmux "$fakebin" "fm-sess:live"
 
-  printf 'window=fm-sess:live\nkind=ship\n' > "$home/state/task-a.meta"
-  printf 'working: step 1\nworking: step 2\nworking: step 3\nworking: step 4\nworking: step 5\nworking: step 6\nworking: step 7\n' \
-    > "$home/state/task-a.status"
+  printf 'window=fm-sess:live\nkind=ship\nmode=direct-PR\nworktree=/META-BODY-CANARY\n' > "$home/state/task-a.meta"
+  printf 'working: step 1\nworking: step 2\nworking: step 3\n\n' > "$home/state/task-a.status"
+  printf 'window=fm-sess:gone\nkind=scout\n' > "$home/state/task-b.meta"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  assert_contains "$out" "working: step 7" "default status tail missing the most recent line"
-  assert_contains "$out" "working: step 3" "default status tail (5 lines) missing an expected recent line"
-  assert_not_contains "$out" "working: step 1" "default status tail (5 lines) leaked an older line"
-  assert_contains "$out" "$home/state/task-a.status" "digest did not print the full status log path for a deeper read"
-  assert_contains "$out" "a bounded tail of every state/*.status" "read-once contract does not distinguish bounded status tails"
+  assert_contains "$out" \
+    "task-a [ship direct-PR] endpoint: alive (backend=tmux window=fm-sess:live) - latest: working: step 3" \
+    "a task under way did not get one line with its kind, mode, endpoint, and latest status line"
+  assert_not_contains "$out" "working: step 2" "the task line printed an older status line"
+  assert_not_contains "$out" "META-BODY-CANARY" "the digest printed a meta body instead of one line"
+  assert_contains "$out" "task-b [scout] endpoint: dead (backend=tmux window=fm-sess:gone) - latest: (no status yet)" \
+    "a task with no status log lost its line"
+  assert_contains "$out" "one line per state/*.meta task with" \
+    "the read-once contract does not say each task gets one line"
 
-  out=$(FM_SESSION_START_STATUS_TAIL=2 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  assert_contains "$out" "working: step 7" "FM_SESSION_START_STATUS_TAIL=2 tail missing the most recent line"
-  assert_not_contains "$out" "working: step 5" "FM_SESSION_START_STATUS_TAIL=2 did not bound the tail to 2 lines"
-
-  pass "status tail is bounded to the configured line count, with the full log path always printed"
+  pass "each task under way prints one line with its latest status line and no meta body or older lines"
 }
 
-# A crewmate writes its own status lines, so nothing upstream bounds their
-# length: an observed one ran 865 characters. The tail is a wake-EVENT view
-# whose full log path is printed beside it, so a long line is cut, marked, and
-# left recoverable rather than allowed to scale the digest with fleet load.
-test_status_tail_line_cap() {
-  local rec root home fakebin out lede longest capped tail_section
+# A worker writes its own status lines, so nothing upstream bounds their length.
+test_task_line_caps_status_and_keeps_endpoint_verdict() {
+  local rec root home fakebin out lede line status_part
   rec=$(new_world status-line-cap)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -1266,29 +1246,27 @@ EOF
   lede='needs-decision: [key=cap] pick the rendering strategy'
   printf 'window=fm-sess:live\nkind=ship\n' > "$home/state/task-cap.meta"
   {
+    printf 'working: older line\n'
     printf '%s' "$lede"
     awk 'BEGIN { while (i++ < 400) printf " padding" }'
     printf '\n'
-    printf 'working: short line kept whole\n'
   } > "$home/state/task-cap.status"
+  printf 'window=fm-sess:live\nkind=ship\n' > "$home/state/task-short.meta"
+  printf 'working: short line kept whole\n' > "$home/state/task-short.status"
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "$lede" "the cap discarded the lede that carries the state word and decision key"
-  assert_contains "$out" " [truncated]" "an over-long status line was not marked as truncated"
-  assert_contains "$out" "working: short line kept whole" "the cap mangled a status line already under it"
-  assert_contains "$out" "each capped at 220 characters" "the status tail header does not disclose its per-line cap"
-  assert_contains "$out" "$home/state/task-cap.status" "a capped tail dropped the full log path that recovers the rest"
+  line=$(printf '%s\n' "$out" | grep '^task-cap \[ship\] ')
+  [ -n "$line" ] || fail "the over-long task produced no line: $out"
+  case "$line" in *"endpoint: alive (backend=tmux window=fm-sess:live) - latest: $lede"*) ;;
+    *) fail "the cap dropped the endpoint verdict or the lede: $line" ;; esac
+  case "$line" in *" [truncated]") ;; *) fail "an over-long status line was not marked as truncated: $line" ;; esac
+  status_part=${line#*" - latest: "}
+  [ "${#status_part}" -le 220 ] || fail "the status part ran ${#status_part} characters past the 220-character cap"
+  assert_contains "$out" "task-short [ship] endpoint: alive (backend=tmux window=fm-sess:live) - latest: working: short line kept whole" \
+    "the cap mangled a status line already under it"
 
-  # Nothing the tail emits may exceed the cap, and the padded line really was
-  # long enough to exercise it.
-  tail_section=$(printf '%s\n' "$out" | awk '/^status tail \(/ { flag = 1; next } flag && /^$/ { flag = 0 } flag')
-  longest=$(printf '%s\n' "$tail_section" | awk '{ if (length($0) > max) max = length($0) } END { print max + 0 }')
-  [ "$longest" -le 220 ] || fail "a status tail line ran $longest characters past the 220-character cap"
-  capped=$(printf '%s\n' "$tail_section" | grep -c ' \[truncated\]$')
-  [ "$capped" -eq 1 ] || fail "expected exactly one truncated tail line, got $capped: $tail_section"
-
-  pass "status tail lines are capped with a truncation marker while the full log stays reachable"
+  pass "a long latest status line is capped and marked while the endpoint verdict survives"
 }
 
 test_wake_queue_rows_capped_in_digest_whole_in_queue() {
@@ -1333,10 +1311,9 @@ EOF
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
   assert_contains "$out" "Orphan status logs (state/*.status without matching .meta)" "digest did not label orphan status logs"
-  assert_contains "$out" "--- task-orphan ---" "digest did not print the orphan status id"
-  assert_contains "$out" "working: orphan step 6" "orphan status tail missing the newest line"
-  assert_not_contains "$out" "working: orphan step 1" "orphan status tail was not bounded"
-  assert_contains "$out" "$home/state/task-orphan.status" "orphan status tail did not print the full log path"
+  assert_contains "$out" "task-orphan ($home/state/task-orphan.status) - latest: working: orphan step 6" \
+    "an orphan status log did not get one line with its id, path, and latest status line"
+  assert_not_contains "$out" "working: orphan step 5" "an orphan status log printed an older line"
 
   matched_count=$(printf '%s\n' "$out" | grep -F -c 'working: surfaced once')
   orphan_count=$(printf '%s\n' "$out" | grep -F -c 'working: orphan step 6')
@@ -2133,12 +2110,14 @@ EOF
   out=$(FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TASKS_AXI_READY=3 \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to 20; task bodies omitted)" \
-    "compatible tasks-axi backend did not render the compact backlog listing"
+  assert_contains "$out" "backlog summary (tasks-axi; done rows omitted; held rows in full; blocked and ready queued bounded to 10; task bodies omitted)" \
+    "compatible tasks-axi backend did not render the backlog summary"
+  assert_contains "$out" "counts: in flight 1, held 1 (in-flight items included), blocked queued 1, ready queued 3" \
+    "the backlog summary did not count every group"
   assert_contains "$out" "tasks[1]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason}:" \
     "tasks-axi compact listing omitted the expected structured field header"
-  assert_contains "$out" "compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending" \
-    "tasks-axi compact listing omitted in-flight identity, state, or hold metadata"
+  assert_not_contains "$out" "compact-startup,in_flight" \
+    "the backlog summary listed an in-flight row whose task already has its own work-under-way line"
   assert_contains "$out" "held-queued,queued,ship,firstmate,Held queued work,none,captain,captain choice pending" \
     "tasks-axi compact listing omitted a held row or its hold metadata"
   assert_contains "$out" 'blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,"-","-"' \
@@ -2148,8 +2127,8 @@ EOF
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "tasks-axi compact digest leaked an in-flight task body"
   assert_not_contains "$out" "QUEUED-BODY-LINE" "tasks-axi compact digest leaked a queued task body"
   assert_not_contains "$out" "DONE-ROW-LINE" "tasks-axi compact digest listed a done row at startup"
-  assert_contains "$out" "--- compact-startup ---" "in-flight meta identity disappeared from startup recovery digest"
-  assert_contains "$out" "worktree=$home/projects/firstmate" "in-flight recovery worktree identity disappeared from startup digest"
+  assert_contains "$out" "compact-startup [ship] endpoint: " "the in-flight task lost its work-under-way line"
+  assert_not_contains "$out" "worktree=$home/projects/firstmate" "the startup digest printed a meta body"
   assert_contains "$out" "Full task bodies remain available on demand: bin/fm-tasks-axi.sh show <id> --full" \
     "compact digest omitted the full-body lookup pointer"
   assert_contains "$out" "ready_public_followups: 0 delivery-ready obligations" \
@@ -2192,20 +2171,42 @@ EOF
   assert_contains "$out" "ready-3,queued,ship,firstmate,Ready item 3" \
     "the queued bound dropped a row inside its own limit"
   assert_not_contains "$out" "ready-4,queued" "the queued bound did not actually bound the ready listing"
-  assert_contains "$out" "(shown 3 of 7 ready queued item(s))" \
-    "the bounded queued listing did not report what it showed"
-  assert_contains "$out" "(4 more queued - bin/fm-tasks-axi.sh ready)" \
-    "the bounded queued listing did not disclose an exact remainder and how to see it"
+  assert_contains "$out" "(shown 3 of 7 ready queued item(s); 4 more - bin/fm-tasks-axi.sh ready)" \
+    "the bounded queued listing did not disclose what it showed, an exact remainder, and how to see it"
 
   # The bound is for dispatchable work only: held and blocked rows stay whole.
   assert_contains "$out" "held-queued,queued,ship,firstmate,Held queued work,none,captain,captain choice pending" \
     "the queued bound swallowed a held row"
   assert_contains "$out" 'blocked-followup,queued,scout,firstmate,Follow compact startup,compact-startup,"-","-"' \
     "the queued bound swallowed a blocked row"
-  assert_contains "$out" "compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending" \
-    "the queued bound swallowed an in-flight row"
+  assert_contains "$out" "$(printf 'in flight with no state/*.meta record:\n  compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending')" \
+    "an in-flight row with no worker record was not listed"
 
-  pass "the startup backlog bound cuts only dispatchable queued rows and discloses the remainder exactly"
+  pass "the ready queue bound cuts only ready rows and discloses the remainder exactly"
+}
+
+test_backlog_blocked_bound_discloses_its_remainder_and_never_bounds_held() {
+  local rec root home fakebin out
+  rec=$(new_world backlog-blocked-bound)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  write_long_body_backlog "$home/data/backlog.md"
+
+  out=$(FM_FAKE_TASKS_AXI_BLOCKED=5 FM_FAKE_TASKS_AXI_HELD=5 FM_SESSION_START_QUEUED_LIMIT=3 \
+    run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "blocked-3,queued,ship" "the blocked bound dropped a row inside its own limit"
+  assert_not_contains "$out" "blocked-4,queued" "the blocked bound did not bound the blocked listing"
+  assert_contains "$out" "(shown 3 of 5 blocked queued item(s); 2 more - bin/fm-tasks-axi.sh list --state queued --blocked)" \
+    "the blocked bound did not disclose what it showed, an exact remainder, and how to see it"
+  assert_contains "$out" "held-5,queued,ship,firstmate,Held item 5,none,captain,pick one" \
+    "the bound cut a held row, which is a decision waiting on the captain"
+
+  pass "the blocked queue bound discloses its remainder while held rows stay whole"
 }
 
 # The captain's tier pick: P0 website; P1 ru-compliance and checks; P2 tui-dash
@@ -2244,7 +2245,7 @@ EOF
     "the digest did not list ready work P0, P1, P2 first in tasks-axi order within a tier, before its bound"
   assert_contains "$out" "(higher project tier first, per $home/config/project-tiers)" \
     "the digest did not say its ready listing follows the tier file"
-  assert_contains "$out" "(shown 5 of 8 ready queued item(s))" "the tier order changed the bound's count"
+  assert_contains "$out" "(shown 5 of 8 ready queued item(s);" "the tier order changed the bound's count"
 
   out=$(FM_FAKE_TASKS_AXI_READY_ROWS=$rows \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
@@ -2653,8 +2654,8 @@ EOF
   pass "--reemit manifests every context source by size and hash instead of reprinting bodies"
 }
 
-test_reemit_defaults_bound_tighter_than_startup() {
-  local rec root home fakebin startup reemit explicit
+test_startup_and_reemit_share_the_ten_row_queued_bound_and_one_status_line() {
+  local rec root home fakebin output mode explicit
   rec=$(new_world reemit-bounds)
   IFS='|' read -r root home fakebin <<EOF
 $rec
@@ -2665,24 +2666,27 @@ EOF
   printf '%s\n' '# Backlog' > "$home/data/backlog.md"
   printf 'line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n' > "$home/state/orphan-a.status"
 
-  startup=$(FM_FAKE_TASKS_AXI_READY=12 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-  assert_contains "$startup" "line 3" "true startup tail (5 lines) missing an expected recent line"
-  assert_contains "$startup" "ready-11,queued" "true startup queued bound (20) dropped a row it should keep"
-
-  reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
-    env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-    FM_FAKE_TASKS_AXI_READY=12 "$SESSION_START" --reemit)
-  assert_contains "$reemit" "line 6" "re-emit tail (2 lines) missing a recent line"
-  assert_not_contains "$reemit" "line 5" "re-emit tail (2 lines) leaked an older line"
-  assert_not_contains "$reemit" "ready-11,queued" "re-emit queued bound (10) leaked a row past its limit"
-  assert_contains "$reemit" "(shown 10 of 12 ready queued item(s))" "re-emit queued bound did not disclose what it showed"
+  for mode in startup reemit; do
+    if [ "$mode" = startup ]; then
+      output=$(FM_FAKE_TASKS_AXI_READY=12 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+    else
+      output=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
+        env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+        FM_FAKE_TASKS_AXI_READY=12 "$SESSION_START" --reemit)
+    fi
+    assert_contains "$output" "orphan-a ($home/state/orphan-a.status) - latest: line 7" "$mode dropped the orphan log's latest line"
+    assert_not_contains "$output" "line 6" "$mode printed an older status line"
+    assert_contains "$output" "ready-10,queued" "$mode queued bound (10) dropped a row it should keep"
+    assert_not_contains "$output" "ready-11,queued" "$mode queued bound (10) leaked a row past its limit"
+    assert_contains "$output" "(shown 10 of 12 ready queued item(s);" "$mode queued bound did not disclose what it showed"
+  done
 
   explicit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
-    FM_SESSION_START_STATUS_TAIL=7 "$SESSION_START" --reemit)
-  assert_contains "$explicit" "line 1" "an explicit status-tail setting did not win over the re-emit default"
+    FM_FAKE_TASKS_AXI_READY=12 FM_SESSION_START_QUEUED_LIMIT=12 "$SESSION_START" --reemit)
+  assert_contains "$explicit" "ready-12,queued" "an explicit queued limit did not win over the default"
 
-  pass "--reemit tails and queued rows default tighter while explicit settings still win"
+  pass "startup and --reemit both bound queued rows to 10 and print one status line, while an explicit limit wins"
 }
 
 test_reemit_fleet_state_lists_open_work_and_one_line_per_task() {
@@ -2704,8 +2708,10 @@ EOF
   startup=$(FM_FAKE_TASKS_AXI_READY=3 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$startup" "held-queued,queued,ship,firstmate,Held queued work" "true startup dropped a held row"
   assert_contains "$startup" "blocked-followup,queued,scout,firstmate" "true startup dropped a blocked row"
-  assert_contains "$startup" "META-BODY-CANARY=1" "true startup dropped the meta body"
-  assert_contains "$startup" "OLDER-STATUS-LINE" "true startup dropped the status tail"
+  assert_not_contains "$startup" "META-BODY-CANARY=1" "true startup printed the meta body"
+  assert_not_contains "$startup" "OLDER-STATUS-LINE" "true startup printed an older status line"
+  assert_contains "$startup" "- latest: paused [at=1]: LATEST-STATUS-LINE | owner=firstmate | recheck=2026-01-01" \
+    "true startup dropped the task's latest status line"
 
   reemit=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$root" FM_FAKE_HARNESS_PID=$$ PATH="$fakebin:$BASE_PATH" \
     env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
@@ -2728,7 +2734,7 @@ EOF
   [ "${#long_line}" -le 220 ] || fail "re-emit did not cap a long task line: ${#long_line} characters"
   assert_contains "$reemit" "but not held or blocked rows" "the read-once contract does not say re-emit omits held and blocked rows"
 
-  pass "--reemit lists counts, open in-flight rows, the ready queue, and one capped line per task while a true startup keeps the full listing"
+  pass "--reemit lists counts, open in-flight rows, the ready queue, and one capped line per task while a true startup also lists held and blocked rows"
 }
 
 test_reemit_manual_backlog_counts_held_and_blocked_lines() {
@@ -3398,8 +3404,8 @@ test_session_start_preserves_ambiguous_pi_process
 test_session_start_preserves_transiently_unreadable_tmux
 test_session_start_preserves_proven_bare_shell_recovery
 test_session_start_relaunches_herdr_husk_secondmate
-test_status_tail_bounding
-test_status_tail_line_cap
+test_task_line_prints_latest_status_not_older_lines_or_meta_body
+test_task_line_caps_status_and_keeps_endpoint_verdict
 test_wake_queue_rows_capped_in_digest_whole_in_queue
 test_orphan_status_logs_are_printed
 test_endpoint_liveness_tmux
@@ -3415,6 +3421,7 @@ test_non_pi_session_start_leaves_branch_state_untouched
 test_session_start_seeds_the_outcome_display_tail_while_away
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_queued_bound_discloses_its_remainder
+test_backlog_blocked_bound_discloses_its_remainder_and_never_bounds_held
 test_backlog_ready_queued_orders_by_project_tier
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback
@@ -3441,7 +3448,7 @@ test_runtime_bound_leaves_harness_ancestry_headroom
 test_reemit_skips_startup_sweeps_but_keeps_the_wake_drain
 test_reemit_cue_survives_the_hook_output_preview
 test_reemit_context_manifest_names_every_source_without_bodies
-test_reemit_defaults_bound_tighter_than_startup
+test_startup_and_reemit_share_the_ten_row_queued_bound_and_one_status_line
 test_reemit_fleet_state_lists_open_work_and_one_line_per_task
 test_reemit_manual_backlog_counts_held_and_blocked_lines
 test_agents_baseline_stays_at_true_start_and_reemits_on_every_drifted_pi_compact
