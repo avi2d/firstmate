@@ -66,14 +66,10 @@ fm_supervision_status() {
     [ -e "$check" ] || continue
     id=${check##*/}
     id=${id%.check.sh}
-    if [ "$id" = x-watch ]; then
-      continue
-    fi
     [ -e "$state/$id.check-trust" ] || continue
     FM_SUP_CHECKS=$((FM_SUP_CHECKS + 1))
   done
   if [ "$FM_SUP_IN_FLIGHT" -gt 0 ] \
-    || [ -f "$state/x-watch.check.sh" ] \
     || [ "$FM_SUP_SOURCES" -gt 0 ] \
     || [ "$FM_SUP_CHECKS" -gt 0 ]; then
     FM_SUP_NEEDED=true

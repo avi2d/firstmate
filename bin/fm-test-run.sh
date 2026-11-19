@@ -415,7 +415,7 @@ family_for_basename() {
       ;;
     fm-check-unregister.test.sh|fm-pipeline-spend.test.sh|fm-pr-check-security.test.sh|\
     fm-pr-merge.test.sh|fm-pr-reviewers.test.sh|fm-pr-state.test.sh|\
-    fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
+    fm-review-diff.test.sh|fm-teardown.test.sh)
       printf '%s\n' pr-forge
       ;;
     fm-supervision-host.test.sh|fm-supervision-host-drain.test.sh|\
@@ -457,7 +457,7 @@ family_for_basename() {
     fm-procevent-extension-errors.test.sh|fm-procevent-lavish.test.sh|fm-procevent-quota.test.sh|\
     fm-procevent-when.test.sh|fm-procevent.test.sh|\
     fm-live-gate.test.sh|\
-    fm-project-origin.test.sh|fm-public-followup.test.sh|fm-quota-choose.test.sh|\
+    fm-project-origin.test.sh|fm-quota-choose.test.sh|\
     fm-remote-entrypoint.test.sh|\
     fm-spawn-pool-base-freshen.test.sh|\
     fm-test-fixture-cleanup.test.sh|fm-test-fixtures.test.sh|\
@@ -547,7 +547,6 @@ tests/fm-t3-mcp.test.sh
 tests/fm-test-run.test.sh
 tests/fm-tmux-submit-busy.test.sh
 tests/fm-transition-lib.test.sh
-tests/fm-x-mode.test.sh
 EOF
 }
 
@@ -580,7 +579,6 @@ tests/fm-t3-mcp.test.sh 57613
 tests/fm-test-run.test.sh 500350
 tests/fm-tmux-submit-busy.test.sh 3201
 tests/fm-transition-lib.test.sh 440
-tests/fm-x-mode.test.sh 29896
 EOF
 }
 
@@ -622,7 +620,6 @@ tests/fm-pr-merge.test.sh
 tests/fm-backend-herdr.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-composer-lib.test.sh
-tests/fm-x-mode.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-send-popup-settle.test.sh
 tests/fm-send-strict.test.sh
@@ -914,7 +911,6 @@ tests/fm-procevent.test.sh 292297
 tests/fm-project-capacity.test.sh 68051
 tests/fm-project-mode.test.sh 1040
 tests/fm-project-origin.test.sh 123
-tests/fm-public-followup.test.sh 381564
 tests/fm-quota-array-dispatch-live-e2e.test.sh 50
 tests/fm-quota-choose.test.sh 2860
 tests/fm-read-repetition-live.test.sh 1110
@@ -1778,8 +1774,6 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-capacity.test.sh"
       ;;
     bin/fm-env-lib.sh)
-      # The one .env accessor, sourced by bin/fm-x-lib.sh (Relay token) and
-      # bin/fm-dispatch-resolve.sh (FM_DISPATCH_* and OPENROUTER_API_KEY).
       printf '%s\n' pr-forge
       printf '%s\n' "__script__:fm-dispatch-resolve.test.sh"
       ;;
@@ -1878,7 +1872,7 @@ families_for_changed_path() {
       printf '%s\n' "__script__:fm-backend-t3code.test.sh"
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-review-diff.sh|\
-    bin/fm-x-*|bin/fm-check*|bin/fm-pipeline-spend.sh)
+    bin/fm-check*|bin/fm-pipeline-spend.sh)
       printf '%s\n' pr-forge
       ;;
     bin/fm-nm-run-lib.sh)

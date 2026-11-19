@@ -94,14 +94,7 @@ unset HERDR_ENV HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH 
   FM_BACKEND FM_HOME FM_ROOT FM_ROOT_OVERRIDE FM_STATE_OVERRIDE FM_DATA_OVERRIDE \
   FM_CONFIG_OVERRIDE FM_PROJECTS_OVERRIDE
 
-# Clear the tasks-axi env overrides. An operator shell exports TASKS_AXI_FILE
-# (and may export TASKS_AXI_BACKEND) at its real home's backlog, and tasks-axi
-# resolves that env AHEAD of the .tasks.toml a fixture copies, so a suite that
-# seeds a temp home with bare `tasks-axi` would silently write the operator's
-# live backlog instead - tests/fm-public-followup.test.sh did exactly that. Every
-# fixture addresses its own data/backlog.md through its copied .tasks.toml, an
-# explicit --file, or bin/fm-tasks-axi.sh; a case that verifies the wrapper
-# against an ambient override sets TASKS_AXI_FILE itself.
+# Ambient overrides take precedence over a fixture and can write the live backlog.
 unset TASKS_AXI_FILE TASKS_AXI_BACKEND
 
 # Clear the Rex block identity an operator's terminal exports. Run directly

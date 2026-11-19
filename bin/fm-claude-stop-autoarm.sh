@@ -434,7 +434,7 @@ autoarm_alarm_banner() {
   elif [ "${FM_SUP_CHECKS:-0}" -gt 0 ]; then
     need_desc="$FM_SUP_CHECKS registered custom check(s)"
   else
-    need_desc="X-mode relay polling active"
+    need_desc="supervision required"
   fi
   {
     printf 'FIRSTMATE SUPERVISION IS GENUINELY DOWN: %s - the Stop-owned auto-arm exhausted its bounded retries and one failure notice, no live watcher or automatic continuation exists, and this session block budget is exhausted.\n' "$need_desc"

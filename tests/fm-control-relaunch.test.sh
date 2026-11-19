@@ -36,7 +36,7 @@ CONTROL="$ROOT/bin/fm-control.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 PROMOTE="$ROOT/bin/fm-promote.sh"
 BRIEF="$ROOT/bin/fm-brief.sh"
-X_LINK="$ROOT/bin/fm-x-link.sh"
+META_WRITER="$ROOT/tests/fixtures/fm-meta-write.sh"
 # fm_test_tmproot's own cleanup trap fires when its command substitution exits,
 # so recreate the root before resolving it and clean it up from this file's trap.
 TMP_ROOT=$(fm_test_tmproot fm-control-relaunch)
@@ -320,7 +320,7 @@ for path in "$@"; do
 done
 if [ -n "${FM_FAKE_META_WRITER_TARGET:-}" ] \
    && [ "$target_path" = "$FM_FAKE_META_WRITER_TARGET" ] \
-   && grep -q '^x_request=' "$source_path" 2>/dev/null; then
+   && grep -q '^test_writer=' "$source_path" 2>/dev/null; then
   : > "$FM_FAKE_META_WRITER_READY"
   while [ ! -e "$FM_FAKE_META_WRITER_RELEASE" ]; do /bin/sleep 0.01; done
 fi
@@ -615,8 +615,7 @@ test_relaunch_serializes_concurrent_durable_metadata_publication() {
     FM_FAKE_META_WRITER_TARGET="$dir/home/state/rl28.meta" \
     FM_FAKE_META_WRITER_READY="$ready" \
     FM_FAKE_META_WRITER_RELEASE="$release" \
-    "$X_LINK" rl28 request-28 --carry-count 1 --carry-ts 1700000000 \
-      --carry-platform x --carry-max 280 > "$dir/link.out" 2>&1 &
+    bash "$META_WRITER" "$dir/home/state/rl28.meta" request-28 > "$dir/link.out" 2>&1 &
   link_pid=$!
   i=0
   while [ ! -e "$waiting" ] && [ "$i" -lt 500 ]; do
@@ -644,13 +643,11 @@ test_relaunch_serializes_concurrent_durable_metadata_publication() {
   }
   : > "$release"
   wait "$link_pid"; rc=$?
-  expect_code 0 "$rc" "concurrent X metadata publication should serialize"$'\n'"$(cat "$dir/link.out")"
+  expect_code 0 "$rc" "concurrent metadata publication should serialize"$'\n'"$(cat "$dir/link.out")"
   wait "$control_pid"; rc=$?
   expect_code 0 "$rc" "relaunch should complete before serialized metadata publication"$'\n'"$(cat "$dir/control.out")"
-  [ "$(meta_field "$dir" rl28 x_request)" = request-28 ] \
-    || fail "relaunch erased metadata published concurrently through the X interface"
-  [ "$(meta_field "$dir" rl28 x_followups)" = 1 ] \
-    || fail "relaunch erased the concurrent follow-up count"
+  [ "$(meta_field "$dir" rl28 test_writer)" = request-28 ] \
+    || fail "relaunch erased concurrently published metadata"
   traceparent=$(meta_field "$dir" rl28 traceparent)
   fm_trace_context_valid "$traceparent" \
     || fail "concurrent metadata publication erased the replacement's trace carrier"
@@ -2254,15 +2251,12 @@ test_prepublication_failure_keeps_concurrent_durable_metadata() {
     fail "relaunch did not reach its pre-publication endpoint check"
   }
   link_out=$(env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$X_LINK" rl30 request-30 --carry-count 2 --carry-ts 1700000000 \
-      --carry-platform x --carry-max 280 2>&1); rc=$?
+    bash "$META_WRITER" "$dir/home/state/rl30.meta" request-30 2>&1); rc=$?
   expect_code 0 "$rc" "concurrent durable metadata publication should succeed"$'\n'"$link_out"
   wait "$control_pid"; rc=$?
   expect_code 1 "$rc" "the staged pre-publication launch failure should fail closed"
-  [ "$(meta_field "$dir" rl30 x_request)" = request-30 ] \
-    || fail "rollback erased the concurrent X request"
-  [ "$(meta_field "$dir" rl30 x_followups)" = 2 ] \
-    || fail "rollback erased the concurrent follow-up count"
+  [ "$(meta_field "$dir" rl30 test_writer)" = request-30 ] \
+    || fail "rollback erased concurrently published metadata"
   [ "$(journal_field "$dir" rl30 rollback)" = prior-record-kept ] \
     || fail "pre-publication rollback should leave the live record untouched"
   pass "fm-control relaunch: unpublished rollback keeps concurrent durable metadata"
