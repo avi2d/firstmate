@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Behavior tests for the private-board share-guard seatbelt.
-# Drives the shell transport through every harness entry form.
+# Drives the shell transport through the Pi primary's --command entry form.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -75,83 +75,37 @@ matrix_case A09 allow 'lavish-axi --help'
 matrix_case A10 allow "python3 -c 'import requests; requests.get(\"https://ht-ml.app/x\")'"
 
 run_matrix_entry() {
-  local id=$1 expected=$2 entry=$3 cmd=$4 payload out_file err_file rc
-  out_file="$TMP_ROOT/$id-$entry.out"
-  err_file="$TMP_ROOT/$id-$entry.err"
-
-  case "$entry" in
-    codex)
-      payload=$(jq -cn --arg command "$cmd" '{tool_name:"Bash",tool_input:{command:$command}}')
-      printf '%s' "$payload" | check >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-    claude)
-      payload=$(jq -cn --arg command "$cmd" '{tool_name:"Bash",tool_input:{command:$command}}')
-      printf '%s' "$payload" | check --claude >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-    grok)
-      payload=$(jq -cn --arg command "$cmd" '{toolName:"run_terminal_command",toolInput:{command:$command}}')
-      printf '%s' "$payload" | check >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-    opencode|pi)
-      check --command "$cmd" >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-  esac
+  local id=$1 expected=$2 cmd=$3 out_file err_file rc
+  out_file="$TMP_ROOT/$id.out"
+  err_file="$TMP_ROOT/$id.err"
+  check --command "$cmd" >"$out_file" 2>"$err_file"
+  rc=$?
 
   if [ "$expected" = "deny" ]; then
-    [ "$rc" -eq 2 ] || fail "$id via $entry must exit 2, got $rc for: $cmd"
-    grep -q 'share-guard' "$err_file" || fail "$id via $entry stderr must name the guard: $(cat "$err_file")"
+    [ "$rc" -eq 2 ] || fail "$id must exit 2, got $rc for: $cmd"
+    [ ! -s "$out_file" ] || fail "$id deny must keep stdout empty: $(cat "$out_file")"
+    grep -q 'share-guard' "$err_file" || fail "$id stderr must name the guard: $(cat "$err_file")"
   else
-    [ "$rc" -eq 0 ] || fail "$id via $entry must exit 0, got $rc for: $cmd"
-    [ ! -s "$out_file" ] || fail "$id via $entry allow must stay silent on stdout"
-    [ ! -s "$err_file" ] || fail "$id via $entry allow must stay silent on stderr"
+    [ "$rc" -eq 0 ] || fail "$id must exit 0, got $rc for: $cmd"
+    [ ! -s "$out_file" ] || fail "$id allow must stay silent on stdout"
+    [ ! -s "$err_file" ] || fail "$id allow must stay silent on stderr"
   fi
 }
 
-SWEEP_IDS=" S01 U01 A01 A03 "
-
-test_share_matrix_all_entries() {
-  local i entry entries
+test_share_matrix() {
+  local i
   for ((i = 0; i < ${#MATRIX_IDS[@]}; i++)); do
-    entries="opencode"
-    case "$SWEEP_IDS" in
-      *" ${MATRIX_IDS[$i]} "*) entries="codex claude grok opencode pi" ;;
-    esac
-    for entry in $entries; do
-      run_matrix_entry "${MATRIX_IDS[$i]}" "${MATRIX_EXPECTED[$i]}" "$entry" "${MATRIX_COMMANDS[$i]}"
-    done
+    run_matrix_entry "${MATRIX_IDS[$i]}" "${MATRIX_EXPECTED[$i]}" "${MATRIX_COMMANDS[$i]}"
     pass "matrix ${MATRIX_IDS[$i]}: ${MATRIX_EXPECTED[$i]}"
   done
 }
 
-test_cursor_deny_renders_object() {
-  local out rc
-  out=$(printf '%s' '{"tool_input":{"command":"lavish-axi share board.html"},"tool_name":"Shell"}' | check --cursor 2>/dev/null)
+test_missing_command_is_a_usage_error() {
+  local rc
+  printf '%s' '{"tool_input":{"command":"lavish-axi share board.html"}}' | check >/dev/null 2>&1
   rc=$?
-  [ "$rc" -eq 0 ] || fail "cursor deny must exit 0, got $rc"
-  printf '%s' "$out" | jq -e '.permission == "deny"' >/dev/null 2>&1 || fail "cursor deny must render its decision object: $out"
-  pass "cursor entry form renders its own deny object"
-}
-
-test_grok_deny_carries_stdout_object() {
-  local out rc
-  out=$(printf '%s' '{"toolInput":{"command":"lavish-axi share board.html"},"toolName":"run_terminal_command"}' | check 2>/dev/null)
-  rc=$?
-  [ "$rc" -eq 2 ] || fail "grok deny must exit 2, got $rc"
-  printf '%s' "$out" | jq -e '.decision == "deny"' >/dev/null 2>&1 || fail "grok deny must carry decision=deny on stdout: $out"
-  pass "grok entry form carries its deny object on stdout"
-}
-
-test_claude_deny_keeps_stdout_empty() {
-  local out rc
-  out=$(printf '%s' '{"tool_input":{"command":"lavish-axi share board.html"},"tool_name":"Bash"}' | check --claude 2>/dev/null)
-  rc=$?
-  [ "$rc" -eq 2 ] || fail "claude deny must exit 2, got $rc"
-  [ -z "$out" ] || fail "claude deny must keep stdout empty: $out"
-  pass "claude entry form keeps stdout empty on deny"
+  [ "$rc" -eq 2 ] || fail "a call without --command must exit 2 with usage, not read stdin, got $rc"
+  pass "a call without --command is a usage error"
 }
 
 approve_file() {
@@ -286,10 +240,8 @@ test_unknown_flag_errors() {
   pass "unknown CLI flag is rejected"
 }
 
-test_share_matrix_all_entries
-test_cursor_deny_renders_object
-test_grok_deny_carries_stdout_object
-test_claude_deny_keeps_stdout_empty
+test_share_matrix
+test_missing_command_is_a_usage_error
 test_fresh_file_approval_passes
 test_stale_approval_refuses
 test_edit_after_approval_refuses

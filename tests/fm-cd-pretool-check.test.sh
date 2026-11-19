@@ -5,12 +5,11 @@
 # bin/fm-cd-command-policy.mjs is the single owner of the block/allow decision;
 # it reuses the shell classifier owned by bin/fm-arm-command-policy.mjs.
 # bin/fm-cd-pretool-check.sh is the stable transport: it scopes the guard to the
-# real primary checkout, then drives all five harness entry forms. This suite
-# proves the decision matrix, the harness-output shaping, the primary-checkout
+# real primary checkout and takes the Pi primary's --command entry form. This
+# suite proves the decision matrix, the deny output, the primary-checkout
 # scoping (including the deliberate secondmate-home difference from the turn-end
-# guard), the fail-open transport behavior, the prefilter fast path, the
-# end-to-end cwd-leak regression, and the per-harness wiring. No harness is
-# spawned; live per-harness evidence lives in docs/cd-guard.md.
+# guard), the fail-open transport behavior, the prefilter fast path, and the
+# end-to-end cwd-leak regression. No harness is spawned.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -27,7 +26,6 @@ install_cd_scripts() {
   local dir=$1
   mkdir -p "$dir/bin"
   cp "$ROOT/bin/fm-cd-pretool-check.sh" "$dir/bin/fm-cd-pretool-check.sh"
-  cp "$ROOT/bin/fm-hook-host-lib.sh" "$dir/bin/fm-hook-host-lib.sh"
   cp "$ROOT/bin/fm-cd-command-policy.mjs" "$dir/bin/fm-cd-command-policy.mjs"
   cp "$ROOT/bin/fm-arm-command-policy.mjs" "$dir/bin/fm-arm-command-policy.mjs"
   chmod +x "$dir/bin/fm-cd-pretool-check.sh" "$dir/bin/fm-cd-command-policy.mjs"
@@ -171,67 +169,37 @@ MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-cd-policy-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
 
 run_matrix_entry() {
-  local id=$1 expected=$2 entry=$3 cmd=$4 payload out_file err_file rc
-  out_file="$MATRIX_TMP/$id-$entry.out"
-  err_file="$MATRIX_TMP/$id-$entry.err"
-
-  case "$entry" in
-    codex)
-      payload=$(jq -cn --arg command "$cmd" '{tool_name:"Bash",tool_input:{command:$command}}')
-      printf '%s' "$payload" | "$CHECK" >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-    claude)
-      payload=$(jq -cn --arg command "$cmd" '{tool_name:"Bash",tool_input:{command:$command}}')
-      printf '%s' "$payload" | "$CHECK" --claude >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-    grok)
-      payload=$(jq -cn --arg command "$cmd" '{toolName:"run_terminal_command",toolInput:{command:$command}}')
-      printf '%s' "$payload" | "$CHECK" >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-    opencode|pi)
-      "$CHECK" --command "$cmd" >"$out_file" 2>"$err_file"
-      rc=$?
-      ;;
-    *)
-      fail "unknown matrix entry form: $entry"
-      ;;
-  esac
+  local id=$1 expected=$2 cmd=$3 out_file err_file rc
+  out_file="$MATRIX_TMP/$id.out"
+  err_file="$MATRIX_TMP/$id.err"
+  "$CHECK" --command "$cmd" >"$out_file" 2>"$err_file"
+  rc=$?
 
   if [ "$expected" = allow ]; then
-    [ "$rc" -eq 0 ] || fail "$id via $entry must allow, got exit $rc: $(cat "$err_file")"
-    [ ! -s "$out_file" ] || fail "$id via $entry allow must leave stdout empty: $(cat "$out_file")"
-    [ ! -s "$err_file" ] || fail "$id via $entry allow must leave stderr empty: $(cat "$err_file")"
+    [ "$rc" -eq 0 ] || fail "$id must allow, got exit $rc: $(cat "$err_file")"
+    [ ! -s "$out_file" ] || fail "$id allow must leave stdout empty: $(cat "$out_file")"
+    [ ! -s "$err_file" ] || fail "$id allow must leave stderr empty: $(cat "$err_file")"
     return
   fi
 
-  [ "$rc" -eq 2 ] || fail "$id via $entry must deny, got exit $rc"
+  [ "$rc" -eq 2 ] || fail "$id must deny, got exit $rc"
+  [ ! -s "$out_file" ] || fail "$id deny must leave stdout empty: $(cat "$out_file")"
   jq -e '.hookSpecificOutput.permissionDecision == "deny" and (.systemMessage | test("\\[persistent-cd\\]"))' "$err_file" >/dev/null 2>&1 \
-    || fail "$id via $entry deny must carry the persistent-cd reason code on stderr: $(cat "$err_file")"
-  if [ "$entry" = claude ]; then
-    [ ! -s "$out_file" ] || fail "$id via claude deny must leave stdout empty: $(cat "$out_file")"
-  elif [ "$entry" = grok ]; then
-    jq -e '.decision == "deny"' "$out_file" >/dev/null 2>&1 \
-      || fail "$id via grok deny must carry decision=deny on stdout: $(cat "$out_file")"
-  fi
+    || fail "$id deny must carry the persistent-cd reason code on stderr: $(cat "$err_file")"
 }
 
 test_full_acceptance_matrix() {
-  local i entry
+  local i
   for ((i = 0; i < ${#MATRIX_IDS[@]}; i++)); do
-    for entry in codex claude grok opencode pi; do
-      run_matrix_entry "${MATRIX_IDS[$i]}" "${MATRIX_EXPECTED[$i]}" "$entry" "${MATRIX_COMMANDS[$i]}"
-    done
+    run_matrix_entry "${MATRIX_IDS[$i]}" "${MATRIX_EXPECTED[$i]}" "${MATRIX_COMMANDS[$i]}"
   done
-  pass "cd-guard acceptance matrix: ${#MATRIX_IDS[@]} cases x 5 harness entry forms, block/allow all correct"
+  pass "cd-guard acceptance matrix: ${#MATRIX_IDS[@]} cases, block/allow all correct"
 }
 
 # --- return-to-home allowance ---------------------------------------------
 
 test_home_root_allow() {
-  local link cmd entry
+  local link cmd
   link="$TMP_ROOT/homelink"
   ln -s "$PRIMARY" "$link"
   for cmd in \
@@ -244,9 +212,7 @@ test_home_root_allow() {
     "cd $PRIMARY && cd $PRIMARY" \
     "cd $PRIMARY; sleep 1; bin/x report 2>&1 | head -60"
   do
-    for entry in codex claude grok opencode pi; do
-      run_matrix_entry "H-allow" allow "$entry" "$cmd"
-    done
+    run_matrix_entry "H-allow" allow "$cmd"
   done
   for cmd in \
     "cd $PRIMARY/bin" \
@@ -257,11 +223,9 @@ test_home_root_allow() {
     "cd $PRIMARY; cd projects/foo" \
     "cd projects/foo; cd $PRIMARY"
   do
-    for entry in codex claude grok opencode pi; do
-      run_matrix_entry "H-deny" deny "$entry" "$cmd"
-    done
+    run_matrix_entry "H-deny" deny "$cmd"
   done
-  pass "cd-guard: return-to-home cd/pushd allows, every other rooted shape still denies (x 5 harness entry forms)"
+  pass "cd-guard: return-to-home cd/pushd allows, every other rooted shape still denies"
 }
 
 # --- primary-checkout scoping ----------------------------------------------
@@ -269,7 +233,7 @@ test_home_root_allow() {
 test_fires_in_secondmate_home() {
   local dir out rc
   dir=$(make_secondmate_fixture "$TMP_ROOT/secondmate")
-  out=$("$dir/bin/fm-cd-pretool-check.sh" --claude --command 'cd projects/foo' 2>&1); rc=$?
+  out=$("$dir/bin/fm-cd-pretool-check.sh" --command 'cd projects/foo' 2>&1); rc=$?
   expect_code 2 "$rc" "cd-guard must fire in a secondmate's own primary session (unlike the turn-end guard)"
   assert_contains "$out" '[persistent-cd]' "secondmate-home block must carry the reason code"
   pass "cd-guard: fires in a secondmate home (its own primary session is a primary)"
@@ -280,10 +244,10 @@ test_inert_in_child_worktree() {
   base="$TMP_ROOT/child-base"
   dir="$TMP_ROOT/child-wt"
   make_child_worktree_fixture "$base" "$dir" >/dev/null
-  out=$("$dir/bin/fm-cd-pretool-check.sh" --claude --command 'cd projects/foo' 2>&1); rc=$?
-  expect_code 0 "$rc" "cd-guard must be inert in a crewmate/scout linked worktree"
+  out=$("$dir/bin/fm-cd-pretool-check.sh" --command 'cd projects/foo' 2>&1); rc=$?
+  expect_code 0 "$rc" "cd-guard must be inert in a worker linked worktree"
   [ -z "$out" ] || fail "cd-guard produced output in a child worktree: $out"
-  pass "cd-guard: inert in a crewmate/scout task worktree (linked git worktree)"
+  pass "cd-guard: inert in a worker task worktree (linked git worktree)"
 }
 
 test_inert_when_not_firstmate_repo() {
@@ -292,7 +256,7 @@ test_inert_when_not_firstmate_repo() {
   git init -q "$dir"
   git -C "$dir" commit -q --allow-empty -m init
   install_cd_scripts "$dir"   # bin/ present but no AGENTS.md
-  out=$("$dir/bin/fm-cd-pretool-check.sh" --claude --command 'cd projects/foo' 2>&1); rc=$?
+  out=$("$dir/bin/fm-cd-pretool-check.sh" --command 'cd projects/foo' 2>&1); rc=$?
   expect_code 0 "$rc" "cd-guard must be inert without AGENTS.md (not a firstmate checkout)"
   [ -z "$out" ] || fail "cd-guard produced output outside a firstmate checkout: $out"
   pass "cd-guard: inert in a non-firstmate repo (no AGENTS.md)"
@@ -304,7 +268,7 @@ test_inert_when_not_a_git_repo() {
   mkdir -p "$dir"
   : > "$dir/AGENTS.md"
   install_cd_scripts "$dir"   # AGENTS.md + bin/ but no git repo
-  out=$("$dir/bin/fm-cd-pretool-check.sh" --claude --command 'cd projects/foo' 2>&1); rc=$?
+  out=$("$dir/bin/fm-cd-pretool-check.sh" --command 'cd projects/foo' 2>&1); rc=$?
   expect_code 0 "$rc" "cd-guard must be inert when the checkout is not a git repo"
   [ -z "$out" ] || fail "cd-guard produced output in a non-git dir: $out"
   pass "cd-guard: inert when not inside a git repo"
@@ -336,7 +300,7 @@ test_e2e_cwd_leak_regression() {
 
   # With the guard, the exact stray command is denied before it can run, so the
   # real harness never lets cwd leave the home.
-  out=$("$CHECK" --claude --command 'cd projects/clone' 2>&1); rc=$?
+  out=$("$CHECK" --command 'cd projects/clone' 2>&1); rc=$?
   expect_code 2 "$rc" "guard must deny the stray persistent cd that caused the leak"
   assert_contains "$out" '[persistent-cd]' "leak-preventing block must carry the reason code"
   pass "cd-guard: reproduces the cwd leak and denies the exact command that causes it"
@@ -344,20 +308,11 @@ test_e2e_cwd_leak_regression() {
 
 # --- fail-open transport behavior ------------------------------------------
 
-test_fail_open_empty_stdin() {
-  local out rc
-  out=$("$CHECK" < /dev/null 2>&1); rc=$?
-  expect_code 0 "$rc" "transport must exit 0 on empty stdin"
-  [ -z "$out" ] || fail "transport produced output on empty stdin: $out"
-  pass "cd-guard: fails open on empty stdin"
-}
-
-test_fail_open_unparseable_json() {
-  local out rc
-  out=$(printf 'not json at all' | "$CHECK" 2>&1); rc=$?
-  expect_code 0 "$rc" "transport must exit 0 on unparseable stdin JSON"
-  [ -z "$out" ] || fail "transport produced output on unparseable JSON: $out"
-  pass "cd-guard: fails open on unparseable stdin JSON"
+test_missing_command_is_a_usage_error() {
+  local rc
+  printf '%s' '{"tool_input":{"command":"cd projects/foo"}}' | "$CHECK" >/dev/null 2>&1; rc=$?
+  expect_code 2 "$rc" "a call without --command must exit 2 with usage, not read stdin"
+  pass "cd-guard: a call without --command is a usage error"
 }
 
 test_fail_open_missing_node() {
@@ -372,20 +327,6 @@ test_fail_open_missing_node() {
   expect_code 0 "$rc" "transport must fail open when node is unavailable"
   [ -z "$out" ] || fail "transport produced output without node: $out"
   pass "cd-guard: fails open (never blocks) when node is missing"
-}
-
-test_fail_open_missing_jq_on_stdin() {
-  local fakebin tool tool_path out rc
-  fakebin=$(fm_fakebin "$TMP_ROOT/nojq")
-  for tool in bash sh git dirname cat printf sed tr node; do
-    tool_path=$(command -v "$tool") || continue
-    ln -s "$tool_path" "$fakebin/$tool"
-  done
-  # jq deliberately absent: the stdin transport cannot extract the command.
-  out=$(printf '{"tool_input":{"command":"cd projects/foo"}}' | PATH="$fakebin" "$CHECK" 2>&1); rc=$?
-  expect_code 0 "$rc" "stdin transport must fail open when jq is unavailable"
-  [ -z "$out" ] || fail "transport produced output without jq on the stdin path: $out"
-  pass "cd-guard: fails open on the stdin path when jq is missing"
 }
 
 # --- prefilter fast path ----------------------------------------------------
@@ -456,10 +397,8 @@ test_inert_in_child_worktree
 test_inert_when_not_firstmate_repo
 test_inert_when_not_a_git_repo
 test_e2e_cwd_leak_regression
-test_fail_open_empty_stdin
-test_fail_open_unparseable_json
+test_missing_command_is_a_usage_error
 test_fail_open_missing_node
-test_fail_open_missing_jq_on_stdin
 test_prefilter_skips_node_without_cd_substring
 test_policy_cli_direct
 test_scripts_are_shellcheck_clean
