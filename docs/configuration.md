@@ -3614,37 +3614,20 @@ The runner proves exactly one durability boundary: output that reached the runne
 
 `docs/verification/process-event-sources.md` holds the measurements and `.agents/skills/process-event-sources/SKILL.md` owns the handling procedure.
 
-## Spoken interface and captain inbox (config/voice-*, config/inbox-*)
+## Inbox configuration
 
-The spoken interface in [`docs/voice-relay.md`](voice-relay.md) and the model-backed subcommands of `bin/fm-inbox.sh` reach a paid API in a named account, so no region, model id or AWS profile is shipped as a tracked default.
-Each is one line in a local, gitignored `config/` file, with an environment variable that overrides it for a single run, and a missing required value refuses with the path to write rather than falling back to a value that belongs to another home.
-
-That configuration is the whole opt-in: an unconfigured home cannot start the relay and cannot run `fm-inbox.sh say` or `ask`, while `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain` need no configuration at all because they make no model call.
-The voice handover depends on `note`, so it keeps working in a home that has configured nothing.
+The model-backed `ask` subcommand reaches a paid API, so no region, model ID, or AWS profile is shipped as a tracked default.
+Each is one line in a local, gitignored `config/` file, and the matching environment variable overrides it for a single run.
+A missing required value refuses with the path to write.
+See [the inbox contract](inbox.md) for command behavior and privacy.
 
 | File | Environment | Holds |
 | --- | --- | --- |
-| `config/voice-region` | `FM_VOICE_REGION` | Bedrock region for the relay's bidirectional session, required by `bin/fm-voice-relay.py`. |
-| `config/voice-model` | `FM_VOICE_MODEL` | Speech-to-speech model id, required by `bin/fm-voice-relay.py`. |
-| `config/voice-profile` | `FM_VOICE_PROFILE` | AWS profile the relay exports credentials from; absent, or an explicitly empty variable, means it uses only credentials already in its environment. |
-| `config/voice-id` | `FM_VOICE_ID` | Output voice id, optional, `matthew` when unset. |
-| `config/voice-read-scope` | none | `counts` (the default, and what an absent file means) or `full`; see [`docs/voice-relay.md`](voice-relay.md) for what each scope may say. |
-| `config/voice-read-deny` | none | One plain case-insensitive substring per line; a matching open item is withheld from every list and reduced to a count. |
-| `config/inbox-region` | `FM_INBOX_REGION` | AWS region for `fm-inbox.sh say` and `ask`. |
-| `config/inbox-stt-model` | `FM_INBOX_STT_MODEL` | Speech-to-text model id, required by `fm-inbox.sh say`. |
-| `config/inbox-ask-model` | `FM_INBOX_ASK_MODEL` | Side-question model id, required by `fm-inbox.sh ask`. |
-| `config/inbox-profile` | `FM_INBOX_PROFILE` | AWS profile for those two calls; absent, or an explicitly empty variable, means whatever credentials are already in the environment. |
+| `config/inbox-region` | `FM_INBOX_REGION` | AWS region for `fm-inbox.sh ask`. |
+| `config/inbox-ask-model` | `FM_INBOX_ASK_MODEL` | Side-question model ID, required by `ask`. |
+| `config/inbox-profile` | `FM_INBOX_PROFILE` | AWS profile, optional. |
 
-**How configuration files are parsed**
-
-Each account, model and voice file above is read as its first line that is not blank and not a `#` comment, so a comment above the value is fine.
-The two read files use different parsing rules:
-
-- `config/voice-read-scope` must contain only the bare word with optional blank space around it.
-  A comment header causes a refusal rather than being skipped.
-- In `config/voice-read-deny`, every line that is neither blank nor a `#` comment adds one substring.
-
-`FM_VOICE_RELAY` and `FM_VOICE_PYTHON` belong to the laptop rather than to a home, so they have no config file: `bin/fm-voice-client.py` requires the relay path as a flag or that variable and carries no default path.
+Each file is read as its first line that is not blank and not a `#` comment.
 
 ## Environment variables
 
@@ -3852,15 +3835,8 @@ FM_SUPERVISION_HOST_TURN_TIMEOUT=1200    # bound on one engine turn; a turn that
 FM_SUPERVISION_HOST_ROTATE_TURNS=20      # the engine conversation starts fresh after this many turns (and at every main session start)
 FM_SUPERVISION_ENGINE_GRACE=30           # seconds between TERM and KILL when an engine turn is stopped
 FM_SUPERVISION_HANDOFF_RETRY_SECONDS=300 # with config/supervision-handoff-ack, seconds between the detached owner's delivery retries of an unacknowledged hand-back
-# spoken interface and captain inbox; see "Spoken interface and captain inbox" above
-FM_VOICE_REGION=        # overrides config/voice-region for one relay run
-FM_VOICE_MODEL=         # overrides config/voice-model for one relay run
-FM_VOICE_PROFILE=       # overrides config/voice-profile; explicitly empty forces ambient credentials
-FM_VOICE_ID=            # overrides config/voice-id; matthew when neither is set
-FM_VOICE_RELAY=         # laptop-side path to bin/fm-voice-relay.py on the desktop; required by fm-voice-client.py unless --relay is passed
-FM_VOICE_PYTHON=python3 # laptop-side interpreter used to start the relay over ssh
-FM_INBOX_REGION=        # overrides config/inbox-region for fm-inbox.sh say and ask
-FM_INBOX_STT_MODEL=     # overrides config/inbox-stt-model for fm-inbox.sh say
+# inbox; see "Inbox configuration" above
+FM_INBOX_REGION=        # overrides config/inbox-region for fm-inbox.sh ask
 FM_INBOX_ASK_MODEL=     # overrides config/inbox-ask-model for fm-inbox.sh ask
 FM_INBOX_PROFILE=       # overrides config/inbox-profile; explicitly empty forces ambient credentials
 ```

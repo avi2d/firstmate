@@ -330,6 +330,10 @@
       "audience": "maintainer-architecture"
     },
     {
+      "path": "docs/inbox.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/architecture.md",
       "audience": "maintainer-architecture"
     },
@@ -724,10 +728,6 @@
     {
       "path": "docs/verification/trace-context.md",
       "audience": "maintainer-verification"
-    },
-    {
-      "path": "docs/voice-relay.md",
-      "audience": "operator-current"
     },
     {
       "path": "docs/watcher-continuity.md",
