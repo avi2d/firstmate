@@ -694,8 +694,6 @@ fi
 
 # --- 4. supervision operating instructions ----------------------------------
 stage supervision-instructions
-X_MODE_PRESENT=0
-[ -f "$CONFIG/x-mode.env" ] && X_MODE_PRESENT=1
 
 if [ "$PRIMARY_HARNESS" = pi ] || [ "$PRIMARY_HARNESS" = pi-signed ]; then
   PI_EXT="$FM_ROOT/.pi/extensions/fm-primary-pi-watch.ts"
@@ -745,8 +743,7 @@ if [ "$PRIMARY_HARNESS" = omp ]; then
 fi
 "$SCRIPT_DIR/fm-supervision-instructions.sh" \
   --harness "$PRIMARY_HARNESS" \
-  --read-only "$READ_ONLY" \
-  --x-mode "$X_MODE_PRESENT"
+  --read-only "$READ_ONLY"
 
 # --- 5. read-once contract -------------------------------------------------
 # Ahead of the two digests it governs, not after them: a truncated tail is

@@ -231,11 +231,8 @@ elif [ "$watcher_healthy" = false ]; then
   if [ "$print_full_banner" -eq 1 ]; then
     queue_arg=0
     "$queue_pending" && queue_arg=1
-    x_mode=0
-    [ -f "$CONFIG/x-mode.env" ] && x_mode=1
     fix=$("$SCRIPT_DIR/fm-supervision-instructions.sh" \
       --read-only "$READ_ONLY" \
-      --x-mode "$x_mode" \
       --queue-pending "$queue_arg" \
       --repair-line 2>/dev/null || printf '%s\n' 'Repair missing watcher supervision according to the session-start operating block.')
     rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'

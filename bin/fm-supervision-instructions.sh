@@ -24,13 +24,12 @@ DOC_DIR="$REPO_ROOT/docs/supervision-protocols"
 
 HARNESS=
 READ_ONLY=0
-X_MODE=0
 REPAIR_LINE=0
 QUEUE_PENDING=0
 
 usage() {
   cat <<'EOF'
-Usage: fm-supervision-instructions.sh [--harness <name>] [--read-only 0|1] [--x-mode 0|1] [--repair-line] [--queue-pending 0|1]
+Usage: fm-supervision-instructions.sh [--harness <name>] [--read-only 0|1] [--repair-line] [--queue-pending 0|1]
 
 Print the current primary harness's supervision operating instructions.
 With --repair-line, print one concise repair instruction for guard and hook messages.
@@ -54,11 +53,6 @@ while [ "$#" -gt 0 ]; do
     --read-only)
       [ "$#" -gt 1 ] || { echo "error: --read-only requires 0 or 1" >&2; exit 2; }
       READ_ONLY=$(bool_value "$2")
-      shift 2
-      ;;
-    --x-mode)
-      [ "$#" -gt 1 ] || { echo "error: --x-mode requires 0 or 1" >&2; exit 2; }
-      X_MODE=$(bool_value "$2")
       shift 2
       ;;
     --queue-pending)
@@ -121,7 +115,6 @@ pi_ext="$FM_ROOT/.pi/extensions/fm-primary-pi-watch.ts"
 pi_turnend_ext="$FM_ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
 omp_ext="$FM_ROOT/.omp/extensions/fm-primary-omp-watch.ts"
 omp_turnend_ext="$FM_ROOT/.omp/extensions/fm-primary-turnend-guard.ts"
-x_mode_env="$CONFIG/x-mode.env"
 
 # True when the active home is not the firstmate checkout: omp's extensions load
 # from the checkout, and only the `fm <project>` launcher points them at another home.
@@ -136,18 +129,6 @@ if [ "$omp_home_elsewhere" -eq 1 ]; then
 else
   omp_restart_long="restart omp inside this home; pass \`-e $omp_turnend_ext -e $omp_ext\` only when omp must start from another directory, because omp loads a file named both ways twice"
   omp_restart_short='restart omp inside this home'
-fi
-
-shell_quote() {
-  printf "'"
-  printf '%s' "$1" | sed "s/'/'\\\\''/g"
-  printf "'"
-}
-
-x_mode_env_sh=$(shell_quote "$x_mode_env")
-
-if [ "$X_MODE" -eq 0 ] && [ -f "$x_mode_env" ]; then
-  X_MODE=1
 fi
 
 render_snippet() {  # [snippet]
@@ -172,8 +153,6 @@ render_snippet() {  # [snippet]
     line=${line//__FM_OMP_RESTART_SHORT__/$omp_restart_short}
     line=${line//__FM_OMP_EXT__/$omp_ext}
     line=${line//__FM_OMP_TURNEND_EXT__/$omp_turnend_ext}
-    line=${line//__FM_X_MODE_ENV_SH__/$x_mode_env_sh}
-    line=${line//__FM_X_MODE_ENV__/$x_mode_env}
     line=${line//__FM_GROK_ARM__/$grok_arm}
     printf '%s\n' "$line"
   done < "$snippet"
@@ -188,9 +167,6 @@ repair_line() {
   prefix=
   if [ "$QUEUE_PENDING" -eq 1 ]; then
     prefix='After draining queued wakes, '
-  fi
-  if [ "$X_MODE" -eq 1 ]; then
-    prefix="${prefix}source ${x_mode_env_sh} first, then "
   fi
 
   case "$HARNESS" in
@@ -287,11 +263,6 @@ if [ "$READ_ONLY" -eq 1 ]; then
   printf '%s\n' '- Lock: read-only; do not drain, arm, spawn, steer, merge, or repair fleet state here.'
 else
   printf '%s\n' '- Lock: held by this session; this session owns normal supervision.'
-fi
-if [ "$X_MODE" -eq 1 ]; then
-  printf '%s%s%s\n' '- X mode: active; source ' "$x_mode_env" ' before launching any watcher process so the 30s cadence is inherited.'
-else
-  printf '%s\n' '- X mode: inactive; use the default watcher cadence.'
 fi
 if [ -n "$HOST_SNIPPET" ]; then
   printf '%s\n' '- Supervision host: on; it handles eligible wakes where the dialog mirror is verified and hands the rest to you (protocol at the end of this block).'
