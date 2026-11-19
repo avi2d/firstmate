@@ -109,6 +109,10 @@ Output (stdout, TOON-style block):
   URL), which is actionable, never selected around.
   The capability probe is the one other exit: 1 for an unsupported source.
 
+Scout briefs classify among rules whose when text contains the word scout
+  (case-insensitive), plus default. With no scout rule they use default.
+  Ship briefs classify among the remaining rules, plus default.
+
 Shared-quota opt-out: a top-level "shared_quota": true in the rules file makes
   no quota-axi call, applies no quota floor or runway gate, and resolves the
   matched profiles in declared order after preferred_provider narrows them.
@@ -488,22 +492,19 @@ SCOUT_BRIEF=0
 if is_scout_brief; then
   SCOUT_BRIEF=1
 fi
-if [ "$SCOUT_BRIEF" -eq 1 ]; then
-  # A short file has no rule_5, so the marker falls through to default.
-  jq -n --slurpfile rules "$RULES" '
-    (($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) + ["default"]) as $choices |
-    (if ($choices | index("rule_5")) then "rule_5" else "default" end) as $pick |
-    {model: "scout-routing",
-     answers: {rule: {type: "choice", choice: $pick, confidence: 1,
-       probabilities: ($choices | map({key: ., value: (if . == $pick then 1 else 0 end)}) | from_entries)}}}' > "$RESP_FILE" \
+CRITERIA=$(jq -c --argjson scout "$SCOUT_BRIEF" '
+  .rules | to_entries | map(
+    select((.value.when | test("\\bscout\\b"; "i")) == ($scout == 1)) |
+    {key: ("rule_" + ((.key + 1) | tostring)), value: .value.when}
+  ) | from_entries' "$RULES") || emit_error "could not select rules"
+if [ "$SCOUT_BRIEF" -eq 1 ] && [ "$CRITERIA" = '{}' ]; then
+  jq -n '{model: "scout-routing", answers: {rule: {choice: "default", confidence: 1, probabilities: {default: 1}}}}' > "$RESP_FILE" \
     || emit_error "scout routing failed"
   LAT_MS=0
 else
   command -v curl >/dev/null 2>&1 || emit_error "curl not installed"
   REQUEST=$(jq -n --rawfile brief "$TASK_TEXT" --arg project "$PROJECT" --arg model "$DISPATCH_MODEL" \
-    --arg none_criterion "$DEFAULT_WHEN" --arg size_hint "$SIZE_HINT" --slurpfile rules "$RULES" '
-    ($rules[0]) as $cfg |
-    ($cfg.rules | to_entries | map({key: ("rule_" + ((.key + 1) | tostring)), value: .value.when}) | from_entries | del(.rule_5)) as $criteria |
+    --arg none_criterion "$DEFAULT_WHEN" --arg size_hint "$SIZE_HINT" --argjson criteria "$CRITERIA" '
     {
       model: $model,
       state: {task: {project: $project, brief: $brief}},
@@ -558,7 +559,7 @@ fi
   # below checks. A refusal, a missing or duplicated rule answer, or duplicated
   # option values is not a rule Choice answer. Usage is display-only, so it is
   # kept only when both token counts are numeric.
-  if [ "$DISPATCH_PROVIDER" = openai ]; then
+  if [ "$DISPATCH_PROVIDER" = openai ] && ! { [ "$SCOUT_BRIEF" -eq 1 ] && [ "$CRITERIA" = '{}' ]; }; then
     jq -e '
       ([.answers[]? | select(type == "object" and .name == "rule")]) as $rule |
       (.answers | type) == "array" and
@@ -583,9 +584,11 @@ fi
       emit_error "response is not a rule Choice answer"
     fi
   fi
-jq -e --argjson scout "$SCOUT_BRIEF" --slurpfile rules "$RULES" '
-    ((($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) | map(select(. != "rule_5" or $scout == 1))) + ["default"] | sort) as $choices |
+jq -e --argjson criteria "$CRITERIA" --slurpfile rules "$RULES" '
+    (($criteria | keys) + ["default"] | sort) as $choices |
+    ($rules[0].rules | to_entries | map("rule_" + ((.key + 1) | tostring))) as $all_rules |
     (.answers.rule.choice | type) == "string" and
+    (.answers.rule.choice as $choice | (($all_rules | index($choice)) == null or ($choices | index($choice)) != null)) and
     (.answers.rule.confidence | type) == "number" and
     .answers.rule.confidence >= 0 and .answers.rule.confidence <= 1 and
     (.answers.rule.probabilities | type) == "object" and

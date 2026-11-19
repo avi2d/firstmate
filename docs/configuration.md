@@ -2264,7 +2264,11 @@ Firstmate invokes the resolve path directly after writing the brief, without a p
 
 **What the model receives**
 
-When on and at least one rule exists, the tool sends the project name and the brief's task-specific text as state and asks one Choice question whose options are every rule's `when` plus the fixed neutral option for no matching rule; the model never sees quota, catalogs, `why`, `use`, approvals, or confidence floors.
+When on and at least one rule exists, the tool sends the project name and the brief's task-specific text as state and asks one Choice question.
+Scout briefs use rules whose `when` contains the word `scout`, case-insensitively.
+Other briefs use the remaining rules.
+Both include the fixed neutral option for no matching rule, and a scout with no scout rules uses the default without a model call.
+The model never sees quota, catalogs, `why`, `use`, approvals, or confidence floors.
 OpenRouter's Decisions API and a `systemone` host accept the same Choice request shape and return the same typed answer, including confidence and a probability per option.
 For OpenAI's Decisions API the resolver rewrites that request into OpenAI's shape - the state as JSON text `input` and one `choice` question named `rule` whose `choices` are the same options - and maps the answer's per-option probability array back; a refusal, a missing or duplicated rule answer, or duplicated option values is rejected as malformed.
 Every provider then uses the same response validation and post-model gates.

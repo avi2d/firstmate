@@ -1667,15 +1667,15 @@ reset_log
 write_response "$RESPONSE" rule_4 0.9
 run code out err "$KIND_BRIEF"
 expect_code 0 "$code" "scout routing exits 0"
-assert_contains "$out" '  status: clear' "a scout brief with no rule_5 in the file falls through to default, not a Jev call"
-assert_contains "$out" '  rule: default (No listed rule applies to this task.)   confidence: 1' "the missing investigation rule falls through to default"
+assert_contains "$out" '  status: clear' "a scout brief with no scout rule falls through to default"
+assert_contains "$out" '  rule: default (No listed rule applies to this task.)   confidence: 1' "the missing scout rule falls through to default"
 assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "the default profiles resolve through the quota stage"
-assert_absent "$LOG/argv" "scout routing never calls curl"
+assert_absent "$LOG/argv" "no scout rule requires no classifier request"
 
 reset_log
 run code out err "$BRIEF"
 assert_equals "$(cat "$BRIEF")" "$(jq -r .state.task.brief "$LOG/body")" "a brief with neither heading is sent whole"
-pass "only the brief's task sections reach the model, scout briefs route by program, with a whole-brief fallback"
+pass "only the brief's task sections reach the model, with a whole-brief fallback"
 
 # --- escalate: captain approval ------------------------------------------------
 reset_log
@@ -2386,44 +2386,57 @@ expect_code 0 "$code" "--help exits 0"
 assert_contains "$out" 'Usage:' "--help prints usage"
 pass "configuration errors exit 2 before any network call"
 
-# --- tuned request: scout routing, ship options, size paragraph, retry --------
 FIVE_RULES="$TMP_ROOT/five-rules.json"
-jq '.rules += [{"when": "The task is an investigation that ends in a written report.", "use": {"harness": "claude", "model": "sonnet", "effort": "high"}}]' "$BASE_RULES" > "$FIVE_RULES"
+jq '.rules += [{"when": "Scout research from published sources.", "use": {"harness": "claude", "model": "sonnet", "effort": "high"}}]' "$BASE_RULES" > "$FIVE_RULES"
 cp "$FIVE_RULES" "$RULES"
 
 SCOUT_BRIEF="$TMP_ROOT/scout-brief.md"
 cat > "$SCOUT_BRIEF" <<'MD'
 # Task
 ## Captain's intent
-Investigate the pager off-by-one and write up the findings.
-
+Plan a new core architecture, migration and decisions.
 ## Firstmate spec
 Report only, no code.
-
 This is a SCOUT task: the deliverable is a written report, not a PR.
 MD
 
+jq '.rules += [{"when": "Scout hard investigation or design, architecture and migration plan.", "use": {"harness": "cursor", "model": "cursor-grok-4.6-high"}}]' "$FIVE_RULES" > "$RULES"
+cat > "$RESPONSE" <<'JSON'
+{"model":"classifier","answers":{"rule":{"choice":"rule_6","confidence":0.95,"probabilities":{"rule_5":0.03,"rule_6":0.95,"default":0.02}}}}
+JSON
 reset_log
-write_response "$RESPONSE" rule_4 0.9
 run code out err "$SCOUT_BRIEF" --project pager
-expect_code 0 "$code" "scout routing exits 0"
-assert_contains "$out" '  status: clear' "a scout brief resolves without a Jev request"
-assert_contains "$out" '  rule: rule_5 (The task is an investigation that ends in a written report.)   confidence: 1' "the scout marker maps to rule_5"
-assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "rule_5 ranks through the quota stage as today"
-assert_absent "$LOG/argv" "scout routing makes no Jev request"
-assert_equals '--json' "$(cat "$LOG/quota-axi.calls")" "scout routing still reads quota once"
+assert_contains "$out" '  rule: rule_6 ' "a core migration design does not take the research rule"
+assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "design uses the design profile"
+assert_equals '["default","rule_5","rule_6"]' "$(jq -c '.questions.rule.criteria | keys' "$LOG/body")" "scout options exclude implementation rules"
+assert_contains "$(jq -r .state.task.brief "$LOG/body")" 'Brief kind: scout (report only)' "the model receives scout kind"
 
-THREE_RULES="$TMP_ROOT/three-rules.json"
-jq '.rules |= .[0:3]' "$BASE_RULES" > "$THREE_RULES"
-cp "$THREE_RULES" "$RULES"
+cat > "$SCOUT_BRIEF" <<'MD'
+# Task
+## Captain's intent
+Compare published model benchmarks using sources.
+This is a SCOUT task: the deliverable is a written report, not a PR.
+MD
+jq '.answers.rule.choice = "rule_5" | .answers.rule.probabilities = {rule_5: 0.95, rule_6: 0.03, default: 0.02}' "$RESPONSE" > "$TMP_ROOT/research-response"
+cp "$TMP_ROOT/research-response" "$RESPONSE"
 reset_log
 run code out err "$SCOUT_BRIEF" --project pager
-expect_code 0 "$code" "three-rule scout routing exits 0"
-assert_contains "$out" '  status: clear' "a scout brief with three rules resolves without a Jev request"
-assert_contains "$out" '  rule: default (No listed rule applies to this task.)   confidence: 1' "a three-rule file falls through to default"
-assert_contains "$out" "  profile: --harness 'cursor' --model 'cursor-grok-4.6-high'" "the default profiles resolve through the quota stage"
-assert_absent "$LOG/argv" "three-rule scout routing makes no Jev request"
-assert_equals '--json' "$(cat "$LOG/quota-axi.calls")" "three-rule scout routing still reads quota once"
+assert_contains "$out" '  rule: rule_5 ' "published benchmark research does not take the design rule"
+assert_contains "$out" "  profile: --harness 'claude' --model 'sonnet' --effort 'high'" "research uses the research profile"
+
+jq '.rules = [.rules[5], .rules[0], .rules[4], .rules[1], .rules[2], .rules[3]]' "$RULES" > "$TMP_ROOT/reordered-rules"
+cp "$TMP_ROOT/reordered-rules" "$RULES"
+jq '.answers.rule.choice = "rule_3" | .answers.rule.probabilities = {rule_1: 0.03, rule_3: 0.95, default: 0.02}' "$RESPONSE" > "$TMP_ROOT/reordered-response"
+cp "$TMP_ROOT/reordered-response" "$RESPONSE"
+reset_log
+run code out err "$SCOUT_BRIEF"
+assert_contains "$out" '  rule: rule_3 ' "reordering does not move research to an implementation rule"
+assert_equals '["default","rule_1","rule_3"]' "$(jq -c '.questions.rule.criteria | keys' "$LOG/body")" "reordered scout rules retain their original indexes"
+jq '.answers.rule.choice = "rule_2"' "$RESPONSE" > "$TMP_ROOT/invalid-response"
+cp "$TMP_ROOT/invalid-response" "$RESPONSE"
+reset_log
+run code out err "$SCOUT_BRIEF"
+assert_contains "$out" '  reason: response is not a rule Choice answer' "a classifier cannot select an implementation rule for a scout"
 cp "$FIVE_RULES" "$RULES"
 
 SHIP_RESPONSE="$TMP_ROOT/ship-response.json"
@@ -2469,7 +2482,7 @@ assert_contains "$out" '  reason: http 503 after' "the error names the status"
 assert_contains "$out" 'upstream 37 ms' "the error carries the upstream service time"
 assert_equals '2' "$(grep -c 'https://api.typesafe.ai/v1/systemone' "$LOG/argv")" "a retryable failure sends the request twice"
 cp "$BASE_RULES" "$RULES"
-pass "tuned request: scout briefs resolve rule_5 with no call, ship requests omit rule_5 and carry the paragraph, one retry rescues a 503"
+pass "scout requests classify scout rules, ship requests omit them, and one retry rescues a 503"
 
 # --- haiku-first promotion: a short Go allowance moves Haiku ahead of Muse ---
 # Oracle is the eval report quota rule and worked example (bounds -15, 10, 25
