@@ -425,9 +425,6 @@ family_for_basename() {
     fm-fleet-snapshot-view.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
-    fm-backend-paseo.test.sh|fm-backend-paseo-smoke.test.sh)
-      printf '%s\n' paseo
-      ;;
     fm-backend-rex.test.sh|fm-backend-rex-smoke.test.sh|fm-backend-rex-eventwait-smoke.test.sh)
       printf '%s\n' rex
       ;;
@@ -465,7 +462,7 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    paseo|rex|tern|hc) printf '%s\n' optional-binary ;;
+    rex|tern|hc) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -483,7 +480,6 @@ backend-dispatch
 pr-forge
 afk
 snapshot-bearings
-paseo
 rex
 tern
 hc
@@ -721,8 +717,6 @@ tests/fm-backend-herdr-server-detach.test.sh 1460
 tests/fm-backend-hc-liveness-live-e2e.test.sh 9000
 tests/fm-backend-hc-smoke.test.sh 3700
 tests/fm-backend-hc.test.sh 4000
-tests/fm-backend-paseo-smoke.test.sh 40
-tests/fm-backend-paseo.test.sh 8000
 tests/fm-backend-rex-composer-live-e2e.test.sh 54
 tests/fm-backend-rex-eventwait-smoke.test.sh 40
 tests/fm-backend-rex-smoke.test.sh 42
@@ -1635,10 +1629,6 @@ families_for_changed_path() {
     bin/fm-herdr-session-cleanup.sh)
       printf '%s\n' session-bootstrap
       printf '%s\n' real-herdr-gated
-      printf '%s\n' backend-dispatch
-      ;;
-    bin/backends/paseo*)
-      printf '%s\n' paseo
       printf '%s\n' backend-dispatch
       ;;
     bin/backends/rex*|bin/fm-rex-marks.sh|tests/rex-test-safety.sh)
