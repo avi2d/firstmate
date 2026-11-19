@@ -477,6 +477,28 @@ This feature does not set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` or any other autocom
 The tracked `.tasks.toml` pins the default `tasks-axi` markdown backend to `data/backlog.md`, with `done_keep = 10` and an archive at `data/done-archive.md`.
 A home may instead select another tasks-axi adapter such as Beads through its own `.tasks.toml` or `TASKS_AXI_BACKEND`; firstmate still uses only tasks-axi verbs for routine backlog reads and mutations, and the adapter maps `start` and evidence-bearing `done` transitions to its native statuses and evidence fields.
 
+### Backlog.md lab backend
+
+Set `config/backlog-backend` to `backlog-md` only in a disposable home.
+This option changes `bin/fm-tasks-axi.sh` but does not move the dispatch or completion transitions.
+It does not import `data/backlog.md` or `data/done-archive.md`.
+
+Install the pinned Backlog.md package with `npm ci --prefix bin/fm-backlog-md`.
+From the lab home's `data` directory, run the installed `backlog init Firstmate --defaults --no-git --integration-mode none`.
+In `data/backlog/config.yml`, replace `statuses` with `[Queued, Waiting, In Flight, Done]` and set `default_status` to `Queued`.
+List the project's task types, priorities `p0` through `p4`, and project names in `task_types`, `priorities`, and `projects` for the board's filters.
+
+The wrapper supports `show`, `add`, `list`, `ready`, `update`, `done`, `block`, `hold`, `unhold`, `unblock`, and `edit`.
+Use `update --body` to replace a task body.
+The wrapper rejects `note`, as does tasks-axi.
+Each task name stays in the ticket's `id` field.
+A held ticket uses the `Waiting` column and a `waiting-on:<kind>` label, with an optional `hold_until` date.
+On or after that date, `ready` no longer excludes the ticket for the hold.
+
+Run the installed `backlog browser` from the lab home's `data` directory to view the board.
+Write through `bin/fm-tasks-axi.sh` so all writes take the same lock.
+The native board and CLI do not take that lock.
+
 ### Captain holds on Beads
 
 Captain-hold row creation is owned by [`bin/fm-captain-hold.sh`](../bin/fm-captain-hold.sh) `hold`: when no work item exists, it creates an ordinary backlog row (`--kind captain` metadata; Beads native type `task`) and then applies the captain hold.
