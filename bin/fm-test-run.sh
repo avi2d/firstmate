@@ -1026,7 +1026,6 @@ tests/fm-share-guard-pretool-check.test.sh 124
 tests/fm-shared-captain-inheritance.test.sh 12451
 tests/fm-shell-history-herdr-e2e.test.sh 12197
 tests/fm-shell-history.test.sh 2753
-tests/fm-skill-trigger-index.test.sh 849
 tests/fm-sim-boot.test.sh 3063
 tests/fm-spawn-compact-adviser-disable-remote.test.sh 38561
 tests/fm-spawn-compact-adviser-disable.test.sh 37156
