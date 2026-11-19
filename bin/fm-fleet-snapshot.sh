@@ -84,7 +84,6 @@ since date, and re-holding with --until remains the durable deferral.
 EOF
 }
 
-OUTPUT_MODE=json
 case "${1:---json}" in
   --json) ;;
   -h|--help) usage; exit 0 ;;
