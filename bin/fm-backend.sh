@@ -1,72 +1,4 @@
 #!/usr/bin/env bash
-# fm-backend.sh - runtime-backend selection, meta helpers, selector resolution,
-# and dispatch for firstmate's session-provider abstraction.
-#
-# Design: data/fm-backend-design-d7/report.md ("Backend Interface") and
-# data/fm-backend-design-d7/herdr-addendum.md ("Events as the core
-# abstraction"). P1 extracted the tmux command sequences that fm-send.sh,
-# fm-peek.sh, fm-watch.sh, fm-spawn.sh, and fm-teardown.sh already ran inline
-# into bin/backends/tmux.sh, with those SAME command sequences, so the default
-# (tmux) path stays byte-identical. P2 adds bin/backends/herdr.sh, a verified
-# spawn-capable backend with its own required CI lane, behind `--backend
-# herdr`/`FM_BACKEND=herdr`/`config/backend`, and behind runtime auto-detection
-# when firstmate itself is running inside herdr with no explicit backend setting;
-# see herdr-addendum.md and data/fm-backend-design-d7/herdr-verification-p2.md for
-# its empirical basis.
-# P3 adds bin/backends/zellij.sh, also EXPERIMENTAL and spawn-capable, behind
-# `--backend zellij`/`FM_BACKEND=zellij`/`config/backend` - NOT behind runtime
-# auto-detection (report.md's Open Question #2: start with a dedicated
-# background session for predictability, unlike tmux's/herdr's ambient-session
-# reuse); see report.md's "Zellij Backend" section and docs/zellij-backend.md
-# for its empirical basis. P4 makes Orca spawn-capable: Orca owns both the
-# task worktree and the terminal endpoint. P5 adds bin/backends/cmux.sh, also
-# EXPERIMENTAL and spawn-capable, behind `--backend cmux`/`FM_BACKEND=cmux`/
-# `config/backend`, and behind runtime auto-detection when firstmate itself is
-# running inside a cmux-spawned terminal (primary CMUX_WORKSPACE_ID marker, or
-# the documented macOS fallback signals when cmux's claude wrapper strips that
-# marker) with no explicit backend setting - unlike Orca, which stays
-# never-auto-detected because it also owns the task worktree; see
-# docs/cmux-backend.md for its empirical basis. P6 adds bin/backends/paseo.sh,
-# also EXPERIMENTAL and spawn-capable, EXPLICIT-ONLY like zellij and orca:
-# `--backend paseo`, `FM_BACKEND=paseo`, or config/backend, never runtime
-# auto-detection. Paseo stamps PASEO_* markers into every descendant process
-# (a tmux server started from a Paseo tab inherits them), so an inherited
-# marker is not a selection; see docs/paseo-backend.md. P7 adds
-# bin/backends/rex.sh, also EXPERIMENTAL and spawn-capable, behind `--backend
-# rex`/`FM_BACKEND=rex`/config/backend, and behind runtime auto-detection when
-# firstmate itself runs directly inside a Rex block (TERM_PROGRAM=rex with
-# REX_BLOCK); see docs/rex-backend.md.
-# The experimental T3 Code adapter owns agent sessions over T3's /mcp while
-# Treehouse owns task worktrees. It is selected explicitly only.
-# P8 adds bin/backends/tern.sh (Stencil Tern), also EXPERIMENTAL, spawn-capable,
-# and session-provider-only, EXPLICIT-ONLY like zellij, orca, and paseo:
-# `--backend tern`, `FM_BACKEND=tern`, or config/backend, never runtime
-# auto-detection. Tern stamps TERM_PROGRAM=tern and TERN_PANE into every block
-# it spawns (a tmux server or Herdr client started inside a block inherits
-# them), so an inherited marker is not a selection; see docs/tern-backend.md.
-# bin/backends/hc.sh adds herdr-core (`hc`, the core under Herdr.app), also
-# EXPERIMENTAL, spawn-capable, and session-provider-only; see
-# docs/hc-backend.md "Runtime auto-detection" for its selection contract.
-# Codex App is intentionally not in the known set yet.
-# docs/codex-app-backend.md owns that blocked backend contract.
-#
-# Compatibility contract: a task's meta may omit `backend=`; every reader here
-# treats that as `tmux` (fm_backend_of_meta), and fm-spawn.sh does not write
-# `backend=tmux` for a default-backend task, so existing and newly spawned
-# default-path metas stay byte-identical. Only a task spawned on a non-tmux
-# spawn-capable backend, currently herdr, zellij, orca, cmux, paseo, rex, or
-# t3code, tern, or hc, carries an explicit `backend=` line.
-#
-# Event-source framing (herdr-addendum "Events as the core abstraction"): a
-# backend's supervision surface is conceptually an EVENT SOURCE - it produces
-# task events (status-changed, went-stale, exited) that map onto firstmate's
-# existing signal/stale/check/heartbeat wake vocabulary. The tmux adapter has
-# no native event push, so fm-watch.sh's poll loop over the pull primitives
-# below (capture, list-live, busy-state via regex) IS the default event-source
-# implementation that synthesizes those events; P1 only names that seam, it
-# does not change the loop's behavior. The pull primitives also stay available
-# on their own for on-demand reads (fm-peek.sh, fm-crew-state.sh).
-
 FM_BACKEND_SCRIPT=${BASH_SOURCE[0]:-$0}
 FM_BACKEND_LIB_DIR="$(cd "$(dirname "$FM_BACKEND_SCRIPT")" && pwd)"
 unset FM_BACKEND_SCRIPT
@@ -75,33 +7,8 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
-# Verified backend adapters. Extend only after a backend gets its own
-# bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
-# section 4's harness-verification discipline. herdr is verified (P2;
-# data/fm-backend-design-d7/herdr-addendum.md) and has its own required CI lane,
-# with current coverage in docs/herdr-backend.md and
-# docs/verification/runtime-backends.md. zellij is EXPERIMENTAL (P3;
-# data/fm-backend-design-d7/report.md "Zellij Backend") - verified against the
-# real 0.44.0 binary (docs/zellij-backend.md). orca is EXPERIMENTAL and
-# spawn-capable; unlike tmux/herdr/zellij it is also the worktree provider.
-# cmux is EXPERIMENTAL and spawn-capable, session-provider-only like
-# herdr/zellij - verified against the real 0.64.17 binary (docs/cmux-backend.md).
-# paseo is EXPERIMENTAL and spawn-capable, session-provider-only like
-# herdr/zellij/cmux - verified against the real Paseo daemon on 127.0.0.1:6767
-# (docs/paseo-backend.md).
-# rex is EXPERIMENTAL and spawn-capable, session-provider-only like herdr -
-# verified against the real Rex server at API revision 5 (docs/rex-backend.md).
-# t3code is EXPERIMENTAL and spawn-capable: T3 Code owns the
-# agent session over T3's /mcp endpoint while Treehouse keeps the worktree
-# (docs/t3code-backend.md).
-# tern is EXPERIMENTAL and spawn-capable, session-provider-only like cmux
-# (docs/tern-backend.md); docs/verification/runtime-backends.md records what
-# was exercised against a real Tern.
-# codex-app remains deliberately absent; see docs/codex-app-backend.md.
-# hc is EXPERIMENTAL and spawn-capable, session-provider-only like tmux
-# (docs/hc-backend.md).
-FM_BACKEND_KNOWN="tmux herdr zellij orca cmux paseo rex t3code tern hc"
-FM_BACKEND_SPAWN="tmux herdr zellij orca cmux paseo rex t3code tern hc"
+FM_BACKEND_KNOWN="herdr"
+FM_BACKEND_SPAWN="herdr"
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
 # shell word splitting. fm-backend.sh is normally sourced by bash scripts, but
@@ -121,309 +28,18 @@ fm_backend_is_known() {  # <name>
   fm_backend_list_contains "$FM_BACKEND_KNOWN" "$1"
 }
 
-# fm_backend_detect: detect the runtime firstmate itself is CURRENTLY executing
-# inside, from verified environment markers (mirrors bin/fm-harness.sh's
-# env-marker detection layer for harnesses). Prints the detected backend name
-# and returns 0, or returns 1 when nothing is detected. Nesting resolves
-# INNERMOST-first: tmux sets $TMUX in every process running inside it, even a
-# tmux started inside a herdr pane, so $TMUX is checked first and wins over
-# HERDR_ENV=1 in that nested case. herdr injects HERDR_ENV=1 (plus
-# HERDR_SOCKET_PATH/HERDR_PANE_ID) into every process it manages a pane for;
-# HERDR_ENV=1 alone (no $TMUX) selects herdr. cmux injects CMUX_WORKSPACE_ID
-# (plus CMUX_SURFACE_ID/CMUX_SOCKET_PATH and the legacy CMUX_TAB_ID/
-# CMUX_PANEL_ID aliases) into every terminal surface it spawns - verified from
-# the shipped source (`TerminalSurface+StartupEnvironment.swift`'s
-# `applyManagedCmuxContextEnvironment`, which marks all five keys
-# `protectedKeys`, i.e. non-overridable) and corroborated by cmux's own CLI
-# (`cmux_open.swift`) reading `CMUX_WORKSPACE_ID`/`CMUX_SURFACE_ID` as its own
-# ambient-target fallback, exactly how `$TMUX` and `HERDR_ENV` work for their
-# backends. CMUX_WORKSPACE_ID, not CMUX_SOCKET_PATH, is the chosen marker:
-# CMUX_SOCKET_PATH is independently documented as a user-settable override for
-# pointing the CLI at a non-default socket, so its mere presence would not
-# reliably mean "running inside a cmux-spawned terminal" the way
-# CMUX_WORKSPACE_ID does. cmux is checked after tmux and herdr because it is
-# a terminal application (the outermost layer, like iTerm2/Terminal.app), not
-# a session multiplexer - both tmux and herdr can run nested inside a
-# cmux-provided shell, but cmux cannot run nested inside either of them, so a
-# tmux or herdr marker set alongside CMUX_WORKSPACE_ID always means that
-# multiplexer is the innermost, currently-executing layer and must win.
-# Rex injects TERM_PROGRAM=rex plus REX_SESSION/REX_BLOCK/REX_SERVER/REX_BIN_DIR
-# into every block's process tree (verified live, docs/rex-backend.md
-# "Runtime auto-detection"). Both are required: REX_* survive into a tmux or
-# Herdr started inside a Rex block, while TERM_PROGRAM is rewritten by the
-# nested multiplexer, so TERM_PROGRAM=rex with REX_BLOCK means Rex is the
-# innermost layer. It is checked after tmux and herdr, which already win in
-# that nested case through their own markers, and before cmux, whose markers
-# a Rex server started from a cmux tab could have inherited.
-#
-# cmux FALLBACK signals (docs/cmux-backend.md "Runtime auto-detection" owns
-# the empirical record): cmux's bundled `claude` PATH shim routes through
-# cmux-claude-wrapper, whose passthrough path unsets every CMUX_* variable
-# before exec'ing the real binary - so a claude-harness firstmate launched in
-# a cmux tab can have NO CMUX_WORKSPACE_ID at all. When that primary marker is
-# absent (and only then), two macOS-only fallback signals are consulted:
-#   1. __CFBundleIdentifier == com.cmuxterm.app - LaunchServices' app-identity
-#      env var, inherited by every process a cmux tab spawns and NOT stripped
-#      by the wrapper (it only unsets CMUX_*, TERMINFO, and CLAUDECODE).
-#      Authoritative in the common wrapper-strip case, but also inherited into
-#      every pane of a tmux server started from a cmux tab - the $TMUX check
-#      winning FIRST is what keeps that false positive absorbed.
-#   2. Process ancestry reaching the running cmux app (resolved by bundle id
-#      via lsappinfo, plus a bundle-shaped `ps` comm match so the install
-#      location is never hardcoded). Authoritative when the environment was
-#      scrubbed entirely (no bundle id to inherit); NOT usable from inside
-#      tmux, where the tmux server reparents to launchd and the chain never
-#      reaches cmux - which is fine, because $TMUX already won there.
-# The Herdr app (herdr-app, the native window over herdr-core) is checked
-# LAST, after every marker a layer of this process's own runtime could set:
-# herdr-core strips everything but terminal-identity vars when it starts a
-# terminal, so an app-created terminal can never legitimately carry $TMUX,
-# HERDR_ENV, Rex's pair, or a cmux marker - and a marker set that IS
-# contradictory (e.g. cmux markers inherited by the whole core through an app
-# launched from a cmux tab) keeps the earlier check's verdict instead of
-# forcing a new switch. Exactly one app signal selects hc (docs/hc-backend.md
-# "Runtime auto-detection" owns the contract):
-#   app-terminal: this process's own terminal carries a non-empty
-#      herdr.space label in its core's record - the exact condition the app
-#      projects a terminal into its window (herdr-app 0.1.11 window.rs
-#      groups by non-empty herdr.space and stamps it, with herdr.tab, on
-#      every terminal it creates). The claim is verified from the record,
-#      not from env: an app terminal's own env is deliberately identical to
-#      any other hc terminal's (the app asks for TERM_PROGRAM=herdr in
-#      terminal.run's env, and the core's child_env normalizes it to
-#      "ghostty" for every terminal, app-created or not). The read-only
-#      `hc get` runs only behind a live unix-connect probe of
-#      HC_TERMINAL_SOCKET, because `hc` STARTS a core on contact with a
-#      missing socket - a bare call could create state. The terminal's
-#      socket must also be the very core a spawn reaches - the adapter's
-#      ${HC_SESSION:-default} endpoint (fm_backend_detect_hc_core_sock),
-#      probed live rather than started, because the adapter's
-#      container_ensure STARTS a missing core - so a terminal on some other
-#      core never steers the spawn.
-# A live herdr-app.sock or an open window is deliberately NOT a signal:
-# every process on the host sees it, so it cannot tell a firstmate inside
-# an app terminal from one on a bare shell while the window happens to be
-# open elsewhere - verified live against the real app, where marker-less
-# processes selected hc only because a window existed. The toolchain gate
-# still applies: the adapter's own version gate (an executable FM_HC_BIN,
-# or herdr-core/hc on PATH reporting `hc x.y.z` at or above its verified
-# minimum - other tools ship an `hc` name and an older core would only
-# fail the spawn's container check later), plus jq. A live app-terminal
-# candidate failing it is NOT a detection: the probe records
-# app-terminal-unusable in FM_BACKEND_DETECT_SIGNAL so fm_backend_resolve
-# can say why it did not switch.
-# Callers needing the winning signal read FM_BACKEND_DETECT_SIGNAL (set to
-# TMUX, HERDR_ENV, TERM_PROGRAM, CMUX_WORKSPACE_ID, bundle-id, ancestry,
-# or app-terminal) and FM_BACKEND_DETECTED after a direct
-# (non-command-substitution) call.
-FM_BACKEND_CMUX_BUNDLE_ID="com.cmuxterm.app"
-
 fm_backend_detect() {
   FM_BACKEND_DETECTED=""
   FM_BACKEND_DETECT_SIGNAL=""
-  if [ -n "${TMUX:-}" ]; then
-    FM_BACKEND_DETECTED=tmux
-    FM_BACKEND_DETECT_SIGNAL=TMUX
-    printf 'tmux'
-    return 0
-  fi
   if [ "${HERDR_ENV:-}" = "1" ]; then
     FM_BACKEND_DETECTED=herdr
     FM_BACKEND_DETECT_SIGNAL=HERDR_ENV
     printf 'herdr'
     return 0
   fi
-  if [ "${TERM_PROGRAM:-}" = rex ] && [ -n "${REX_BLOCK:-}" ]; then
-    FM_BACKEND_DETECTED=rex
-    FM_BACKEND_DETECT_SIGNAL=TERM_PROGRAM
-    printf 'rex'
-    return 0
-  fi
-  if [ -n "${CMUX_WORKSPACE_ID:-}" ]; then
-    FM_BACKEND_DETECTED=cmux
-    FM_BACKEND_DETECT_SIGNAL=CMUX_WORKSPACE_ID
-    printf 'cmux'
-    return 0
-  fi
-  if fm_backend_detect_cmux_fallback; then
-    FM_BACKEND_DETECTED=cmux
-    printf 'cmux'
-    return 0
-  fi
-  if fm_backend_detect_herdr_app; then
-    FM_BACKEND_DETECTED=hc
-    printf 'hc'
-    return 0
-  fi
-  # Paseo is deliberately NOT detected here. Its PASEO_* markers and the
-  # sh.paseo.desktop bundle id reach every descendant process, including a
-  # tmux server started from a Paseo tab, so their presence never proves the
-  # captain chose Paseo (docs/paseo-backend.md "Selection is explicit").
-  # Tern is likewise NOT detected here. TERM_PROGRAM=tern and TERN_PANE reach
-  # every descendant process of a Tern block, including a tmux server or Herdr
-  # client started inside it, so their presence never proves the captain chose
-  # Tern (docs/tern-backend.md "Selection is explicit").
-  # Bare hc markers without the Herdr app claim above are not a selection
-  # either: HC_TERMINAL_ID reaches every process an hc terminal starts
-  # (docs/hc-backend.md "Runtime auto-detection").
   return 1
 }
 
-# fm_backend_unix_sock_live: a process is accepting unix-socket connections
-# at <path> right now - a real connect, not liveness by file shape: a stale
-# socket file refuses, an absent one never binds. python3 is required
-# (firstmate's toolchain already relies on it); nc's -U/-z flags are
-# unreliable for this on macOS.
-fm_backend_unix_sock_live() {  # <path>
-  command -v python3 >/dev/null 2>&1 || return 1
-  [ -S "$1" ] || return 1
-  python3 - "$1" <<'PY' >/dev/null 2>&1
-import socket, sys
-s = socket.socket(socket.AF_UNIX)
-s.settimeout(0.75)
-try:
-    s.connect(sys.argv[1])
-except OSError:
-    sys.exit(1)
-PY
-}
-
-# fm_backend_detect_hc_usable: an hc selection can only succeed when the
-# adapter's own binary gate passes - fm_backend_hc_version_check
-# (bin/backends/hc.sh, loaded through fm_backend_source exactly as spawn
-# loads it) resolves FM_HC_BIN or herdr-core/hc on PATH and requires a
-# self-identifying `hc x.y.z` at or above FM_BACKEND_HC_MIN_VERSION, since
-# unrelated tools ship an `hc` name and an older core would only be refused
-# by the spawn's container gate later - plus jq, which every adapter
-# surface needs. Checking here keeps a detected app signal from silently
-# steering a spawn into an hc the adapter would abort on.
-fm_backend_detect_hc_usable() {
-  command -v jq >/dev/null 2>&1 || return 1
-  fm_backend_source hc >/dev/null 2>&1 || return 1
-  fm_backend_hc_version_check >/dev/null 2>&1
-}
-
-# fm_backend_detect_hc_core_sock: the socket of the core the hc adapter
-# reaches for a new spawn, resolved WITHOUT contacting hc (any hc call starts
-# a missing core). FM_HC_SOCKET is the adapter's deliberate pin; otherwise
-# hc's own layout for ${HC_SESSION:-default}, measured on hc 0.1.14:
-# $XDG_RUNTIME_DIR/herdr-core/<session>.sock when XDG_RUNTIME_DIR is set,
-# else ${XDG_STATE_HOME:-$HOME/.local/state}/herdr-core/<session>/<session>.sock.
-# A layout this misses only fails the liveness probe - no switch, never a
-# wrong or newly started core.
-fm_backend_detect_hc_core_sock() {
-  local session=${HC_SESSION:-default}
-  if [ -n "${FM_HC_SOCKET:-}" ]; then
-    printf '%s' "$FM_HC_SOCKET"
-  elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
-    printf '%s/herdr-core/%s.sock' "$XDG_RUNTIME_DIR" "$session"
-  else
-    printf '%s/herdr-core/%s/%s.sock' "${XDG_STATE_HOME:-$HOME/.local/state}" "$session" "$session"
-  fi
-}
-
-# fm_backend_detect_herdr_app_terminal: this process's own terminal record
-# carries a non-empty herdr.space label, the exact condition the app uses to
-# show a terminal in the window. The caller has already proven
-# HC_TERMINAL_SOCKET live (a bare `hc get` against a missing socket starts a
-# core) and the toolchain usable, which also sourced the adapter, so
-# fm_backend_hc_bin is available here. A get failure or empty label is a miss.
-fm_backend_detect_herdr_app_terminal() {
-  local bin space
-  bin=$(fm_backend_hc_bin) || return 1
-  # `env -u HC_SESSION` lets the pinned socket alone name the endpoint; an
-  # inherited session could point at another core.
-  space=$(env -u HC_SESSION HC_SOCKET="$HC_TERMINAL_SOCKET" "$bin" get "$HC_TERMINAL_ID" --json 2>/dev/null \
-    | jq -r '.labels["herdr.space"] // ""' 2>/dev/null) || return 1
-  [ -n "$space" ]
-}
-
-# fm_backend_detect_herdr_app: the single Herdr app signal documented on
-# fm_backend_detect. On a detection sets FM_BACKEND_DETECT_SIGNAL to
-# app-terminal and returns 0. A live app-terminal candidate with no usable
-# hc toolchain sets app-terminal-unusable and returns 1; with no such
-# candidate it leaves the globals alone and returns 1.
-fm_backend_detect_herdr_app() {
-  local core
-  if [ -n "${HC_TERMINAL_ID:-}" ] && [ -n "${HC_TERMINAL_SOCKET:-}" ] \
-    && fm_backend_unix_sock_live "$HC_TERMINAL_SOCKET"; then
-    if ! fm_backend_detect_hc_usable; then
-      FM_BACKEND_DETECT_SIGNAL=app-terminal-unusable
-      return 1
-    fi
-    core=$(fm_backend_detect_hc_core_sock)
-    if [ "$HC_TERMINAL_SOCKET" -ef "$core" ] && fm_backend_detect_herdr_app_terminal; then
-      FM_BACKEND_DETECT_SIGNAL=app-terminal
-      return 0
-    fi
-  fi
-  return 1
-}
-
-# fm_backend_detect_cmux_fallback: the two macOS-only cmux fallback signals
-# (see fm_backend_detect's header comment). Sets FM_BACKEND_DETECT_SIGNAL to
-# bundle-id or ancestry on success. Cheap-first: the bundle-id check is a pure
-# env read; the ancestry walk (subprocess-per-hop) runs only when it misses.
-fm_backend_detect_cmux_fallback() {
-  [ "$(uname 2>/dev/null)" = Darwin ] || return 1
-  if [ "${__CFBundleIdentifier:-}" = "$FM_BACKEND_CMUX_BUNDLE_ID" ]; then
-    FM_BACKEND_DETECT_SIGNAL=bundle-id
-    return 0
-  fi
-  if fm_backend_detect_cmux_app_is_ancestor; then
-    FM_BACKEND_DETECT_SIGNAL=ancestry
-    return 0
-  fi
-  return 1
-}
-
-# fm_backend_detect_cmux_app_pid: the running cmux app's pid, resolved by
-# bundle id via lsappinfo (`"pid"=<n>`), or failure when lsappinfo is missing,
-# errors, or the app is not running (lsappinfo prints nothing, exit 0).
-fm_backend_detect_cmux_app_pid() {
-  command -v lsappinfo >/dev/null 2>&1 || return 1
-  local out pid
-  out=$(lsappinfo info -only pid -app "$FM_BACKEND_CMUX_BUNDLE_ID" 2>/dev/null) || return 1
-  pid=${out##*=}
-  pid=$(printf '%s' "$pid" | tr -d '[:space:]"')
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  printf '%s' "$pid"
-}
-
-# fm_backend_detect_cmux_app_is_ancestor: walk this process's parent chain and
-# report whether it reaches the cmux app - matching either the lsappinfo-
-# resolved pid (bundle id, no path assumption) or a bundle-shaped comm path
-# (`*/cmux.app/Contents/MacOS/cmux`, any install location) when lsappinfo
-# could not resolve one. Stops at launchd (ppid 1), where a tmux server that
-# was started from a cmux tab has already reparented - ancestry can never
-# false-positive from inside tmux.
-fm_backend_detect_cmux_app_is_ancestor() {
-  local cmux_pid pid ppid comm hops=0
-  cmux_pid=$(fm_backend_detect_cmux_app_pid) || cmux_pid=""
-  pid=$$
-  while [ "$hops" -lt 32 ]; do
-    if [ -n "$cmux_pid" ] && [ "$pid" = "$cmux_pid" ]; then
-      return 0
-    fi
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || comm=""
-    comm="${comm#"${comm%%[![:space:]]*}"}"
-    comm="${comm%"${comm##*[![:space:]]}"}"
-    [ -n "$comm" ] || return 1
-    case "$comm" in
-      */cmux.app/Contents/MacOS/cmux) return 0 ;;
-    esac
-    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
-    case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$ppid" -gt 1 ] || return 1
-    pid=$ppid
-    hops=$((hops + 1))
-  done
-  return 1
-}
-
-# fm_backend_explicit_name: the explicitly selected backend, FM_BACKEND env
-# then config/backend; returns 1 when neither selects one. fm_backend_resolve and
-# the away-mode t3code discovery gate (bin/fm-supervisor-target-lib.sh) share it.
 fm_backend_explicit_name() {
   local line v
   if [ -n "${FM_BACKEND:-}" ]; then
@@ -441,60 +57,12 @@ fm_backend_explicit_name() {
   return 1
 }
 
-# fm_backend_resolve: resolve the ACTIVE backend for a NEW spawn into
-# FM_BACKEND_RESOLVED, absent an explicit per-task override. Precedence:
-# FM_BACKEND env, then config/backend (a single word on its first non-empty
-# line, mirroring config/crew-harness), then runtime auto-detection
-# (fm_backend_detect), then default tmux. A per-task `--backend` flag is
-# parsed by the caller (fm-spawn.sh) and takes precedence over this
-# resolution entirely; it is not read here. Auto-detect fires only when
-# nothing was explicitly configured, so an explicit setting always wins and
-# leaves FM_BACKEND_DETECTED/FM_BACKEND_DETECT_SIGNAL empty. Called directly
-# (not in a command substitution), the one detection that chose the backend
-# also leaves its signal globals for the caller's provenance record.
-# Auto-detected herdr and rex stay silent like tmux. Auto-detected cmux
-# prints a loud stderr notice because it remains experimental. The cmux
-# notice names the winning signal, so a fallback-detected cmux (bundle id or
-# ancestry, after the claude wrapper stripped CMUX_WORKSPACE_ID) is visibly
-# distinct from the primary-marker case. An hc selection from the Herdr app
-# signal prints the same class of notice; a live app-terminal candidate that
-# cannot select (no usable toolchain) is not a detection, and a notice names
-# the missing piece instead of switching.
-# Paseo and tern are never auto-detected, so they only ever come out of this
-# function from FM_BACKEND or config/backend.
 fm_backend_resolve() {
-  local marker toolchain
   FM_BACKEND_DETECTED=""
   FM_BACKEND_DETECT_SIGNAL=""
   FM_BACKEND_RESOLVED=$(fm_backend_explicit_name) && return 0
-  if fm_backend_detect >/dev/null; then
-    FM_BACKEND_RESOLVED=$FM_BACKEND_DETECTED
-    case "$FM_BACKEND_RESOLVED" in
-      cmux)
-        case "$FM_BACKEND_DETECT_SIGNAL" in
-          bundle-id) marker="FALLBACK signal __CFBundleIdentifier=$FM_BACKEND_CMUX_BUNDLE_ID; CMUX_WORKSPACE_ID absent, stripped by cmux's bundled claude wrapper" ;;
-          ancestry) marker="FALLBACK signal process-ancestry reaching the running cmux app; CMUX_WORKSPACE_ID absent, stripped by cmux's bundled claude wrapper" ;;
-          *) marker="CMUX_WORKSPACE_ID" ;;
-        esac
-        echo "NOTICE: auto-detected cmux runtime ($marker) - spawning into the EXPERIMENTAL cmux backend. Set config/backend or pass --backend tmux to opt out." >&2
-        ;;
-      hc)
-        case "$FM_BACKEND_DETECT_SIGNAL" in
-          app-terminal) marker="a Herdr-app-projected terminal (${HC_SESSION:-default}:${HC_TERMINAL_ID:-?} carries a herdr.space label)" ;;
-          *) marker="$FM_BACKEND_DETECT_SIGNAL" ;;
-        esac
-        echo "NOTICE: auto-detected $marker - spawning into the EXPERIMENTAL hc backend with Herdr app presentation (herdr.space/herdr.tab labels). Set config/backend or pass --backend <name> to opt out." >&2
-        ;;
-    esac
-    return 0
-  fi
-  toolchain="no usable hc toolchain (an executable FM_HC_BIN, or herdr-core/hc on PATH reporting 'hc x.y.z' at or above the verified minimum ${FM_BACKEND_HC_MIN_VERSION:-version}, and jq)"
-  case "$FM_BACKEND_DETECT_SIGNAL" in
-    app-terminal-unusable)
-      echo "NOTICE: running in a live hc terminal (${HC_SESSION:-default}:${HC_TERMINAL_ID:-?}) but $toolchain can verify a Herdr app projection; staying on the default backend. See docs/hc-backend.md." >&2
-      ;;
-  esac
-  FM_BACKEND_RESOLVED=tmux
+  fm_backend_detect >/dev/null || true
+  FM_BACKEND_RESOLVED=herdr
 }
 
 # fm_backend_name: fm_backend_resolve for callers that only need the name.
@@ -521,61 +89,16 @@ fm_backend_validate_spawn() {  # <name>
   return 1
 }
 
-# fm_backend_required_tools: the backend-SPECIFIC CLI tools a firstmate home on
-# <backend> genuinely requires, beyond firstmate's universal toolchain (owned by
-# docs/configuration.md "Toolchain" and bootstrap's COMMON list). This is the
-# single owner of the per-backend dependency delta, so bootstrap follows the
-# RESOLVED backend instead of demanding an inactive backend's tools. Each set is:
-#   - the session-provider CLI itself (tmux/herdr/zellij/orca/cmux/paseo/rex/tern);
-#   - jq, for the JSON-emitting adapters (herdr, zellij, cmux, paseo, rex, tern) whose spawn/liveness
-#     paths parse the backend's JSON output (see each adapter's
-#     tool check, e.g. fm_backend_herdr_tool_check);
-#   - the treehouse worktree provider for every session-provider-only backend
-#     (tmux, herdr, zellij, cmux, paseo, rex, t3code, tern); orca owns its own task worktree and
-#     terminal, so it drops both treehouse and any other backend's session CLI;
-#   - node for t3code, whose adapter speaks MCP to the T3 server through
-#     bin/fm-t3-mcp.mjs.
-# Prints a single space-separated line and returns 0 for a known backend; returns
-# 1 and prints nothing for an unknown backend.
-fm_backend_required_tools() {  # <backend>
-  case "$1" in
-    tmux)   printf '%s' 'tmux treehouse' ;;
-    herdr)  printf '%s' 'herdr jq treehouse' ;;
-    zellij) printf '%s' 'zellij jq treehouse' ;;
-    cmux)   printf '%s' 'cmux jq treehouse' ;;
-    paseo)  printf '%s' 'paseo jq treehouse' ;;
-    rex)    printf '%s' 'rex jq treehouse' ;;
-    tern)   printf '%s' 'tern jq treehouse' ;;
-    hc)     printf '%s' 'hc jq treehouse' ;;
-    orca)   printf '%s' 'orca' ;;
-    t3code) printf '%s' 'node treehouse' ;;
-    *) return 1 ;;
-  esac
+fm_backend_required_tools() {
+  [ "$1" = herdr ] || return 1
+  printf '%s' 'herdr jq treehouse'
 }
 
-fm_backend_required_tool_available() {  # <backend> <tool>
+fm_backend_required_tool_available() {
   local backend=$1 tool=$2 required
   required=$(fm_backend_required_tools "$backend") || return 1
   fm_backend_list_contains "$required" "$tool" || return 1
-  case "$backend:$tool" in
-    cmux:cmux)
-      fm_backend_source cmux >/dev/null 2>&1 || return 1
-      fm_backend_cmux_bin >/dev/null 2>&1
-      ;;
-    paseo:paseo)
-      fm_backend_source paseo >/dev/null 2>&1 || return 1
-      fm_backend_paseo_bin >/dev/null 2>&1
-      ;;
-    rex:rex)
-      fm_backend_source rex >/dev/null 2>&1 || return 1
-      fm_backend_rex_bin >/dev/null 2>&1
-      ;;
-    hc:hc)
-      fm_backend_source hc >/dev/null 2>&1 || return 1
-      fm_backend_hc_bin >/dev/null 2>&1
-      ;;
-    *) command -v "$tool" >/dev/null 2>&1 ;;
-  esac
+  command -v "$tool" >/dev/null 2>&1
 }
 
 # fm_meta_get: the LAST value of `key=` in <meta-file>, or empty (never
@@ -600,18 +123,9 @@ fm_backend_of_meta() {  # <meta-file>
   printf '%s' "${v:-tmux}"
 }
 
-fm_backend_target_of_meta() {  # <meta-file>
-  local meta=$1 backend terminal window
-  backend=$(fm_backend_of_meta "$meta")
-  if [ "$backend" = orca ]; then
-    terminal=$(fm_meta_get "$meta" terminal)
-    [ -n "$terminal" ] && { printf '%s' "$terminal"; return 0; }
-  fi
-  if [ "$backend" = t3code ]; then
-    terminal=$(fm_meta_get "$meta" t3_thread_id)
-    [ -n "$terminal" ] && { printf '%s' "$terminal"; return 0; }
-  fi
-  window=$(fm_meta_get "$meta" window)
+fm_backend_target_of_meta() {
+  local window
+  window=$(fm_meta_get "$1" window)
   [ -n "$window" ] && printf '%s' "$window"
 }
 
@@ -636,35 +150,6 @@ fm_backend_endpoint_atom_valid() {  # <value>
   case "$1" in
     ''|*[!A-Za-z0-9._@%+-]*) return 1 ;;
   esac
-}
-
-# An Orca worktree id is the composite `<orca id>::<absolute worktree path>`
-# that Orca itself returns, so the `:` and `/` characters every real value
-# carries make the simple-atom check reject it. Firstmate hands the id back to
-# Orca opaquely and resolves it through Orca before removing anything, so this
-# proves only the shape that can name one worktree: both halves of the first
-# `::` split present, and the path half absolute.
-fm_backend_orca_worktree_id_valid() {  # <value>
-  case "$1" in
-    *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
-    *::*) ;;
-    *) return 1 ;;
-  esac
-  [ -n "${1%%::*}" ] || return 1
-  case "${1#*::}" in
-    /*) ;;
-    *) return 1 ;;
-  esac
-}
-
-# A Tern session, tab, or block id is a 64-bit integer and stays an opaque
-# decimal string end to end: no arithmetic and no JSON number conversion. Only
-# digits are accepted, and the 20-digit bound is the width of the largest u64.
-fm_backend_endpoint_u64_valid() {  # <value>
-  case "$1" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  [ "${#1}" -le 20 ]
 }
 
 # The repair path printed with the worktree-identity refusal below, so a record
@@ -702,7 +187,7 @@ fm_backend_worktree_identity_repair_hint() {  # <meta-file>
 
 fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
-  local session pane recorded_session workspace tab terminal worktree_id surface rex_window rex_server thread block
+  local pane recorded_session workspace tab
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
@@ -779,210 +264,34 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     return 1
   fi
 
-  case "$backend" in
-    tmux)
-      session=${window%%:*}
-      pane=${window#*:}
-      if [ "$pane" = "$window" ] || [ "$pane" != "fm-$id" ] \
-        || [ -z "$session" ]; then
-        echo "REFUSED: tmux endpoint '$window' is malformed or does not belong to task $id; preserving task state." >&2
-        return 1
-      fi
-      ;;
-    herdr)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Herdr endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      recorded_session=$(fm_backend_meta_exact_value "$meta" herdr_session) || recorded_session=
-      workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
-      tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=
-      pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || pane=
-      if [ -z "$recorded_session" ] || [ -z "$workspace" ] || [ -z "$tab" ] || [ -z "$pane" ] \
-        || [ "$window" != "$recorded_session:$pane" ] \
-        || ! fm_backend_endpoint_atom_valid "$recorded_session" \
-        || ! fm_backend_endpoint_atom_valid "$workspace" \
-        || ! fm_backend_endpoint_atom_valid "${tab//:/_}" \
-        || ! fm_backend_endpoint_atom_valid "${pane//:/_}"; then
-        echo "REFUSED: Herdr endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
-    zellij)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Zellij endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      recorded_session=$(fm_backend_meta_exact_value "$meta" zellij_session) || recorded_session=
-      tab=$(fm_backend_meta_exact_value "$meta" zellij_tab_id) || tab=
-      pane=$(fm_backend_meta_exact_value "$meta" zellij_pane_id) || pane=
-      case "$tab:$pane" in *[!0-9:]*) tab= ;; esac
-      if [ -z "$recorded_session" ] || [ -z "$tab" ] || [ -z "$pane" ] \
-        || [ "$window" != "$recorded_session:$pane" ] \
-        || ! fm_backend_endpoint_atom_valid "$recorded_session"; then
-        echo "REFUSED: Zellij endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
-    orca)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Orca endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      terminal=$(fm_backend_meta_exact_value "$meta" terminal) || terminal=
-      worktree_id=$(fm_backend_meta_exact_value "$meta" orca_worktree_id) || worktree_id=
-      [ -n "$terminal" ] || {
-        echo "REFUSED: missing terminal in $meta; cannot close Orca endpoint; preserving task state." >&2
-        return 1
-      }
-      [ -n "$worktree_id" ] || {
-        echo "REFUSED: missing orca_worktree_id in $meta; cannot remove Orca worktree; preserving task state." >&2
-        return 1
-      }
-      if [ "$window" != "fm-$id" ] \
-        || ! fm_backend_endpoint_atom_valid "$terminal" \
-        || ! fm_backend_orca_worktree_id_valid "$worktree_id"; then
-        echo "REFUSED: Orca endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      window=$terminal
-      ;;
-    cmux)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy cmux endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      workspace=$(fm_backend_meta_exact_value "$meta" cmux_workspace_id) || workspace=
-      surface=$(fm_backend_meta_exact_value "$meta" cmux_surface_id) || surface=
-      if [ -z "$workspace" ] || [ -z "$surface" ] || [ "$window" != "$workspace:$surface" ] \
-        || ! fm_backend_endpoint_atom_valid "$workspace" \
-        || ! fm_backend_endpoint_atom_valid "$surface"; then
-        echo "REFUSED: cmux endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
-    paseo)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy paseo endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      terminal=$(fm_backend_meta_exact_value "$meta" paseo_terminal_id) || terminal=
-      workspace=$(fm_backend_meta_exact_value "$meta" paseo_workspace_id) || workspace=
-      if [ -z "$terminal" ] || [ -z "$workspace" ] || [ "$window" != "$terminal:$workspace" ] \
-        || ! fm_backend_endpoint_atom_valid "$terminal" \
-        || ! fm_backend_endpoint_atom_valid "$workspace"; then
-        echo "REFUSED: paseo endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
-    rex)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Rex endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      # Rex ids carry their own colon, so window= records the two uuids
-      # without their prefixes and the prefixed ids are recorded beside it.
-      recorded_session=$(fm_backend_meta_exact_value "$meta" rex_session_id) || recorded_session=
-      rex_window=$(fm_backend_meta_exact_value "$meta" rex_window_id) || rex_window=
-      pane=$(fm_backend_meta_exact_value "$meta" rex_block_id) || pane=
-      rex_server=$(fm_backend_meta_exact_value "$meta" rex_server) || rex_server=
-      case "$rex_server" in *[[:space:]]*) rex_server= ;; esac
-      if ! fm_backend_rex_id_atom_valid session "$recorded_session" \
-        || ! fm_backend_rex_id_atom_valid window "$rex_window" \
-        || ! fm_backend_rex_id_atom_valid block "$pane" \
-        || [ -z "$rex_server" ] \
-        || [ "$window" != "${recorded_session#session:}:${pane#block:}" ]; then
-        echo "REFUSED: Rex endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
-    t3code)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: T3 endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      thread=$(fm_backend_meta_exact_value "$meta" t3_thread_id) || thread=
-      [ -n "$thread" ] || {
-        echo "REFUSED: missing t3_thread_id in $meta; cannot stop the T3 thread; preserving task state." >&2
-        return 1
-      }
-      # T3 assigns the id (an MCP-launched thread reads mcp:<uuid>).
-      case "$thread" in *[!0-9a-zA-Z:_-]*) thread= ;; esac
-      if [ "$window" != "fm-$id" ] || [ -z "$thread" ]; then
-        echo "REFUSED: T3 endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      window=$thread
-      ;;
-    tern)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy tern endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      recorded_session=$(fm_backend_meta_exact_value "$meta" tern_session_id) || recorded_session=
-      tab=$(fm_backend_meta_exact_value "$meta" tern_tab_id) || tab=
-      block=$(fm_backend_meta_exact_value "$meta" tern_block_id) || block=
-      if ! fm_backend_endpoint_u64_valid "$recorded_session" \
-        || ! fm_backend_endpoint_u64_valid "$tab" \
-        || ! fm_backend_endpoint_u64_valid "$block" \
-        || [ "$window" != "$recorded_session:$block" ]; then
-        echo "REFUSED: tern endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
-    hc)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: hc endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      recorded_session=$(fm_backend_meta_exact_value "$meta" hc_session) || recorded_session=
-      terminal=$(fm_backend_meta_exact_value "$meta" hc_terminal) || terminal=
-      if [ -z "$recorded_session" ] || [ -z "$terminal" ] \
-        || [ "$window" != "$recorded_session:$terminal" ] \
-        || ! fm_backend_endpoint_atom_valid "$recorded_session" \
-        || ! fm_backend_endpoint_atom_valid "$terminal"; then
-        echo "REFUSED: hc endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
-        return 1
-      fi
-      ;;
-  esac
-  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  [ "$binding" = "$id" ] || {
+    echo "REFUSED: legacy Herdr endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+    return 1
+  }
+  recorded_session=$(fm_backend_meta_exact_value "$meta" herdr_session) || recorded_session=
+  workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
+  tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=
+  pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || pane=
+  if [ -z "$recorded_session" ] || [ -z "$workspace" ] || [ -z "$tab" ] || [ -z "$pane" ] \
+    || [ "$window" != "$recorded_session:$pane" ] \
+    || ! fm_backend_endpoint_atom_valid "$recorded_session" \
+    || ! fm_backend_endpoint_atom_valid "$workspace" \
+    || ! fm_backend_endpoint_atom_valid "${tab//:/_}" \
+    || ! fm_backend_endpoint_atom_valid "${pane//:/_}"; then
+    echo "REFUSED: Herdr endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
+    return 1
+  fi
   FM_BACKEND_VALIDATED_BACKEND=$backend
-  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
   FM_BACKEND_VALIDATED_TARGET=$window
   return 0
 }
 
-# A full Rex id: its kind prefix and a lowercase uuid. Checked here rather than
-# through the adapter so metadata-only validation never sources a backend.
-fm_backend_rex_id_atom_valid() {  # <kind> <id>
-  case "$2" in
-    "$1":*) ;;
-    *) return 1 ;;
-  esac
-  case "${2#"$1":}" in
-    ''|*[!0-9a-f-]*) return 1 ;;
-  esac
-}
-
-fm_backend_meta_for_window() {  # <target> <state-dir>
-  local target=$1 state=$2 meta line window terminal thread
+fm_backend_meta_for_window() {
+  local target=$1 state=$2 meta window
   for meta in "$state"/*.meta; do
-    [ -e "$meta" ] || continue
-    window=''
-    terminal=''
-    thread=''
-    if [ -f "$meta" ]; then
-      while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-          window=*) window=${line#*=} ;;
-          terminal=*) terminal=${line#*=} ;;
-          t3_thread_id=*) thread=${line#*=} ;;
-        esac
-      done < "$meta" 2>/dev/null || true
-    fi
-    [ -n "$terminal" ] || terminal=$thread
-    { [ -n "$window" ] && [ "$window" = "$target" ]; } || { [ -n "$terminal" ] && [ "$terminal" = "$target" ]; } || continue
+    [ -f "$meta" ] || continue
+    window=$(fm_meta_get "$meta" window)
+    [ -n "$window" ] && [ "$window" = "$target" ] || continue
     printf '%s' "$meta"
     return 0
   done
@@ -1023,7 +332,7 @@ fm_backend_of_selector() {  # <raw-target> <resolved-target> <state-dir>
     meta=$(fm_backend_meta_for_window "$resolved" "$state" 2>/dev/null || true)
     [ -n "$meta" ] && { fm_backend_of_meta "$meta"; return 0; }
   fi
-  printf 'tmux'
+  printf 'herdr'
 }
 
 fm_backend_expected_label_of_selector() {  # <raw-target> <state-dir>
@@ -1033,10 +342,6 @@ fm_backend_expected_label_of_selector() {  # <raw-target> <state-dir>
   return 0
 }
 
-# fm_backend_source: source the named backend's adapter file, once per shell.
-# Each adapter is an independently linted canonical root. The /dev/null source
-# boundaries keep runtime dispatch from importing every adapter AST into
-# every dispatcher consumer while preserving the runtime source operations.
 # Bash 3.2 can enter an EXIT trap with status 0 after `set -e` aborts on a
 # missing or unreadable dot-sourced file, and a newer Bash can print that
 # diagnostic and keep going. Both report a successful teardown. Prove the
@@ -1045,143 +350,22 @@ fm_backend_source_readable() {  # <path>
   [ -f "$1" ] && [ -r "$1" ]
 }
 
-fm_backend_source() {  # <name>
+fm_backend_source() {
   local name=$1 adapter rel sibling
   fm_backend_validate "$name" || return 1
-  adapter="$FM_BACKEND_LIB_DIR/backends/$name.sh"
-  # The sibling list rides in the positional parameters: zsh does not
-  # word-split an unquoted expansion, so a space-separated string is one path.
-  case "$name" in
-    tmux)
-      set -- fm-tmux-lib.sh fm-composer-lib.sh fm-cursor-lib.sh fm-session-lock-lib.sh fm-agent-process-lib.sh fm-gemini-lib.sh fm-shell-line-lib.sh fm-hermes-process-lib.sh
-      ;;
-    herdr)
-      set -- fm-composer-lib.sh fm-transition-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh fm-shell-line-lib.sh fm-hermes-process-lib.sh
-      ;;
-    zellij)
-      set -- fm-backend-hometag-lib.sh fm-composer-lib.sh fm-shell-line-lib.sh
-      ;;
-    orca)
-      set -- fm-composer-lib.sh fm-shell-line-lib.sh
-      ;;
-    cmux)
-      set -- fm-backend-hometag-lib.sh fm-composer-lib.sh fm-shell-line-lib.sh
-      ;;
-    paseo)
-      set -- fm-backend-hometag-lib.sh fm-composer-lib.sh
-      ;;
-    rex)
-      set -- fm-backend-hometag-lib.sh fm-composer-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh fm-hermes-process-lib.sh
-      ;;
-    t3code)
-      set -- fm-composer-lib.sh fm-transition-lib.sh
-      ;;
-    tern)
-      set -- fm-backend-hometag-lib.sh fm-composer-lib.sh fm-timeout-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh fm-hermes-process-lib.sh fm-cursor-lib.sh
-      ;;
-    hc)
-      set -- fm-backend-hometag-lib.sh fm-composer-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh fm-hermes-process-lib.sh fm-cursor-lib.sh
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  adapter="$FM_BACKEND_LIB_DIR/backends/herdr.sh"
+  set -- fm-composer-lib.sh fm-transition-lib.sh fm-agent-process-lib.sh fm-session-lock-lib.sh fm-gemini-lib.sh fm-shell-line-lib.sh fm-hermes-process-lib.sh
   fm_backend_source_readable "$adapter" || return 1
   for rel in "$@"; do
     sibling="$FM_BACKEND_LIB_DIR/$rel"
     fm_backend_source_readable "$sibling" || return 1
   done
-  case "$name" in
-    tmux)
-      if [ -z "${_FM_BACKEND_TMUX_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_TMUX_SOURCED=1
-      fi
-      ;;
-    herdr)
-      if [ -z "${_FM_BACKEND_HERDR_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_HERDR_SOURCED=1
-      fi
-      ;;
-    zellij)
-      if [ -z "${_FM_BACKEND_ZELLIJ_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_ZELLIJ_SOURCED=1
-      fi
-      ;;
-    orca)
-      if [ -z "${_FM_BACKEND_ORCA_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_ORCA_SOURCED=1
-      fi
-      ;;
-    cmux)
-      if [ -z "${_FM_BACKEND_CMUX_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_CMUX_SOURCED=1
-      fi
-      ;;
-    paseo)
-      if [ -z "${_FM_BACKEND_PASEO_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_PASEO_SOURCED=1
-      fi
-      ;;
-    rex)
-      if [ -z "${_FM_BACKEND_REX_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_REX_SOURCED=1
-      fi
-      ;;
-    t3code)
-      if [ -z "${_FM_BACKEND_T3CODE_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_T3CODE_SOURCED=1
-      fi
-      ;;
-    tern)
-      if [ -z "${_FM_BACKEND_TERN_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_TERN_SOURCED=1
-      fi
-      ;;
-    hc)
-      if [ -z "${_FM_BACKEND_HC_SOURCED:-}" ]; then
-        # shellcheck source=/dev/null
-        . "$adapter" || return 1
-        _FM_BACKEND_HC_SOURCED=1
-      fi
-      ;;
-  esac
+  if [ -z "${_FM_BACKEND_HERDR_SOURCED:-}" ]; then
+    . "$FM_BACKEND_DEFAULT_ROOT/bin/backends/herdr.sh" || return 1
+    _FM_BACKEND_HERDR_SOURCED=1
+  fi
 }
 
-# fm_backend_resolve_selector: resolve a raw fm-send.sh/fm-peek.sh style
-# selector to a live session-provider target. Four forms, in order:
-#   target with ":"   used as-is (the escape hatch for a window/pane outside
-#                      this firstmate home) - backend-independent, a literal string.
-#   exact task id      routed through <state-dir>/<id>.meta's backend target
-#                      (`window=` normally, `terminal=` for Orca,
-#                      `t3_thread_id=` for T3 Code) -
-#                      backend-independent, a stored value, NOT re-verified
-#                      against a live backend inventory (matches today's
-#                      behavior: tmux window names can be trusted from meta
-#                      without a live re-check).
-#   "fm-<id>"          legacy task window label fallback routed through
-#                      <state-dir>/<id>.meta when no exact
-#                      <state-dir>/fm-<id>.meta exists.
-#   anything else      first matched against recorded backend endpoint fields
-#                      metadata, then treated as an ad hoc bare window name and
-#                      resolved by searching the legacy tmux live inventory.
 fm_backend_resolve_selector() {  # <raw-target> <state-dir>
   local raw=$1 state=$2 meta window
   case "$raw" in
@@ -1210,37 +394,18 @@ fm_backend_resolve_selector() {  # <raw-target> <state-dir>
         printf '%s' "$window"
         return 0
       fi
-      fm_backend_source tmux || return 1
-      fm_backend_tmux_resolve_bare_selector "$raw"
+      echo "error: no metadata for $raw in $state" >&2
+      return 1
       ;;
   esac
 }
-
-# --- generic per-op dispatch -------------------------------------------------
-#
-# Thin case-dispatch wrappers so a caller names an operation and a backend
-# rather than hand-writing `case "$backend" in tmux) fm_backend_tmux_x ;; esac`
-# at every call site. Each verified backend adds its own arm here, without
-# changing call sites.
 
 # fm_backend_capture: bounded plain-text session capture.
 fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
   local backend=$1
   shift
   fm_backend_source "$backend" || return 1
-  case "$backend" in
-    tmux) fm_backend_tmux_capture "$@" ;;
-    herdr) fm_backend_herdr_capture "$@" ;;
-    zellij) fm_backend_zellij_capture "$@" ;;
-    orca) fm_backend_orca_capture "$@" ;;
-    cmux) fm_backend_cmux_capture "$@" ;;
-    paseo) fm_backend_paseo_capture "$@" ;;
-    rex) fm_backend_rex_capture "$@" ;;
-    t3code) fm_backend_t3code_capture "$@" ;;
-    tern) fm_backend_tern_capture "$@" ;;
-    hc) fm_backend_hc_capture "$@" ;;
-    *) echo "error: no capture implementation for backend '$backend'" >&2; return 1 ;;
-  esac
+  fm_backend_herdr_capture "$@"
 }
 
 # Precondition: an operator asked for this read. On herdr it scrolls an idle
@@ -1253,20 +418,7 @@ fm_backend_scrollback_capture() {  # <backend> <target> <lines> [expected-label]
   fm_backend_herdr_scrollback_capture "$@"
 }
 
-# FM_BACKEND_VISIBLE_CAPTURE: backends with a verified viewport-only read, each
-# implementing fm_backend_<name>_visible_capture. This one list answers both the
-# capability question and the dispatch, so they cannot disagree. cmux is absent
-# pending live verification: its `read-screen` without `--scrollback` plausibly
-# reads only the viewport, but that has not been observed on a real cmux, and
-# the adapter's own capture opts into history with `--scrollback`. orca's
-# `terminal read --limit` is a history read with no viewport mode. rex has no
-# viewport-only read either; its viewport is DERIVED as the last size.rows rows
-# of the styled capture, which always ends with the full screen grid
-# (bin/backends/rex.sh's header owns the derivation and its verified basis).
-# tern reads the viewport with `tern capture --surfaces` and no `--scrollback`
-# (trimmed to the block's rows); its own capture opts into history with the flag.
-# hc reads the screen alone with `hc read --lines 0`.
-FM_BACKEND_VISIBLE_CAPTURE="tmux herdr zellij rex tern hc"
+FM_BACKEND_VISIBLE_CAPTURE="herdr"
 
 # fm_backend_visible_capture_supported: whether <backend> can read the visible
 # viewport WITHOUT scrollback. Callers that must not mistake a scrolled-away
@@ -1294,19 +446,7 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
   local backend=$1
   shift
   fm_backend_source "$backend" || return 1
-  case "$backend" in
-    tmux) fm_backend_tmux_send_key "$@" ;;
-    herdr) fm_backend_herdr_send_key "$@" ;;
-    zellij) fm_backend_zellij_send_key "$@" ;;
-    orca) fm_backend_orca_send_key "$@" ;;
-    cmux) fm_backend_cmux_send_key "$@" ;;
-    paseo) fm_backend_paseo_send_key "$@" ;;
-    rex) fm_backend_rex_send_key "$@" ;;
-    t3code) fm_backend_t3code_send_key "$@" ;;
-    tern) fm_backend_tern_send_key "$@" ;;
-    hc) fm_backend_hc_send_key "$@" ;;
-    *) echo "error: no send-key implementation for backend '$backend'" >&2; return 1 ;;
-  esac
+  fm_backend_herdr_send_key "$@"
 }
 
 # fm_backend_send_text_submit: submit and verify through the selected adapter.
@@ -1339,19 +479,7 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
     echo "error: blocked on a prompt: $dialog" >&2
     return 1
   fi
-  case "$backend" in
-    tmux) fm_backend_tmux_send_text_submit "$@" || rc=$? ;;
-    herdr) fm_backend_herdr_send_text_submit "$@" || rc=$? ;;
-    zellij) fm_backend_zellij_send_text_submit "$@" || rc=$? ;;
-    orca) fm_backend_orca_send_text_submit "$@" || rc=$? ;;
-    cmux) fm_backend_cmux_send_text_submit "$@" || rc=$? ;;
-    paseo) fm_backend_paseo_send_text_submit "$@" || rc=$? ;;
-    rex) fm_backend_rex_send_text_submit "$@" || rc=$? ;;
-    t3code) fm_backend_t3code_send_text_submit "$@" || rc=$? ;;
-    tern) fm_backend_tern_send_text_submit "$@" || rc=$? ;;
-    hc) fm_backend_hc_send_text_submit "$@" || rc=$? ;;
-    *) echo "error: no send-text implementation for backend '$backend'" >&2; rc=1 ;;
-  esac
+  fm_backend_herdr_send_text_submit "$@" || rc=$?
   fm_composer_dialog_sink_release
   return "$rc"
 }
@@ -1376,211 +504,47 @@ fm_backend_kill() {  # <backend> <target>
   shift
   [ -n "${1:-}" ] || { echo "error: refusing empty backend kill target" >&2; return 1; }
   fm_backend_source "$backend" || return 1
-  case "$backend" in
-    tmux) fm_backend_tmux_kill "$@" ;;
-    herdr) fm_backend_herdr_kill "$@" ;;
-    zellij) fm_backend_zellij_kill "$@" ;;
-    orca) fm_backend_orca_kill "$@" ;;
-    cmux) fm_backend_cmux_kill "$@" ;;
-    paseo) fm_backend_paseo_kill "$@" ;;
-    rex) fm_backend_rex_kill "$@" ;;
-    t3code) fm_backend_t3code_kill "$1" ;;
-    tern) fm_backend_tern_kill "$@" ;;
-    hc) fm_backend_hc_kill "$@" ;;
-    *) echo "error: no kill implementation for backend '$backend'" >&2; return 1 ;;
-  esac
+  fm_backend_herdr_kill "$@"
 }
 
-fm_backend_remove_worktree() {  # <backend> <worktree-id>
-  local backend=$1
-  shift
-  fm_backend_source "$backend" || return 1
-  case "$backend" in
-    orca) fm_backend_orca_remove_worktree "$@" ;;
-    *) echo "error: backend '$backend' does not own task worktrees" >&2; return 1 ;;
-  esac
+fm_backend_remove_worktree() {
+  echo "error: backend '$1' does not own task worktrees" >&2
+  return 1
 }
 
-fm_backend_worktree_path() {  # <backend> <worktree-id>
-  local backend=$1
-  shift
-  fm_backend_source "$backend" || return 1
-  case "$backend" in
-    orca) fm_backend_orca_worktree_path "$@" ;;
-    *) echo "error: backend '$backend' does not own task worktrees" >&2; return 1 ;;
-  esac
+fm_backend_worktree_path() {
+  echo "error: backend '$1' does not own task worktrees" >&2
+  return 1
 }
 
-# fm_backend_busy_state: native busy/idle/unknown for Herdr, Rex, T3 Code, and
-# Tern; backends without a native primitive report unknown. Recorded-task consumers
-# use fm-busy-lib.sh's shared classifier, which owns native-state precedence
-# and harness fallbacks. Delivery-only callers own their separate guards.
-# tern reads Tern's native agent list through `tern ctl` when a desktop window
-# answers (an agent waiting on input reads `blocked`) and reports unknown when
-# none does; every consumer here tests only for the exact word `busy`.
 fm_backend_busy_state() {  # <backend> <target>
   local backend=$1
   shift
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
-  case "$backend" in
-    herdr) fm_backend_herdr_busy_state "$@" ;;
-    rex) fm_backend_rex_busy_state "$@" ;;
-    t3code) fm_backend_t3code_busy_state "$@" ;;
-    tern) fm_backend_tern_busy_state "$@" ;;
-    hc) fm_backend_hc_busy_state "$@" ;;
-    *) printf 'unknown' ;;
-  esac
+  fm_backend_herdr_busy_state "$@"
 }
 
-# fm_backend_composer_state: classify the composer/input area of <target> as
-# empty|pending|pending-unproven|unknown for callers that need a pre-submit
-# input guard, a submit acknowledgement, or a launch-readiness check. It is
-# exposed so a caller other than the send path (the away-mode daemon's
-# supervisor-pane pending-input guard in bin/fm-supervise-daemon.sh, and
-# fm-spawn.sh's kimi readiness/delivery checks) can ask the same question
-# without duplicating per-backend composer reading. Every adapter's named
-# classifier is a THIN wrapper - capture plus a capability descriptor fed to
-# the one shared shape owner (bin/fm-composer-lib.sh,
-# fm_composer_classify_screen) - so no backend can hold a private shape
-# assumption; zellij's classifier reads `dump-screen --ansi`, which replaced
-# its old no-classifier content-diff reporting.
 fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pending|pending-unproven|unknown
   local backend=$1
   shift
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
-  case "$backend" in
-    tmux) fm_tmux_composer_state "$@" ;;
-    herdr) fm_backend_herdr_composer_state "$@" ;;
-    orca) fm_backend_orca_composer_state "$@" ;;
-    cmux) fm_backend_cmux_composer_state "$@" ;;
-    paseo) fm_backend_paseo_composer_state "$@" ;;
-    rex) fm_backend_rex_composer_state "$@" ;;
-    zellij) fm_backend_zellij_composer_state "$@" ;;
-    t3code) fm_backend_t3code_composer_state "$@" ;;
-    tern) fm_backend_tern_composer_state "$@" ;;
-    hc) fm_backend_hc_composer_state "$@" ;;
-    *) printf 'unknown' ;;
-  esac
+  fm_backend_herdr_composer_state "$@"
 }
 
-# fm_backend_target_exists: cheap, READ-ONLY existence check - does the
-# recorded TARGET endpoint still exist on BACKEND? Never starts a server or
-# session: for herdr this deliberately queries the pane directly instead of
-# going through fm_backend_herdr_target_ready (which auto-starts the herdr
-# server as a side effect via fm_backend_herdr_server_ensure - fine for an
-# operation that is about to use the pane, wrong for a passive liveness
-# probe). A gone tmux window or an unqueryable herdr pane (server down, pane
-# closed), missing zellij pane, unreadable Orca terminal, or absent Tern block
-# simply fails, which IS "does not exist" for this purpose.
-# Owns fm-crew-state.sh's pane_readable check too, so callers that only need a
-# fast alive/dead read (recovery digests, the session-start fleet digest) do
-# not re-derive it inline.
-# For tmux, TARGET accepts `%pane`, `@window`, `session:@window`, a bare exact
-# session, and `session:window`, `session:index`, or a window index with
-# a numeric `.pane` suffix; optional `=session:=window` markers stay exact too.
-fm_backend_target_exists() {  # <backend> <target> [expected-label]
-  local backend=$1 target=$2 expected_label=${3:-} session pane
-  case "$backend" in
-    tmux)
-      fm_backend_source tmux || return 1
-      fm_backend_tmux_target_exists "$target"
-      ;;
-    herdr)
-      fm_backend_source herdr || return 1
-      session=${target%%:*}
-      pane=${target#*:}
-      [ -n "$session" ] && [ -n "$pane" ] && [ "$pane" != "$target" ] || return 1
-      # fm_backend_herdr_cli (not a raw HERDR_SESSION-only call): verified
-      # empirically (docs/herdr-backend.md "Session targeting") that the bare
-      # env var alone is NOT reliably honored once another herdr server is
-      # already bound on the machine - it silently queries whatever server IS
-      # running instead. fm_backend_herdr_cli appends the required --session
-      # flag on top, so this check is correctly scoped even when the caller's
-      # own ambient session (e.g. the primary firstmate's default session) is
-      # a DIFFERENT one than the target's.
-      fm_backend_herdr_cli "$session" pane get "$pane" >/dev/null 2>&1
-      ;;
-    zellij)
-      fm_backend_source zellij || return 1
-      fm_backend_zellij_target_ready "$target" "$expected_label"
-      ;;
-    orca)
-      fm_backend_source orca || return 1
-      fm_backend_orca_capture "$target" 1 >/dev/null 2>&1
-      ;;
-    cmux)
-      fm_backend_source cmux || return 1
-      fm_backend_cmux_target_ready "$target" "$expected_label"
-      ;;
-    paseo)
-      fm_backend_source paseo || return 1
-      fm_backend_paseo_target_ready "$target" "$expected_label"
-      ;;
-    rex)
-      # A read that never starts a server: an unreachable server fails.
-      fm_backend_source rex || return 1
-      fm_backend_rex_target_ready "$target" "$expected_label"
-      ;;
-    t3code)
-      fm_backend_source t3code || return 1
-      fm_backend_t3code_target_exists "$target"
-      ;;
-    tern)
-      fm_backend_source tern || return 1
-      fm_backend_tern_target_ready "$target" "$expected_label"
-      ;;
-    hc)
-      fm_backend_source hc || return 1
-      fm_backend_hc_target_ready "$target" "$expected_label"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+# A liveness read must not start the Herdr server.
+fm_backend_target_exists() {
+  local backend=$1 target=$2 session pane
+  fm_backend_source "$backend" || return 1
+  session=${target%%:*}
+  pane=${target#*:}
+  [ -n "$session" ] && [ -n "$pane" ] && [ "$pane" != "$target" ] || return 1
+  fm_backend_herdr_cli "$session" pane get "$pane" >/dev/null 2>&1
 }
 
-# fm_backend_agent_state: the single recovery-grade agent/endpoint state
-# contract. It is deliberately richer than fm_backend_target_exists's cheap
-# pane-presence read and prints exactly one of:
-#   alive      - a verified harness agent is running.
-#   dead       - the endpoint exists but confidently has no agent.
-#   missing    - the recorded endpoint is authoritatively absent.
-#   ambiguous  - the endpoint exists but its process cannot be attributed.
-#   unreadable - a target or inventory read failed or contradicted itself.
-#   unverified - this backend has no recovery classifier.
-# Only `dead` and `missing` license recovery. Every `alive` is proven at
-# process level through the shared classifier in bin/fm-agent-process-lib.sh,
-# never from a registration or a rendered title alone. The tmux adapter
-# requires a successful session inventory and returns `missing` only when it
-# omits the exact window; the Herdr adapter reuses its strict husk classifier -
-# which verifies a registered agent against `pane process-info` and the real
-# process table, so a registration Herdr kept over a shell-only pane reads
-# `dead` here (issue #4115) - then maps a positively stopped session server to
-# `missing` only in this recovery-grade view. The Rex adapter classifies its
-# structured process view (foreground process and ancestors) through the same
-# shared classifier and reads a structured not-found as `missing`. Zellij
-# remains unverified because
-# its secondmate ghost-tab and agent-process recovery path has not been
-# empirically validated. Orca, cmux, paseo, and tern do not support secondmate
-# spawns. The t3code adapter maps the thread's V2 status through its one status
-# table (bin/backends/t3code.sh); there is no process to attribute locally.
-# Tern answers through the same process classifier from `tern process`, but
-# bin/fm-control-lib.sh's fm_control_backend_state_verified does not list it, so
-# no control-plane verb treats a Tern verdict as proof that an agent stopped.
-# hc classifies the one foreground process `hc get` reports through the same
-# classifier and is likewise absent from fm_control_backend_state_verified.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
-  case "$backend" in
-    tmux) fm_backend_tmux_agent_state "$target" ;;
-    herdr) fm_backend_herdr_agent_state "$target" ;;
-    rex) fm_backend_rex_agent_state "$target" ;;
-    t3code) fm_backend_t3code_agent_state "$target" ;;
-    tern) fm_backend_tern_agent_state "$target" ;;
-    hc) fm_backend_hc_agent_state "$target" ;;
-    *) printf 'unverified' ;;
-  esac
+  fm_backend_herdr_agent_state "$target"
 }
 
 # fm_backend_launch_pane_state: shell|occupied|unreadable|unverified for the
@@ -1591,11 +555,7 @@ fm_backend_agent_state() {  # <backend> <target>
 fm_backend_launch_pane_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
-  case "$backend" in
-    tmux) fm_backend_tmux_pane_process_state "$target" ;;
-    herdr) fm_backend_herdr_launch_pane_state "$target" ;;
-    *) printf 'unverified' ;;
-  esac
+  fm_backend_herdr_launch_pane_state "$target"
 }
 
 # Succeeds silently when fm_backend_launch_pane_state proves a bare shell;
@@ -1635,26 +595,10 @@ fm_backend_agent_alive() {  # <backend> <target>
   esac
 }
 
-# --- native event push (backend-extensible) ---------------------------------
-#
-# The watcher's event-wait splice (bin/fm-watch.sh) is backend-agnostic: it asks
-# fm_backend_has_push whether a window's backend can push semantic state changes,
-# and for those backends replaces its blind `sleep POLL` with a bounded wait on
-# fm_backend_wait_transition. Every push-capable backend reuses the shared
-# normalized-transition shape, policy table, and dedupe (bin/fm-transition-lib.sh);
-# herdr (docs/herdr-backend.md "Push events and polling fallback") and rex
-# (docs/rex-backend.md "Push events") implement the surface, and T3 Code
-# implements it over t3_thread_wait and its pending-request count
-# (bin/backends/t3code.sh "native event wait"), since its `/mcp` credential is
-# refused on T3's WebSocket stream.
-# A backend with no native push
-# reports has-push false and returns 2 from the dispatchers below, so the
-# watcher falls back to its poll loop - the permanent fail-closed backstop.
-
 # fm_backend_has_push: 0 if <backend> exposes a native transition push stream.
 fm_backend_has_push() {  # <backend>
   case "$1" in
-    herdr|rex|t3code) return 0 ;;
+    herdr) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -1668,12 +612,7 @@ fm_backend_events_capable() {  # <backend> <session>
   shift
   fm_backend_has_push "$backend" || return 1
   fm_backend_source "$backend" || return 1
-  case "$backend" in
-    herdr) fm_backend_herdr_events_capable "$@" ;;
-    rex) fm_backend_rex_events_capable "$@" ;;
-    t3code) fm_backend_t3code_events_capable "$@" ;;
-    *) return 1 ;;
-  esac
+  fm_backend_herdr_events_capable "$@"
 }
 
 # fm_backend_wait_transition: bounded wait for a fresh actionable (blocked)
@@ -1687,12 +626,7 @@ fm_backend_wait_transition() {  # <backend> <session> <timeout_secs> <state_dir>
   shift
   fm_backend_has_push "$backend" || return 2
   fm_backend_source "$backend" || return 2
-  case "$backend" in
-    herdr) fm_backend_herdr_wait_transition "$@" ;;
-    rex) fm_backend_rex_wait_transition "$@" ;;
-    t3code) fm_backend_t3code_wait_transition "$@" ;;
-    *) return 2 ;;
-  esac
+  fm_backend_herdr_wait_transition "$@"
 }
 
 fm_backend_commit_transition() {  # <backend> <state_dir> <session> <record>
@@ -1700,12 +634,7 @@ fm_backend_commit_transition() {  # <backend> <state_dir> <session> <record>
   shift
   fm_backend_has_push "$backend" || return 1
   fm_backend_source "$backend" || return 1
-  case "$backend" in
-    herdr) fm_backend_herdr_commit_transition "$@" ;;
-    rex) fm_backend_rex_commit_transition "$@" ;;
-    t3code) fm_backend_t3code_commit_transition "$@" ;;
-    *) return 1 ;;
-  esac
+  fm_backend_herdr_commit_transition "$@"
 }
 
 fm_backend_clear_transition() {  # <backend> <state_dir> <window>
@@ -1713,54 +642,27 @@ fm_backend_clear_transition() {  # <backend> <state_dir> <window>
   shift
   fm_backend_has_push "$backend" || return 0
   fm_backend_source "$backend" || return 1
-  case "$backend" in
-    herdr) fm_backend_herdr_clear_transition "$@" ;;
-    rex) fm_backend_rex_clear_transition "$@" ;;
-    t3code) fm_backend_t3code_clear_transition "$@" ;;
-    *) return 0 ;;
-  esac
+  fm_backend_herdr_clear_transition "$@"
 }
 
-# Event connection grouping and record identity: pane backends use session:id;
-# every T3 thread shares the home's one server, and its record names the
-# thread id itself.
-fm_backend_event_session() {  # <backend> <target>
-  case "$1" in
-    t3code) printf 't3code' ;;
-    *) printf '%s' "${2%%:*}" ;;
-  esac
+fm_backend_event_session() {
+  printf '%s' "${2%%:*}"
 }
 
-fm_backend_transition_target() {  # <backend> <session> <endpoint-id>
-  case "$1" in
-    t3code) printf '%s' "$3" ;;
-    *) printf '%s:%s' "$2" "$3" ;;
-  esac
+fm_backend_transition_target() {
+  printf '%s:%s' "$2" "$3"
 }
 
 # fm_backend_transition_note: optional backend detail appended to an
 # escalated transition's wake reason; empty for backends with nothing to add.
-fm_backend_transition_note() {  # <backend> <record>
-  case "$1" in
-    t3code) fm_backend_source t3code && fm_backend_t3code_transition_note "$2" ;;
-  esac
+fm_backend_transition_note() {
+  return 0
 }
 
-# Early spawn checks for API-owned sessions. Other backends keep their
-# existing admission checks in container_ensure at endpoint provisioning.
-fm_backend_runtime_check() {  # <backend>
-  fm_backend_source "$1" || return 1
-  case "$1" in
-    orca) fm_backend_orca_runtime_check ;;
-    t3code) fm_backend_t3code_runtime_check ;;
-    *) return 0 ;;
-  esac
+fm_backend_runtime_check() {
+  fm_backend_source "$1"
 }
 
-fm_backend_validate_harness() {  # <backend> <harness>
-  fm_backend_source "$1" || return 1
-  case "$1" in
-    t3code) fm_backend_t3code_validate_harness "$2" ;;
-    *) return 0 ;;
-  esac
+fm_backend_validate_harness() {
+  fm_backend_source "$1"
 }
