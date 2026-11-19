@@ -74,6 +74,9 @@ usage() {
 usage: fm-fleet-snapshot.sh --json
 
 Print a structured snapshot of the firstmate fleet.
+--backlog-input emits only the canonical local backlog, without reading worker
+endpoints.
+
 Each local per-task current-state read is bounded by FM_SNAPSHOT_CREW_STATE_TIMEOUT
 (default 10 seconds); a read that hits the bound reports state unknown. Local task
 observations run concurrently, up to FM_SNAPSHOT_LOCAL_READ_CONCURRENCY (default 8).
@@ -86,8 +89,10 @@ since date, and re-holding with --until remains the durable deferral.
 EOF
 }
 
+BACKLOG_ONLY=0
 case "${1:---json}" in
   --json) ;;
+  --backlog-input) BACKLOG_ONLY=1 ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -793,6 +798,10 @@ scout_report_lines() {
 }
 
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
+if [ "$BACKLOG_ONLY" -eq 1 ]; then
+  printf '%s\n' "$BACKLOG_JSON" | jq '{backlog:.}' || { echo "fm-fleet-snapshot: backlog input assembly failed" >&2; exit 1; }
+  exit 0
+fi
 prefetch_task_current_states || { echo "fm-fleet-snapshot: task observation failed" >&2; exit 1; }
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 

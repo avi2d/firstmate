@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Regression coverage for bin/fm-fleet-snapshot.sh --contribution-input:
+# Regression coverage for bin/fm-fleet-snapshot.sh --backlog-input:
 # a failing final jq assembly must exit non-zero instead of exiting 0 with
-# empty output (issue #5349).
+# empty output.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -9,7 +9,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
-TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot-contribution-input)
+TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot-backlog-input)
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
@@ -25,11 +25,9 @@ write_backlog() {  # <home>
     > "$1/data/backlog.md"
 }
 
-# A fake jq that fails only for the final contribution-input assembly call
+# A fake jq that fails only for the final backlog-input assembly call
 # (identified by the exact program text), passing every other invocation
-# through to the real jq. Proves the script propagates that failure as a
-# non-zero exit instead of the pre-fix behavior of exiting 0 with a broken
-# result.
+# through to the real jq.
 make_failing_assembly_jq_fakebin() {  # <dir>
   local fb real_jq
   fb=$(fm_fakebin "$1")
@@ -38,8 +36,8 @@ make_failing_assembly_jq_fakebin() {  # <dir>
 #!/usr/bin/env bash
 for a in "\$@"; do
   case "\$a" in
-    *'backlog:\$backlog[0],tasks:\$tasks[0]'*)
-      echo "jq: simulated contribution-input assembly failure" >&2
+    '{backlog:.}')
+      echo "jq: simulated backlog-input assembly failure" >&2
       exit 5
       ;;
   esac
@@ -50,17 +48,17 @@ SH
   printf '%s\n' "$fb"
 }
 
-test_contribution_input_propagates_jq_failure() {
+test_backlog_input_exits_zero_on_jq_failure_rejected() {
   local home fakebin out status
   home=$(make_home jq-failure)
   write_backlog "$home"
   fakebin=$(make_failing_assembly_jq_fakebin "$home")
 
-  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --contribution-input 2>&1)
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --backlog-input 2>&1)
   status=$?
-  [ "$status" -ne 0 ] || fail "contribution-input must not exit 0 when jq assembly fails: $out"
-  assert_contains "$out" "fm-fleet-snapshot: contribution input assembly failed" "jq assembly failure must surface an fm-fleet-snapshot error"
-  pass "contribution-input propagates a failing jq assembly as a non-zero exit"
+  [ "$status" -ne 0 ] || fail "backlog-input must not exit 0 when jq assembly fails: $out"
+  assert_contains "$out" "fm-fleet-snapshot: backlog input assembly failed" "jq assembly failure must surface an fm-fleet-snapshot error"
+  pass "backlog-input propagates a failing jq assembly as a non-zero exit"
 }
 
-test_contribution_input_propagates_jq_failure
+test_backlog_input_exits_zero_on_jq_failure_rejected

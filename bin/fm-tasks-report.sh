@@ -235,7 +235,7 @@ collect_home_spans() {  # <home> <work>
       stream_span "$f"
       [ -z "$span_end" ] || printf 'archived\t%s\t%s\t%s\n' "$id" "$span_start" "$span_end" >>"$work/spans.tsv"
     done
-  done < <(jq -r '.backlog.records[]? | select(.state == "done") | .id' "$work/contrib.json")
+  done < <(jq -r '.backlog.records[]? | select(.state == "done") | .id' "$work/backlog.json")
   while IFS= read -r id; do
     [ -f "$home/state/$id.status" ] || continue
     stream_span "$home/state/$id.status"
@@ -290,7 +290,7 @@ collect_home_pipelines() {  # <home> <work>
 collect_home_snapshot() {
   local home=$1 snap_bin=$2 out=$3
   local snap_dir crew_state work meta id kind mode branch project spawn_gen first_spawn_gen worktree present remote_host
-  local pids="" batch=0 rc=0 contrib_pid="" pipes_pid=""
+  local pids="" batch=0 rc=0 backlog_pid="" pipes_pid=""
   snap_dir=$(dirname "$snap_bin")
   crew_state="$snap_dir/fm-crew-state.sh"
   [ -x "$crew_state" ] || crew_state="$SCRIPT_DIR/fm-crew-state.sh"
@@ -301,11 +301,11 @@ collect_home_snapshot() {
   : >"$work/live.tsv"
   : >"$work/pipes.in"
   if command -v timeout >/dev/null 2>&1; then
-    FM_HOME="$home" timeout 120 "$snap_bin" --contribution-input >"$work/contrib.json" 2>"$work/contrib.err" &
+    FM_HOME="$home" timeout 120 "$snap_bin" --backlog-input >"$work/backlog.json" 2>"$work/backlog.err" &
   else
-    FM_HOME="$home" "$snap_bin" --contribution-input >"$work/contrib.json" 2>"$work/contrib.err" &
+    FM_HOME="$home" "$snap_bin" --backlog-input >"$work/backlog.json" 2>"$work/backlog.err" &
   fi
-  contrib_pid=$!
+  backlog_pid=$!
   for meta in "$home"/state/*.meta; do
     [ -e "$meta" ] || continue
     id=${meta##*/}
@@ -353,17 +353,17 @@ collect_home_snapshot() {
   for p in $pids; do wait "$p" || rc=1; done
   [ -z "$pipes_pid" ] || wait "$pipes_pid" || true
   [ "$rc" -eq 0 ] || return 1
-  wait "$contrib_pid" || {
-    echo "error: fleet snapshot failed for $home: $(head -c 300 "$work/contrib.err")" >&2
+  wait "$backlog_pid" || {
+    echo "error: fleet snapshot failed for $home: $(head -c 300 "$work/backlog.err")" >&2
     return 1
   }
   collect_home_spans "$home" "$work"
   jq -n --arg fm_home "$home" \
     --slurpfile base "$work/base.jsonl" \
     --slurpfile obs "$work/obs.jsonl" \
-    --slurpfile contrib "$work/contrib.json" \
+    --slurpfile backlog_input "$work/backlog.json" \
     --rawfile spans "$work/spans.tsv" '
-    ($contrib[0].backlog) as $backlog
+    ($backlog_input[0].backlog) as $backlog
     | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
       ($obs | map({key:.id, value:.}) | from_entries) as $o
     | {
