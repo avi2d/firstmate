@@ -1,106 +1,22 @@
 #!/usr/bin/env bash
-# fm-inbox.sh - the captain's out-of-band capture surface.
-#
-# Solves three DIFFERENT problems with three different mechanisms, because they
-# are not the same problem:
-#
-#   note    Queue an idea for firstmate while firstmate is mid-turn and cannot
-#           answer. Writes a durable record and appends ONE `check` wake, so the
-#           note survives a crash and is presented at firstmate's next drain.
-#           `announce` may append that same wake for an already-saved note.
-#           These two are the only subcommands that touch firstmate's wake queue.
-#   say     Same as `note`, but the body comes from spoken audio on stdin.
-#           Speech is an INPUT METHOD here, not an architecture: it transcribes
-#           and then takes exactly the `note` path.
-#   status  Answer "what is happening" from durable records ONLY. Reads no
-#           network and appends NO wake, so it never interrupts work and is safe
-#           to run in a loop.
-#   ask     Answer a side question with a one-shot model call that never touches
-#           firstmate, the backlog, or the wake queue. A side question is not
-#           fleet work and must not become fleet work.
-#
-# Usage:
-#   fm-inbox.sh note [--request-id <id>] [--json] [--] <text>...
-#   fm-inbox.sh note [--request-id <id>] [--json] -   (body from stdin)
-#   fm-inbox.sh announce [--json] <id>
-#   fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
-#   fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
-#   fm-inbox.sh ready
-#   fm-inbox.sh say  [<file.wav>]       (default: audio on stdin)
-#   fm-inbox.sh status
-#   fm-inbox.sh ask  <question>...
-#   fm-inbox.sh list
-#   fm-inbox.sh drain [--ack <id>...]
-#
-# `note --request-id` is the idempotent capture path: a repeat of the same
-# request id returns the original note instead of creating a second one, and
-# prints `replay` (or JSON `"outcome":"replay"`) so a first submission and a
-# retry are distinguishable. The binding is recorded before announcement, so a
-# crash between save and wake still replays the original note. Without
-# --request-id the historical one-note-per-call behaviour is unchanged.
-# `announce` repairs the wake for an already-saved note without creating another.
-# A note already acknowledged (in handled/) gets no wake from `announce` or a
-# request-id replay; both report it as acknowledged and exit 0.
-# It refuses a note whose announcement state is UNKNOWN: a note written before
-# this home tracked announcement markers already appended its own wake at
-# creation, and there is no record to prove it, so announcing it again would be
-# the duplicate wake this contract exists to remove. Notes written from here on
-# carry `announce_marker=1`, which is what makes a missing marker mean "not
-# announced" rather than "not known". Receipts report that state as null.
-# A note body is text, not options: only the flags above are parsed, anything
-# else starting with `--` begins the body, and `--` ends option parsing.
-# Human `note`/`list`/`drain` output and exit conventions stay as they were when
-# those flags are omitted: a saved note whose wake fails still exits 1. With
-# --request-id or --json, a saved-but-unannounced note exits 3 so a caller can
-# tell it from a genuine failure (exit 1, nothing saved) and repair rather than
-# enqueue again.
-# `receipts` is the bounded JSON view of pending and handled notes, their
-# acknowledgement, announcement, and any recorded reply. Default bounds omit
-# rather than implying the first page is everything; omitted[] names the
-# surface and how to reveal it, the same convention as fm-bearings-snapshot.sh.
-# `reply` is how the primary publishes its actual answer against a note id.
-# Each reply is stamped with a durable per-home sequence, so the receipts cursor
-# is a strict total order and two replies recorded in the same second are both
-# readable. One reply per note: a second one is refused.
-# `ready` is the read-only primary-readiness projection (lock, wake-consumer
-# health, away posture, observation time). It never acquires the session lock
-# and never infers liveness from a lock file, a session, or a pane.
-#
-# Configuration. A region, a model id and an AWS profile name somebody's account
-# and somebody's choices, so this file carries no default for any of them. Each is
-# read from the home's gitignored config/ directory, or from the matching
-# environment variable, and the model-backed subcommands refuse with the path to
-# write rather than reaching for a value that belongs to another home. That
-# configuration is also the opt-in: `say` and `ask` are off until it exists.
-#
-#   config/inbox-region     FM_INBOX_REGION     AWS region.            required
-#   config/inbox-stt-model  FM_INBOX_STT_MODEL  speech-to-text model.  required by say
-#   config/inbox-ask-model  FM_INBOX_ASK_MODEL  side-question model.   required by ask
-#   config/inbox-profile    FM_INBOX_PROFILE    AWS profile.           optional
-#
-# An absent profile means the call uses whatever credentials are already in the
-# environment, which is also what FM_INBOX_PROFILE= (empty) forces.
-#
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain`
-# need NO configuration at all, because they make no model call. The voice
-# handover depends on `note`, so it keeps working in a home that has configured
-# nothing. `--json` / `receipts` / `ready` require python3, which a firstmate
-# home already uses for other tools.
-#
-# Environment:
-#   FM_HOME              operational home whose state/ and data/ are used.
-#
-# PRIVACY: `say` sends your audio and `ask` sends your question to Bedrock.
-# `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain`
-# make no network call at all.
-#
-# `note` is also the queueing half of the spoken interface: when the voice agent
-# in bin/fm-voice-relay.py hands real work over to firstmate, it runs this
-# subcommand rather than carrying a second queue of its own. Keep the `note`
-# contract stable for that caller. `status` is the HUMAN view of the records;
-# bin/fm_voice_records.py owns the scope-controlled machine view the voice agent
-# reads, because the voice agent must be able to answer without record free text
-# ever reaching a model.
+usage() {
+  cat <<'EOF'
+Usage:
+  fm-inbox.sh note [--request-id <id>] [--json] [--] <text>...
+  fm-inbox.sh note [--request-id <id>] [--json] -   (body from stdin)
+  fm-inbox.sh announce [--json] <id>
+  fm-inbox.sh reply [--json] <id> <text>... | reply [--json] <id> -
+  fm-inbox.sh receipts [--after <cursor>] [--all-pending] [--all-handled] [--all-replies]
+  fm-inbox.sh ready
+  fm-inbox.sh status
+  fm-inbox.sh ask <question>...
+  fm-inbox.sh list
+  fm-inbox.sh drain [--ack <id>...]
+
+Privacy: ask sends the question to Bedrock.
+The other commands make no network call.
+EOF
+}
 set -euo pipefail
 
 # A non-interactive `ssh host fm-inbox.sh ...` does NOT get a login shell, so it
@@ -152,7 +68,6 @@ require_setting() {  # <file-name> <env-var> <what>
 }
 
 REGION="${FM_INBOX_REGION:-}"
-STT_MODEL="${FM_INBOX_STT_MODEL:-}"
 ASK_MODEL="${FM_INBOX_ASK_MODEL:-}"
 # Unset falls through to config; explicitly empty means "use ambient credentials".
 PROFILE="${FM_INBOX_PROFILE-$(read_setting inbox-profile)}"
@@ -162,12 +77,6 @@ PROFILE="${FM_INBOX_PROFILE-$(read_setting inbox-profile)}"
 # has configured nothing.
 need_region() {
   [ -n "$REGION" ] || REGION=$(require_setting inbox-region FM_INBOX_REGION "AWS region")
-}
-
-need_stt_model() {
-  need_region
-  [ -n "$STT_MODEL" ] || STT_MODEL=$(require_setting inbox-stt-model \
-    FM_INBOX_STT_MODEL "speech-to-text model")
 }
 
 need_ask_model() {
@@ -952,79 +861,6 @@ sys.stdout.write("\n")
 PY
 }
 
-# ---------------------------------------------------------------- say
-
-cmd_say() {
-  # Before the tool checks, so an unconfigured home is told what to configure
-  # rather than what to install for a call it is not yet allowed to make.
-  need_stt_model
-  need aws
-  need python3
-  need base64
-
-  local src wav raw transcript
-  raw=$(mktemp /tmp/fm-inbox-audio-XXXXXX)
-  wav=$(mktemp /tmp/fm-inbox-wav-XXXXXX.wav)
-  # shellcheck disable=SC2064
-  trap "rm -f '$raw' '$wav' '$wav.json'" EXIT
-
-  if [ "$#" -ge 1 ] && [ "$1" != "-" ]; then
-    src=$1
-    [ -r "$src" ] || die "cannot read audio file: $src"
-    cat "$src" >"$raw"
-  else
-    cat >"$raw"
-  fi
-  [ -s "$raw" ] || die "no audio received on stdin"
-
-  # Accept a real WAV as-is; wrap headerless 16kHz mono s16le PCM if that is
-  # what arrived. Anything else is rejected rather than silently mistranscribed.
-  python3 - "$raw" "$wav" <<'PY'
-import sys, wave
-src, dst = sys.argv[1], sys.argv[2]
-data = open(src, 'rb').read()
-if data[:4] == b'RIFF':
-    open(dst, 'wb').write(data)
-    sys.stderr.write("fm-inbox: input is WAV, passing through\n")
-elif data[:4] in (b'OggS', b'fLaC') or data[:3] == b'ID3':
-    sys.exit("fm-inbox: got Ogg/FLAC/MP3; re-encode to WAV first")
-else:
-    if len(data) % 2:
-        data = data[:-1]
-    w = wave.open(dst, 'wb')
-    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
-    w.writeframes(data); w.close()
-    sys.stderr.write("fm-inbox: input looked like raw PCM, wrapped as 16kHz mono WAV\n")
-PY
-
-  local secs
-  secs=$(python3 -c "
-import wave,sys
-w=wave.open('$wav'); print(round(w.getnframes()/w.getframerate(),2))")
-  printf 'fm-inbox: %ss of audio, transcribing with %s in %s\n' "$secs" "$STT_MODEL" "$REGION" >&2
-
-  python3 - "$wav" "$wav.json" <<'PY'
-import base64, json, sys
-b = base64.b64encode(open(sys.argv[1], 'rb').read()).decode()
-json.dump([{"role": "user", "content": [
-    {"audio": {"format": "wav", "source": {"bytes": b}}},
-    {"text": "Transcribe the speech exactly. Output only the transcript, nothing else."},
-]}], open(sys.argv[2], 'w'))
-PY
-
-  transcript=$(aws_call bedrock-runtime converse \
-    --model-id "$STT_MODEL" \
-    --messages "file://$wav.json" \
-    --inference-config '{"maxTokens":600,"temperature":0}' \
-    --query 'output.message.content[0].text' --output text) \
-    || die "transcription failed"
-
-  [ -n "${transcript//[[:space:]]/}" ] || die "transcription came back empty"
-  printf 'fm-inbox: heard: %s\n' "$transcript" >&2
-  queue_note voice "$transcript" "transcript_model=$STT_MODEL
-audio_seconds=$secs"
-}
-
 # ---------------------------------------------------------------- status
 
 cmd_status() {
@@ -1130,19 +966,11 @@ case "${1:-}" in
   reply)    shift; cmd_reply "$@" ;;
   receipts) shift; cmd_receipts "$@" ;;
   ready)    shift; cmd_ready "$@" ;;
-  say)      shift; cmd_say "$@" ;;
   status)   shift; cmd_status ;;
   ask)      shift; cmd_ask "$@" ;;
   list)     shift; cmd_list ;;
   drain)    shift; cmd_drain "$@" ;;
   ''|-h|--help|help)
-    # The whole header block, found rather than counted: everything after the
-    # shebang up to the first line that is not a comment. A fixed line range
-    # silently truncates this help the next time the header grows, and the last
-    # thing to fall off the end is the PRIVACY paragraph, which is the one place
-    # a new operator is told which subcommands send anything off this host.
-    awk 'NR == 1 { next }
-         /^#/ { sub(/^# ?/, ""); print; next }
-         { exit }' "${BASH_SOURCE[0]}" ;;
+    usage ;;
   *) die "unknown subcommand: $1 (try --help)" ;;
 esac
