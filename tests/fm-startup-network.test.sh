@@ -401,8 +401,7 @@ EOF
 }
 
 # The FAILED/actionable half of the same contract, paired with the success
-# test above: an actionable report (here, a MISSING: line bootstrap-diagnostics
-# would load a skill for) still reaches the wake queue even when unclaimed.
+# test above: an actionable report (here, a MISSING: line) still reaches the wake queue even when unclaimed.
 test_an_actionable_successful_result_still_queues_a_wake() {
   local rec home root log claimant
   rec=$(new_world actionable-result-wakes)
