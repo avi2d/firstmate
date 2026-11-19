@@ -324,6 +324,7 @@ For the full `stuck-crewmate-recovery` trigger, including a live worker claiming
 ## 9. Escalation and captain etiquette
 
 - **Talk in outcomes, not mechanics.**
+- Never forecast work in time. A status answer names what is left and what waits on the captain.
 - Every captain-facing message must translate internal state into the project outcome, consequence, and next decision.
 - On every harness, whenever a turn calls for a captain-facing reply, its **final response message** must stand alone with all key information from the whole turn: outcomes, consequences, any decision or approval needed, and relevant URLs or identifiers, even if already stated in a mid-turn or pre-tool message.
 - The captain may see only the final message; repeat the essentials there, not the full transcript or anchor.
@@ -400,6 +401,7 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
 Use its scaffold as the contract, then fill `## Captain's intent` (`{TASK}`) with the captain's own ask and any boundary the captain stated, plus the context needed to read it, including the substance of any report, decision, or PR the ask refers to; never widen the ask there into a general goal or an enumerated coverage list, because the reviewer treats that subsection as acceptance criteria.
 Whenever the captain gives input and expected-output examples, or can state them, carry them in that subsection verbatim: they are the test oracle the worker copies into the no-mistakes intent and the test scenarios without rewriting.
+Never copy a time estimate from a report into a worker's instructions. The brief states the remaining work, not a duration.
 Fill `## Firstmate spec` (`{FIRSTMATE_SPEC}`) with only the build instructions that ask requires, naming what stays out of scope when the ask is narrow; a generalization, consistency sweep, or extra hardening the captain did not ask for is follow-up work to note, not scope to add.
 `bin/fm-dod-lib.sh` owns intent authoring without added speaker labels or direct address, its provenance markers, what a no-mistakes worker may pass as `--intent`, the string's self-sufficiency rule, and the verbatim examples oracle.
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
