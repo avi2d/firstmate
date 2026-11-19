@@ -3,22 +3,13 @@ set -u
 
 CMD=""
 CMD_SET=0
-BACKGROUND=""
-CLAUDE_MODE=0
-CURSOR_MODE=0
 
 usage() {
   cat <<'EOF'
-Usage: fm-share-guard-pretool-check.sh [--command <cmd>] [--background true|false] [--claude|--cursor]
+Usage: fm-share-guard-pretool-check.sh --command <cmd> [--background true|false]
 
-With no --command, reads a PreToolUse-style JSON payload on stdin (Grok
-toolInput.command, or Claude/Codex/Cursor tool_input.command).
-Exits 0 to allow and 2 to deny.
-The deny reason is written to stderr, with a Grok decision object on stdout
-unless --claude is supplied.
-With --cursor, a deny is Cursor's own decision object on stdout and exit 0,
-because Cursor reads the returned object rather than the exit status.
-Malformed transport and an unavailable policy runtime fail open.
+Exits 0 to allow and 2 to deny, with the deny reason on stderr.
+An unavailable policy runtime fails open.
 EOF
 }
 
@@ -37,19 +28,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --background)
       [ "$#" -gt 1 ] || { echo "error: --background requires a value" >&2; exit 2; }
-      BACKGROUND=$2
       shift 2
       ;;
     --background=*)
-      BACKGROUND=${1#--background=}
-      shift
-      ;;
-    --claude)
-      CLAUDE_MODE=1
-      shift
-      ;;
-    --cursor)
-      CURSOR_MODE=1
       shift
       ;;
     -h|--help)
@@ -65,18 +46,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$CMD_SET" -eq 0 ]; then
-  PAYLOAD=$(cat 2>/dev/null || true)
-  [ -n "$PAYLOAD" ] || exit 0
-  command -v jq >/dev/null 2>&1 || exit 0
-  # shellcheck source=bin/fm-hook-host-lib.sh
-  . "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/fm-hook-host-lib.sh"
-  if [ "$CURSOR_MODE" -eq 0 ] && fm_hook_payload_is_foreign_host "$PAYLOAD"; then
-    exit 0
-  fi
-  CMD=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.command // .tool_input.command // empty)' 2>/dev/null) || exit 0
-  [ -n "$CMD" ] || exit 0
-  # shellcheck disable=SC2034
-  BACKGROUND=$(printf '%s' "$PAYLOAD" | jq -r '(.toolInput.background // .tool_input.background // false)' 2>/dev/null) || BACKGROUND=false
+  usage >&2
+  exit 2
 fi
 
 [ -n "$CMD" ] || exit 0
@@ -135,10 +106,5 @@ json_escape() {
 
 DETAIL="[$CODE] $REASON"
 ESCAPED=$(json_escape "$DETAIL")
-if [ "$CURSOR_MODE" -eq 1 ]; then
-  printf '{"permission":"deny","user_message":"%s"}\n' "$ESCAPED"
-  exit 0
-fi
 printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"%s"}\n' "$ESCAPED" >&2
-[ "$CLAUDE_MODE" -eq 1 ] || printf '{"decision":"deny","reason":"%s"}\n' "$ESCAPED"
 exit 2
