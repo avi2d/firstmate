@@ -42,13 +42,6 @@ km_pid_arg() {
   return 1
 }
 
-km_away_present() {
-  local state=$1
-  [ -e "$state/.afk" ] && return 0
-  [ -e "$state/.afk-contract" ] || return 1
-  ! grep -q '^mode: quiet' "$state/.afk-contract" 2>/dev/null
-}
-
 km_work_in_flight() {
   local state=$1 meta
   for meta in "$state"/*.meta; do
@@ -104,7 +97,7 @@ km_cmd_sync() {
   pid=$(km_pid_arg "$@" || true)
   [ "$(km_uname)" = Darwin ] || return 0
   mkdir -p "$state" 2>/dev/null || return 0
-  if ! km_away_present "$state" && ! km_work_in_flight "$state"; then
+  if ! km_work_in_flight "$state"; then
     km_stop_recorded "$state"
     return 0
   fi
@@ -141,7 +134,7 @@ km_cmd_status() {
     printf 'keepawake: off (not Darwin)\n'
     return 0
   fi
-  (km_away_present "$state" || km_work_in_flight "$state") && needed=1
+  km_work_in_flight "$state" && needed=1
   rec=$(km_recorded "$state" || true)
   [ -n "$rec" ] && held=1
   printf 'keepawake: needed=%s held=%s %s\n' "$needed" "$held" "$rec"

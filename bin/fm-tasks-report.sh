@@ -167,8 +167,7 @@ open_blocked() {
   local status_file=$1 kind=$2 state=$3 source=$4
   local open_tsv open_json
   open_tsv=$(status_open_decisions "$status_file" "$kind")
-  if [ "$kind" != secondmate ] && \
-     { { { [ "$source" = run-step ] || [ "$source" = pane ]; } \
+  if { { { [ "$source" = run-step ] || [ "$source" = pane ]; } \
          && [ "$state" != parked ] && [ "$state" != blocked ]; } \
        || { [ "$state" = "done" ] || [ "$state" = "failed" ]; }; }; then
     open_tsv=""

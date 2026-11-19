@@ -199,7 +199,6 @@ fm_project_capacity_occupants() {  # <project-lock> <project-dir> <first-state> 
         return 1
       }
       kind=$(fm_meta_get "$meta" kind)
-      [ "$kind" != secondmate ] || continue
       [ -z "$(fm_meta_get "$meta" pr)" ] || continue
       project=$(fm_meta_get "$meta" project)
       [ -n "$project" ] || continue

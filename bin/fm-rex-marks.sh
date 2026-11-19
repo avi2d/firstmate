@@ -275,7 +275,7 @@ collect_tasks() { # [<task>]
     [ -z "$only" ] || [ "$id" = "$only" ] || continue
     [ "$(meta_value "$meta" backend)" = rex ] || continue
     kind=$(meta_value "$meta" kind)
-    case "${kind:-ship}" in ship | scout | secondmate) ;; *) continue ;; esac
+    case "${kind:-ship}" in ship | scout) ;; *) continue ;; esac
     target=$(meta_value "$meta" window)
     case "$target" in '' | *[[:space:]]*) continue ;; esac
     TASKS+=("$id"$'\t'"${kind:-ship}"$'\t'"$target"$'\t'"fm-$id")

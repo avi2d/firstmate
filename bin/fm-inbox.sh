@@ -851,24 +851,13 @@ cmd_ready() {
   load_wake_lib || true
   local lock_state=unknown lock_pid="" live_harness=unknown
   local consumer_state=unknown consumer_reason="" beacon_age=""
-  local posture=unknown can_receive=unknown observed
+  local posture=present can_receive=unknown observed
   observed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   fm_session_lock_inspect "$STATE"
   lock_state=$FM_LOCK_INSPECT_STATE
   lock_pid=$FM_LOCK_INSPECT_PID
   live_harness=$FM_LOCK_INSPECT_LIVE_HARNESS
 
-  if [ -e "$STATE/.afk" ]; then
-    if command -v fm_afk_mode >/dev/null 2>&1; then
-      posture=$(fm_afk_mode "$STATE")
-    else
-      posture=unknown
-    fi
-  elif [ -e "$STATE/.afk-contract" ]; then
-    posture=away
-  else
-    posture=present
-  fi
 
   # Only ever the age of a beacon that exists: fm_path_age prints a sentinel for
   # a missing path, and a home that never ran a watcher has no observation to

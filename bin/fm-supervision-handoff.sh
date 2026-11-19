@@ -111,7 +111,7 @@ retry_delivery() {
 }
 
 NEXT_RETRY=$((SECONDS + RETRY))
-while session_owned && [ -e "$CONFIG/supervision-handoff-ack" ] && [ ! -e "$STATE/.afk" ]; do
+while session_owned && [ -e "$CONFIG/supervision-handoff-ack" ]; do
   OUT=$(mktemp "$STATE/.supervision-handoff-arm.XXXXXX") || exit 1
   # The arm must survive both this owner and the original hook's process group.
   set -m
@@ -141,7 +141,7 @@ while session_owned && [ -e "$CONFIG/supervision-handoff-ack" ] && [ ! -e "$STAT
   fi
   while fm_pid_alive "$ARM"; do
     [ "$(cat "$PENDING" 2>/dev/null)" = "$TOKEN" ] || exit 0
-    session_owned && [ -e "$CONFIG/supervision-handoff-ack" ] && [ ! -e "$STATE/.afk" ] || exit 0
+    session_owned && [ -e "$CONFIG/supervision-handoff-ack" ] || exit 0
     if [ "$SECONDS" -ge "$NEXT_RETRY" ]; then
       retry_delivery
       NEXT_RETRY=$((SECONDS + RETRY))

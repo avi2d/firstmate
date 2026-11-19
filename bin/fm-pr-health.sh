@@ -118,7 +118,6 @@ live_tasks() { # id <TAB> worktree, for each task that is not a secondmate
     [ -f "$meta" ] && [ ! -L "$meta" ] || continue
     id=$(basename "$meta" .meta)
     fm_pr_task_id_valid "$id" || continue
-    [ "$(meta_value "$meta" kind)" != secondmate ] || continue
     printf '%s\t%s\n' "$id" "$(meta_value "$meta" worktree)"
   done
 }

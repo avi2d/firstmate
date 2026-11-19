@@ -101,7 +101,6 @@ WATCH="$SCRIPT_DIR/fm-watch.sh"
 CLAUDE_MODE=0
 CURSOR_MODE=0
 AGY_MODE=0
-AWAY_OFFER=0
 SYNC_WAIT_MS=${FM_CLAUDE_AUTOARM_SYNC_WAIT_MS:-800}
 EPOCH_FRESH=${FM_CLAUDE_AUTOARM_EPOCH_FRESH:-15}
 BLOCK_BUDGET=${FM_CLAUDE_TURNEND_BLOCK_BUDGET:-3}
@@ -114,8 +113,7 @@ for arg in "$@"; do
     --claude) CLAUDE_MODE=1 ;;
     --cursor) CURSOR_MODE=1 ;;
     --agy) AGY_MODE=1 ;;
-    --away-offer) AWAY_OFFER=1 ;;
-    *) echo "usage: $(basename "$0") [--claude|--cursor|--agy|--away-offer]" >&2; exit 2 ;;
+    *) echo "usage: $(basename "$0") [--claude|--cursor|--agy]" >&2; exit 2 ;;
   esac
 done
 
@@ -124,35 +122,6 @@ allow_exit() {
   exit 0
 }
 
-# One /afk offer per window: without the stamp every turn end with work in
-# flight would nag an attended captain again.
-away_offer_check() {
-  local need now last repeat
-  fm_primary_scope_matches "$FM_ROOT" "$STATE" || return 1
-  fm_supervision_status "$STATE" "$GRACE"
-  [ "$FM_SUP_NEEDED" = true ] || return 1
-  [ ! -e "$STATE/.afk" ] && [ ! -e "$STATE/.afk-contract" ] || return 1
-  repeat=${FM_AWAY_OFFER_REPEAT_SECS:-14400}
-  case "$repeat" in ''|*[!0-9]*) repeat=14400 ;; esac
-  if [ -f "$STATE/.turnend-away-offered" ]; then
-    last=$(cat "$STATE/.turnend-away-offered" 2>/dev/null || printf '0')
-    case "$last" in ''|*[!0-9]*) last=0 ;; esac
-    now=$(date +%s)
-    [ $((now - last)) -ge "$repeat" ] || return 1
-  fi
-  if [ "$FM_SUP_IN_FLIGHT" -gt 0 ]; then
-    need="$FM_SUP_IN_FLIGHT task(s) in flight"
-  elif [ "$FM_SUP_SOURCES" -gt 0 ]; then
-    need="$FM_SUP_SOURCES process-event source(s) registered"
-  elif [ "$FM_SUP_CHECKS" -gt 0 ]; then
-    need="$FM_SUP_CHECKS registered custom check(s)"
-  else
-    need="X-mode relay polling active"
-  fi
-  printf '%s\n' "$need with supervision running. If you are stepping away from the keyboard, say /afk (optionally with instructions, e.g. /afk keep watching the PRs) and the away session keeps watch until you return. Nothing changes unless you say so."
-  date +%s > "$STATE/.turnend-away-offered" 2>/dev/null || true
-  return 0
-}
 
 # A Claude secondmate's home carries .fm-busy-stop (bin/fm-spawn.sh), and this
 # guard is then the only Stop writer of the parent home's busy record for that
@@ -187,16 +156,6 @@ trap record_parent_stop_state EXIT
 . "$SCRIPT_DIR/fm-primary-scope-lib.sh"
 # shellcheck source=bin/fm-hook-host-lib.sh
 . "$SCRIPT_DIR/fm-hook-host-lib.sh"
-
-# A passive-harness query: exit 0 printing a one-paragraph /afk offer when a
-# turn ends with work in flight and away mode off, exit 1 silent otherwise. An
-# offer only: this path never blocks a turn and never enables away mode.
-if [ "$AWAY_OFFER" -eq 1 ]; then
-  if away_offer_check; then
-    exit 0
-  fi
-  exit 1
-fi
 
 # Read the whole turn-end hook payload once; never block on unreadable/absent
 # stdin.
@@ -288,28 +247,9 @@ if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
   allow_supervised_stop
 fi
 
-# Away mode transfers supervision ownership from the watcher to the away-mode
-# daemon, which runs the watcher one-shot and starts its replacement after every
-# wake (bin/fm-supervise-daemon.sh). A turn boundary regularly lands in that
-# hand-off, when no watcher process holds the lock and nothing is wrong, so
-# requiring one here alarmed on healthy away-mode supervision. A live
-# identity-matched daemon holding this home is the right owner to test for.
-# The beacon half of the predicate still applies: a daemon that stops
-# restarting its watcher still blocks once the beacon passes grace, and a home
-# with no daemon and no watcher blocks exactly as before. It uses AFK_GRACE
-# (poll-cadence-derived, see the comment above) instead of the flat $GRACE
-# every other check on this page uses, so a daemon that is genuinely still
-# cycling - just slower than a fixed 300s window - is not misread as down.
-AFK_GRACE=${FM_GUARD_GRACE:-$(fm_poll_derived_grace)}
-if [ "$(fm_path_age "$STATE/.last-watcher-beat")" -lt "$AFK_GRACE" ] \
-  && fm_afk_daemon_owns_supervision "$STATE"; then
-  allow_supervised_stop
-fi
 
 block_stop() {
-  local afk x_mode reason rule msg max_blocks cur_blocks
-  afk=0
-  [ -e "$STATE/.afk" ] && afk=1
+  local x_mode reason rule msg max_blocks cur_blocks
   x_mode=0
   [ -f "$CONFIG/x-mode.env" ] && x_mode=1
   if [ "$AGY_MODE" -eq 1 ]; then
@@ -324,10 +264,10 @@ block_stop() {
     cur_blocks=$((cur_blocks + 1))
     mkdir -p "$STATE" 2>/dev/null || true
     printf '%s\n' "$cur_blocks" > "$STATE/.turnend-blocks"
-    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --harness agy --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null \
+    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --harness agy --x-mode "$x_mode" --repair-line 2>/dev/null \
       || printf '%s\n' 'tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn')
   else
-    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null \
+    reason=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --x-mode "$x_mode" --repair-line 2>/dev/null \
       || printf '%s\n' 'tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn')
   fi
   rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
@@ -577,7 +517,6 @@ terminal_fail_open() {
 
 failure_episode_verified() {
   local outcome
-  [ ! -e "$STATE/.afk" ] || return 1
   [ -e "$FAILURE_NOTICE" ] || return 1
   outcome=$(sed -n '1s/^.*outcome=\([a-z][a-z-]*\) .*$/\1/p' "$STATE/.claude-autoarm-epoch" 2>/dev/null || true)
   case "$outcome" in

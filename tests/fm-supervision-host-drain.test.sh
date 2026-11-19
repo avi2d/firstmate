@@ -69,48 +69,10 @@ test_report_surface_enforces_actor_turn_and_scope() {
 }
 
 
-# The return brief is rendered after the record is archived, so a non-silent
-# report made after that may be missing from it: the report queues its relay
-# for main, while a report made during the away window only waits for the brief.
-test_report_after_the_return_is_queued_for_main() {
-  local home state out rc drained queue_before
-  home="$TMP_ROOT/report-return"
-  state="$home/state"
-  mkdir -p "$state"
-  FM_HOME="$home" "$CONTRACT" enter --words 'watch the fleet' >/dev/null 2>&1 || fail "fixture: could not record the away posture"
-  printf 'turn=t1\nrows=4\ntasks=alpha\nunscoped=0\nwake=signal: alpha.status\n' > "$state/.supervision-host-turn"
-
-  out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch FM_BRANCH_REPORT_TURN=t1 "$REPORT" --task alpha --verdict routine --summary 'steered while away' 2>&1); rc=$?
-  expect_code 0 "$rc" "a report during the away window must be recorded"
-  assert_contains "$out" "it waits in the outcome store for MAIN" "a report during the away window waits for the return brief"
-  ! grep -qs 'supervision-host-return' "$state/.wake-queue" || fail "a report during the away window must not be queued for main"
-
-  FM_HOME="$home" "$CONTRACT" archive >/dev/null 2>&1 || fail "fixture: could not archive the away posture"
-  out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch FM_BRANCH_REPORT_TURN=t1 "$REPORT" --task alpha --verdict captain --summary 'PR ready for review' 2>&1); rc=$?
-  expect_code 0 "$rc" "a report after the return must be recorded"
-  assert_contains "$out" "recorded seq 2 [captain]; the captain has returned, so it is queued for MAIN to relay" \
-    "a report after the return must say it is queued for main"
-  assert_re $'\tcheck\tsupervision-host-return:2\tcheck: supervision-host outcome 2 for alpha \\[captain\\] was recorded after the captain returned.*relay it to the captain: PR ready for review$' \
-    "$state/.wake-queue" "the late outcome must be a durable check wake for main"
-  queue_before=$(cat "$state/.wake-queue")
-  out=$(FM_HOME="$home" FM_SUPERVISION_ACTOR=branch FM_BRANCH_REPORT_TURN=t1 "$REPORT" \
-    --task alpha --verdict routine --summary 'still building; nothing new has happened; no action was taken' --silent true 2>&1); rc=$?
-  expect_code 0 "$rc" "a silent report after the return must be recorded"
-  assert_contains "$out" "silent outcome remains in the outcome store" "the post-return silent report lost its durability note"
-  assert_grep '"task":"alpha","wake":"signal: alpha.status","verdict":"routine","summary":"still building; nothing new has happened; no action was taken","silent":true' \
-    "$state/branch-outcomes.jsonl" "the post-return silent outcome was not retained"
-  [ "$(cat "$state/.wake-queue")" = "$queue_before" ] || fail "a silent report after the return queued another check wake"
-  drained=$(FM_HOME="$home" "$ROOT/bin/fm-wake-drain.sh" 2>&1)
-  assert_contains "$drained" "supervision-host outcome 2 for alpha [captain] was recorded after the captain returned" \
-    "main's drain must present the late outcome"
-  assert_not_contains "$drained" 'still building; nothing new has happened' "main's drain rendered the post-return silent note"
-  pass "report surface: visible late outcomes queue a relay, while silent outcomes remain stored without a wake or note"
-}
-
 
 # --- dispatch entry -----------------------------------------------------------
 
-test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
+test_dispatch_entry_excludes_check_rows_and_carries_dialog_mirror() {
   local home state out rc
   home="$TMP_ROOT/dispatch"
   state="$home/state"
@@ -125,14 +87,8 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   assert_contains "$out" "tasks=demo" "the signal row must resolve to its task"
   assert_contains "$out" "unscoped=0" "a task-local claim must be scoped"
 
-  out=$(FM_HOME="$home" node "$DISPATCH" scope --afk)
-  assert_contains "$out" "rows=1 2" "an away scan must claim the check row too"
-  assert_contains "$out" "unscoped=1" "a claimed check row names no task, so the claim is unscoped"
-
   out=$(printf 'check: merge landed: fixture\n' | FM_HOME="$home" node "$DISPATCH" offer)
   assert_contains "$out" "eligible=0" "an attended check trigger must stay main's"
-  out=$(printf 'check: merge landed: fixture\n' | FM_HOME="$home" node "$DISPATCH" offer --afk)
-  assert_contains "$out" "eligible=1" "an away check trigger must be the branch's"
   out=$(printf 'signal: %s\n' "$state/demo.status" | FM_HOME="$home" node "$DISPATCH" offer)
   assert_contains "$out" "eligible=1" "an attended signal trigger with a claimable row must be the branch's"
   assert_contains "$out" "rows=1" "the offer must carry the scope it judged"
@@ -141,7 +97,6 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   out=$(printf 'signal: demo.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --mirror-file "$home/mirror")
   assert_contains "$out" "MAIN DIALOG MIRROR (read-only context" "an attended wake prompt must open with the mirror header"
   assert_contains "$out" "[captain] keep it small" "the mirror must carry the captain's words"
-  assert_not_contains "$out" "POSTURE: AWAY" "an attended wake prompt must carry no away tail"
   : > "$home/mirror"
   out=$(printf 'signal: demo.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --mirror-file "$home/mirror")
   assert_not_contains "$out" "MAIN DIALOG MIRROR" "an empty feed must add nothing"
@@ -151,12 +106,6 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   [ "$rc" -eq 3 ] || fail "a supplied mirror feed that cannot be read must exit 3, got $rc"
   [ -z "$out" ] || fail "a supplied mirror feed that cannot be read must render no prompt: $out"
 
-  printf 'Away posture (recorded):\n  your words (verbatim):\n    merge nothing\n' > "$home/readback"
-  out=$(printf 'signal: demo.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --away --readback-file "$home/readback")
-  assert_contains "$out" "FIRSTMATE SUPERVISION WAKE: signal: demo.status" "the wake prompt must carry the reason"
-  assert_contains "$out" "finish with the bin/fm-branch-report.sh command." "the wake prompt must name the host's report surface"
-  assert_contains "$out" "POSTURE: AWAY." "an away wake prompt must carry the posture tail"
-  assert_contains "$out" "    merge nothing" "the away tail must carry the record's read-back verbatim"
   pass "dispatch entry: the host reads branch eligibility, the offer rule, and the wake prompt from the Pi branch's own owner"
 }
 
@@ -294,46 +243,6 @@ test_branch_outcomes_collapse_repeated_captain_outcomes_per_task() {
 # once - each task's captain outcomes collapsed to one line, routine ones past
 # the section's limit as a count - and once main acknowledges them, a second
 # drain shows nothing from the window.
-test_branch_outcomes_present_a_long_away_window_once() {
-  local home drained pad n target
-  home="$TMP_ROOT/drain-away-window"
-  mkdir -p "$home/state" "$home/config"
-  : > "$home/config/supervision-host"
-  FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" enter --words 'watch the fleet' >/dev/null 2>&1 \
-    || fail "fixture: could not record the away posture"
-  pad=$(awk 'BEGIN { for (i = 0; i < 200; i++) printf "z" }')
-  for n in $(seq 1 40); do
-    FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task "task-$((n % 4))" --verdict routine --summary "routine $n $pad" >/dev/null \
-      || fail "fixture: could not record routine outcome $n"
-    case "$n" in
-      10|20|30)
-        FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task alpha --verdict captain --summary "alpha still needs review $n" >/dev/null \
-          || fail "fixture: could not record alpha outcome $n" ;;
-    esac
-  done
-  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task beta --verdict captain --summary 'beta ready to merge' >/dev/null \
-    || fail "fixture: could not record the beta outcome"
-  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_not_contains "$drained" "BRANCH OUTCOMES" "a drain while away must leave the window's outcomes for the return"
-  FM_HOME="$home" "$ROOT/bin/fm-afk-contract.sh" archive >/dev/null 2>&1 || fail "fixture: could not archive the away posture"
-
-  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_contains "$drained" "[seq 33, newest of 3 for this task, recorded 0m ago] alpha: alpha still needs review 30" "a task's repeated captain outcomes must collapse to its newest"
-  [ "$(printf '%s\n' "$drained" | grep -c '] alpha: ')" -eq 1 ] || fail "a task's captain outcomes must take one line: $drained"
-  assert_contains "$drained" "[seq 44, recorded 0m ago] beta: beta ready to merge" "another task's captain outcome must keep its own line"
-  assert_re '^\([0-9]+ earlier routine outcome\(s\) not shown; bin/fm-branch-outcome.sh list keeps them\)$' <(printf '%s\n' "$drained") \
-    "the window's routine overflow must collapse into one count"
-  assert_contains "$drained" "routine 40 $pad" "the newest routine outcome must be listed"
-  assert_not_contains "$drained" "routine 1 $pad" "the oldest routine outcome must collapse into the count"
-  [ "${#drained}" -lt 8000 ] || fail "a long away window must cost one short drain, got ${#drained} bytes"
-  target=$(printf '%s\n' "$drained" | sed -n 's/.*mark-processed --through \([0-9]*\);.*/\1/p')
-  [ "$target" = 44 ] || fail "one acknowledgement must cover every captain outcome of the window, got '${target:-none}'"
-  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" mark-processed --through "$target" >/dev/null 2>&1 || fail "the acknowledgement was refused"
-
-  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
-  assert_not_contains "$drained" "BRANCH OUTCOMES" "a second drain must show nothing from the window"
-  pass "drain: a long away window costs one short drain, captain outcomes collapsed per task and routine overflow counted, and nothing from it is shown again"
-}
 
 
 # The section's budgets count bytes: a multibyte summary is cut by whole
@@ -587,12 +496,10 @@ test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair() {
 
 fm_test_run \
   test_report_surface_enforces_actor_turn_and_scope \
-  test_report_after_the_return_is_queued_for_main \
-  test_dispatch_entry_scopes_rows_and_renders_the_away_tail \
+  test_dispatch_entry_excludes_check_rows_and_carries_dialog_mirror \
   test_branch_outcomes_only_on_a_host_home_off_pi \
   test_branch_outcomes_put_captain_first_and_collapse_routine_overflow \
   test_branch_outcomes_collapse_repeated_captain_outcomes_per_task \
-  test_branch_outcomes_present_a_long_away_window_once \
   test_branch_outcomes_budgets_count_bytes \
   test_branch_outcomes_stay_unread_when_a_projection_fails \
   test_branch_outcomes_stay_unread_without_jq \

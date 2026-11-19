@@ -50,8 +50,6 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 TURN_FILE="$STATE/.supervision-host-turn"
 RECEIPTS="$STATE/.supervision-host-receipts"
-# shellcheck source=bin/fm-afk-contract.sh
-. "$SCRIPT_DIR/fm-afk-contract.sh"
 
 usage() {
   sed -n '/^# Usage:/,/^# --wake/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
@@ -131,23 +129,10 @@ if [ "$SILENT" = true ]; then
   printf 'recorded seq %s [routine]; silent outcome remains in the outcome store\n' "$SEQ"
   exit 0
 fi
-if [ "$(turn_field posture)" = attended ]; then
-  if [ "$VERDICT" = captain ] && ! fm_afk_contract_away_present "$STATE"; then
-    printf 'recorded seq %s [captain]; MAIN processes it from its next drain\n' "$SEQ"
-  else
-    printf 'recorded seq %s [%s]; it waits in the outcome store for MAIN\n' "$SEQ" "$VERDICT"
-  fi
-  exit 0
+if [ "$VERDICT" = captain ]; then
+  printf 'recorded seq %s [captain]; MAIN processes it from its next drain
+' "$SEQ"
+else
+  printf 'recorded seq %s [%s]; it waits in the outcome store for MAIN
+' "$SEQ" "$VERDICT"
 fi
-if ! fm_afk_contract_away_present "$STATE"; then
-  # shellcheck source=bin/fm-wake-lib.sh
-  . "$SCRIPT_DIR/fm-wake-lib.sh"
-  if ! fm_wake_append check "supervision-host-return:$SEQ" \
-    "check: supervision-host outcome $SEQ for $TASK [$VERDICT] was recorded after the captain returned, so the return brief may not show it; relay it to the captain: $SUMMARY"; then
-    printf 'recorded seq %s [%s], but the captain has returned and its relay to MAIN could not be queued; the host hands this turn to MAIN\n' "$SEQ" "$VERDICT" >&2
-    exit 0
-  fi
-  printf 'recorded seq %s [%s]; the captain has returned, so it is queued for MAIN to relay\n' "$SEQ" "$VERDICT"
-  exit 0
-fi
-printf 'recorded seq %s [%s]; it waits in the outcome store for MAIN\n' "$SEQ" "$VERDICT"

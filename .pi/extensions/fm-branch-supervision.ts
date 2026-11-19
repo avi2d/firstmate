@@ -23,19 +23,6 @@
 // A broken branch between its bounded recovery probes keeps today's
 // wake-to-main behavior.
 //
-// Postures (docs/pi-supervision-branch.md "Postures"): the away-posture
-// record state/.afk-contract (owner: bin/fm-afk-contract.sh) is read as a
-// file at the tail of every wake and at every captain-outcome presentation,
-// never inferred from chat and never placed in the byte-stable prompt prefix.
-// While it exists the branch takes every row the dispatcher offers, the
-// record's read-back is appended to the wake message so the branch knows the
-// posture and the recorded facts at execution time, captain-verdict outcomes
-// accumulate unprocessed in the store instead of opening the processing turn
-// on the parked main, and the guarded scripts pass the branch actor under
-// main's standing authority (bin/fm-lease-lib.sh). The first unmarked captain
-// message archives the record; the next run boundary then presents the
-// accumulated captain rows exactly as after any other gap.
-//
 // Prefix stability (the cache contract, owner: bin/fm-branch-prompt.sh
 // header): the branch's system prompt is the generator's byte-stable output,
 // the tool set is BRANCH_TOOL_NAMES in that fixed order on every spawn, and
@@ -113,8 +100,6 @@ import {
 } from "./lib/fm-calm-visibility.ts";
 import {
   activateEligibleRowsOwner,
-  afkPostureRecordPresent,
-  awayPostureTailFor,
   branchWakePrompt,
   deactivateEligibleRowsOwner,
   FM_BRANCH_DISPATCH_EVENT,
@@ -146,7 +131,6 @@ const sessionsDir = join(state, "branch-session");
 const sessionPointer = join(state, ".branch-session");
 const mirrorCursorFile = join(state, ".branch-mirror-cursor");
 const promptScript = join(fmRoot, "bin", "fm-branch-prompt.sh");
-const afkContractScript = join(fmRoot, "bin", "fm-afk-contract.sh");
 const outcomeScript = join(fmRoot, "bin", "fm-branch-outcome.sh");
 const leaseScript = join(fmRoot, "bin", "fm-lease.sh");
 const wakeGrantScript = join(fmRoot, "bin", "fm-wake-grant.sh");
@@ -712,7 +696,6 @@ export default function (pi: ExtensionAPI) {
   type ProcessingState = { sequences: string; through: number; triggered: number; pending: boolean; nextTurnQueued: boolean; visibleFinals: Set<string> };
   let processing: ProcessingState | null = null;
   let queuedProcessingContent: string | null = null;
-  let processingOpenedThisRun = false;
   // Compare only replies to the same consumed sequence set. A retry can be
   // the first real handling, so only an empty or exact-repeat final is hidden.
   // Buffer retry streaming until message_end can make that decision; tool
@@ -1118,16 +1101,6 @@ export default function (pi: ExtensionAPI) {
       processing = null;
       return true;
     }
-    // Away posture: main is parked, so no processing turn opens. The rows stay
-    // unprocessed in the store (their visible entries already exist), the
-    // volatile presentation state is dropped so the first presentation after
-    // the record is gone - the run boundary of the captain's return message,
-    // or session start - starts with a fresh triggered budget and hands them
-    // to main exactly as after any other gap.
-    if (afkPostureRecordPresent(state)) {
-      processing = null;
-      return true;
-    }
     const through = rows[rows.length - 1].seq;
     const sequences = rows.map((row) => row.seq).join(",");
     if (processing?.pending) return true;
@@ -1138,13 +1111,6 @@ export default function (pi: ExtensionAPI) {
     // on after it.
     const content = await processingRequestInput(rows);
     if (!(await generationOwnsLock(expectedGeneration))) return false;
-    // The record is re-read immediately before the request would open: a
-    // record that appeared during the encoding await cancels this request
-    // rather than delivering it to a main that has just been parked.
-    if (afkPostureRecordPresent(state)) {
-      processing = null;
-      return true;
-    }
     if (processing?.pending) return true;
     if (!processing || processing.sequences !== sequences) {
       processing = { sequences, through, triggered: 0, pending: false, nextTurnQueued: false, visibleFinals: new Set() };
@@ -1497,25 +1463,7 @@ ${context.command}
     }
   }
 
-  // The away posture at the tail of a wake: the record's own read-back (the
-  // captain's words verbatim, the spend cap, expected return, and reach line)
-  // carried byte-for-byte, trailing blank lines included, plus the standing
-  // rule for acting under it. Read per wake so the byte-stable prefix never
-  // carries posture; a read-back that cannot be rendered still names the
-  // posture, because the record's presence is the fact the guarded scripts
-  // enforce either way.
-  async function awayPostureTail(): Promise<string> {
-    let readback = "";
-    try {
-      const rendered = await runCommandAsync("bash", [afkContractScript, "readback"], { cwd: fmRoot, env: scriptEnv });
-      if (rendered.status === 0) readback = rendered.stdout || "";
-    } catch {
-      readback = "";
-    }
-    return awayPostureTailFor(readback);
-  }
-
-  function enqueueWake(message: string, acceptedGeneration: number, recoveryProbe = false, acceptedAwayOnly = false): Promise<void> {
+  function enqueueWake(message: string, acceptedGeneration: number, recoveryProbe = false): Promise<void> {
     const acceptedSelectionRevision = branchSelectionRevision;
     const delivery = branchChain
       .then(async () => {
@@ -1540,14 +1488,7 @@ ${context.command}
         await flushMirror(session, acceptedGeneration);
         if (!(await actingAsOwner(acceptedGeneration))) throw new Error("supervision session no longer owns the fleet lock");
         const heartbeat = /^heartbeat($|:)/.test(message);
-        // The posture is read here, at the tail of this wake, never earlier
-        // and never into the prompt prefix.
-        // Accepted confused-agent-grade residual (bin/fm-lease-lib.sh role-
-        // partition paragraph): the record is validated then may be archived
-        // mid-operation; every relocated action revalidates at its own gate;
-        // rows are store-first and the durable queue keeps them.
-        const afk = afkPostureRecordPresent(state);
-        const scope = scopeForUnreadWake(state, heartbeat, afk);
+        const scope = scopeForUnreadWake(state, heartbeat);
         // A newly-arrived main-owned (check-kind) row never bounces this
         // whole recheck back to main - scopeForUnreadWake excludes it from
         // eligibleSeqs rather than vetoing the scan, in a heartbeat review as
@@ -1560,9 +1501,6 @@ ${context.command}
         // metadata could not be read safely, or an unresolvable task-local
         // row) still falls back to main.
         if (scope.status === "empty" || (!scope.corrupted && scope.eligibleSeqs.length === 0)) {
-          if (acceptedAwayOnly) {
-            throw new Error("accepted away-only wake is no longer branch-eligible");
-          }
           return;
         }
         if (scope.corrupted) {
@@ -1580,17 +1518,11 @@ ${context.command}
         // the drain; that residual is accepted by the confused-agent-grade boundary.
         const reportRevisionBeforePrompt = durableReportRevision;
         const entryOffset = sessionManager.getEntries().length;
-        // A claimed check row names no task, so a prompt carrying one is not
-        // scoped by task (only possible in the away posture).
-        wakeTaskScope = heartbeat || scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0
+        wakeTaskScope = heartbeat
           ? null
           : { rows: [...scope.eligibleSeqs], tasks: new Set(scope.eligibleTasks) };
-        // Same residual: archive during snapshot publish or read-back still
-        // lets this prompt proceed; the guarded scripts revalidate, and the
-        // durable queue keeps every row (bin/fm-lease-lib.sh role-partition).
-        const postureTail = afk ? await awayPostureTail() : "";
         try {
-          await session.prompt(branchWakePrompt(message, "fm_branch_report", postureTail));
+          await session.prompt(branchWakePrompt(message, "fm_branch_report"));
         } finally {
           wakeTaskScope = null;
         }
@@ -1698,7 +1630,7 @@ ${context.command}
     if (branchBroken && !recoveryProbe) return; // main owns every wake inside the cooldown window
     if (!collectCurrentMainDialog()) return;
     if (recoveryProbe && providerRecovery) providerRecovery.probeInFlight = true;
-    offer.accept(enqueueWake(offer.message, generation, recoveryProbe, offer.awayOnly === true));
+    offer.accept(enqueueWake(offer.message, generation, recoveryProbe));
   });
 
   // Pi awaits every extension event handler, so an awaited ownership read
@@ -1707,8 +1639,6 @@ ${context.command}
   // await so a session replaced while it runs cannot be staged into.
   pi.on?.("before_agent_start", async (event, ctx) => {
     if (isCustomBeforeAgentStart(event)) {
-      processingOpenedThisRun = queuedProcessingContent !== null &&
-        isProcessingCustomMessage(event.message) && event.message.content === queuedProcessingContent;
       return;
     }
     if (!("prompt" in event)) return;
@@ -1726,7 +1656,6 @@ ${context.command}
     // duplicate suppression. Operational extension injections are not dialog.
     const prompt = (event as { prompt?: unknown }).prompt;
     if (typeof prompt !== "string") return;
-    processingOpenedThisRun = queuedProcessingContent !== null && prompt === queuedProcessingContent;
     const trimmed = prompt.trim();
     if (!trimmed || isOperationalUserText(trimmed)) return;
     const file = currentMainSession.getSessionFile() ?? "";
@@ -1783,15 +1712,6 @@ ${context.command}
       },
     };
   });
-  pi.on?.("context", (event, ctx) => {
-    if (!afkPostureRecordPresent(state)) return;
-    const messages = event.messages ?? [];
-    const kept = messages.filter((message) => !isProcessingCustomMessage(message));
-    if (kept.length === messages.length) return;
-    processing = null;
-    if (processingOpenedThisRun) ctx?.abort?.();
-    return { messages: kept };
-  });
   pi.on?.("agent_end", () => {
     mainStreaming = false;
   });
@@ -1804,7 +1724,6 @@ ${context.command}
   pi.on?.("agent_settled", async () => {
     mainStreaming = false;
     queuedProcessingContent = null;
-    processingOpenedThisRun = false;
     activeProcessing = null;
     if (processing) processing.pending = false;
     const settledGeneration = generation;

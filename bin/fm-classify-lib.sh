@@ -820,7 +820,7 @@ EOF
 # consumer-side rule on purpose - it protects local and remote writers
 # identically, and it can never fail a whole delta or wedge a stream the way a
 # writer-side rejection would.
-FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT='pending-reply-'
+FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT=''
 
 # 0 when <key> is not reserved, or is reserved and <note> speaks its vocabulary.
 _fm_decision_key_transition_allowed() {  # <key> <note>
@@ -838,13 +838,6 @@ _fm_decision_key_transition_allowed() {  # <key> <note>
   return 0
 }
 
-_fm_is_pending_reply_escalation() {  # <key> <note>
-  case "$1" in pending-reply-*) ;; *) return 1 ;; esac
-  case "$2" in
-    pending-reply-missed:*|pending-reply-delivery-unknown:*|pending-reply-recovery-delivery-failed:*|pending-reply-recovery-delivery-unknown:*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 _fm_status_kind() {
   local meta=${1%.status}.meta kind=${2:-} line
@@ -855,7 +848,7 @@ _fm_status_kind() {
     done < "$meta"
     kind=${kind:-ship}
   fi
-  case "$kind" in ship|scout|secondmate) printf '%s' "$kind" ;; *) printf unknown ;; esac
+  case "$kind" in ship|scout) printf '%s' "$kind" ;; *) printf unknown ;; esac
 }
 
 _fm_decision_fold_line() {  # <open-set> <status-line> <resolve-verb> <held-verb> <kind> [timed]
@@ -1001,7 +994,7 @@ status_own_open_decisions() {  # <status-file>
 _fm_open_set_own_rows() {  # stdin: a folded open set
   local line prefix
   while IFS= read -r line || [ -n "$line" ]; do
-    for prefix in ${FM_CLASSIFY_RESERVED_KEY_PREFIXES:-$FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT} remote-reply-continuity- captain-hold-; do
+    for prefix in ${FM_CLASSIFY_RESERVED_KEY_PREFIXES:-$FM_CLASSIFY_RESERVED_KEY_PREFIXES_DEFAULT} captain-hold-; do
       case "$line" in "$prefix"*) continue 2 ;; esac
     done
     printf '%s\n' "$line"
@@ -1176,20 +1169,6 @@ EOF
 # lazily here because that library sources this one at its top level, so a
 # top-level source would be circular). A main home, a local mate - whose
 # channel lives in the parent home - or an unusable identity or binding keeps
-# every file, so ordinary task logs fold and wake exactly as before. The home
-# is the directory containing <state>, the <home>/state layout every caller of
-# these fleet-wide scans shares; a state dir outside such a home excludes
-# nothing. Callers compare the resolved path, never the file name, so a
-# parent-replies.status in any other home shape stays an ordinary task log.
-status_scan_parent_channel_exclude() {  # <state>
-  local state=$1 exclude
-  if ! command -v fm_parent_channel_outbound_status >/dev/null 2>&1; then
-    # shellcheck source=bin/fm-parent-channel-lib.sh
-    . "$_FM_CLASSIFY_LIB_DIR/fm-parent-channel-lib.sh"
-  fi
-  exclude=$(fm_parent_channel_outbound_status "$(dirname "$state")" "$state") || return 0
-  printf '%s\n' "$exclude"
-}
 
 # Fleet-wide wrapper around status_open_decisions: scans every task's status
 # log under <state> and prefixes each still-open decision with its owning task
@@ -1199,11 +1178,9 @@ status_scan_parent_channel_exclude() {  # <state>
 # one "<task>\t<key>\t<verb>\t<note>" line per open decision, in glob (task id)
 # order; prints nothing when none are open.
 scan_open_decisions() {  # <state>
-  local state=$1 f task open line exclude
-  exclude=$(status_scan_parent_channel_exclude "$state")
+  local state=$1 f task open line
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
-    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task="${task%.status}"
     open=$(status_open_decisions "$f") || continue
     [ -n "$open" ] || continue
@@ -1308,18 +1285,16 @@ EOF
 }
 
 scan_stalled_qa() {  # <state> [now] -> one TAB-separated line per stall due for escalation
-  local state=$1 now=${2:-} bound f task key verb note epoch age open line exclude
+  local state=$1 now=${2:-} bound f task key verb note epoch age open line
   local dir oldest oldest_age oldest_file given_up marker
   [ -n "$now" ] || now=$(date +%s)
   bound=$(stalled_qa_escalate_secs)
-  exclude=$(status_scan_parent_channel_exclude "$state")
   if ! command -v fm_task_inbox_oldest_unhandled >/dev/null 2>&1; then
     # shellcheck source=bin/fm-task-inbox-lib.sh
     . "$_FM_CLASSIFY_LIB_DIR/fm-task-inbox-lib.sh"
   fi
   for f in "$state"/*.status; do
     [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || continue
-    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task=${task%.status}
     open=$(status_own_open_decisions_incremental "$f") || continue
     [ -n "$open" ] || continue
@@ -1465,13 +1440,11 @@ _fm_wait_declaration_item() {  # <marker> <task> <verb> <note> <identity> <now>
 }
 
 scan_wait_declarations() {  # <state> [now] -> one TAB-separated line per wait to flag or raise
-  local state=$1 now=${2:-} f task exclude line paused open key verb note opened marker live=$'\n'
+  local state=$1 now=${2:-} f task line paused open key verb note opened marker live=$'\n'
   [ -n "$now" ] || now=$(date +%s)
   paused=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
-  exclude=$(status_scan_parent_channel_exclude "$state")
   for f in "$state"/*.status; do
     [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || continue
-    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task=${task%.status}
     line=$(status_declared_wait_line "$f")
     if status_is_paused "$line"; then
@@ -1888,11 +1861,9 @@ EOF
 # the whole-file status_open_decisions, so a fleet-wide per-drain scan stays
 # bounded by new appends rather than total lifetime log size across every task.
 scan_open_decisions_incremental() {  # <state>
-  local state=$1 f task open line exclude
-  exclude=$(status_scan_parent_channel_exclude "$state")
+  local state=$1 f task open line
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
-    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task="${task%.status}"
     open=$(status_open_decisions_incremental "$f") || continue
     [ -n "$open" ] || continue
@@ -1907,11 +1878,9 @@ EOF
 }
 
 status_presentation_snapshot() {  # <state>
-  local state=$1 f task size ident exclude
-  exclude=$(status_scan_parent_channel_exclude "$state")
+  local state=$1 f task size ident
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
-    [ "$f" = "$exclude" ] && continue
     [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || continue
     task=$(basename "$f"); task="${task%.status}"
     size=$(_fm_status_file_size "$f") || return 1
@@ -2079,9 +2048,6 @@ status_heartbeat_seen_marker_path() {  # <state> <task-id>
   printf '%s/.hb-surfaced-%s' "$1" "$(printf '%s' "$2" | tr ':/.' '___')"
 }
 
-status_daemon_seen_marker_path() {  # <state> <task-id>
-  printf '%s/.subsuper-seen-status-%s' "$1" "$(printf '%s' "$2" | tr ':/.' '___')"
-}
 
 _status_presentation_signature_valid() {
   local value=$1 size ident encoded
@@ -2209,17 +2175,16 @@ status_presentation_marker_commit() {
 # Without a filename the log is kept under the state status-archive directory.
 status_retire_presentation_task() {  # <state> <task-id> [<archive-file>]
   local state=$1 task=$2 lock manifest tmp data row_task ident offset backstop extra rc=0 found=0 archive_published=0
-  local signal_marker heartbeat_marker daemon_marker home_appends home_appends_lock archive_file archive_stamp archive_suffix archive=${3:-} archive_tmp=
+  local signal_marker heartbeat_marker home_appends home_appends_lock archive_file archive_stamp archive_suffix archive=${3:-} archive_tmp=
   lock="$state/.status-presentation-lock"
   manifest="$state/.status-presentation-cursor"
   tmp="$manifest.tmp.$$"
   signal_marker=$(status_signal_seen_marker_path "$state" "$task")
   heartbeat_marker=$(status_heartbeat_seen_marker_path "$state" "$task")
-  daemon_marker=$(status_daemon_seen_marker_path "$state" "$task")
   home_appends="$state/.$task.home-appends"
   home_appends_lock="$home_appends.lock"
   local -a task_records=("$state/.$task.open-decisions-cursor" "$state/.$task.open-decisions-cursor.timed"
-    "$home_appends" "$signal_marker" "$heartbeat_marker" "$daemon_marker")
+    "$home_appends" "$signal_marker" "$heartbeat_marker")
 
   # A remote-home teardown can legitimately retire an endpoint ID that has no
   # status log in that home. Do not contend with that home's unrelated status
@@ -2234,8 +2199,7 @@ status_retire_presentation_task() {  # <state> <task-id> [<archive-file>]
     && [ ! -e "$home_appends" ] && [ ! -L "$home_appends" ] \
     && [ ! -e "$home_appends_lock" ] && [ ! -L "$home_appends_lock" ] \
     && [ ! -e "$signal_marker" ] && [ ! -L "$signal_marker" ] \
-    && [ ! -e "$heartbeat_marker" ] && [ ! -L "$heartbeat_marker" ] \
-    && [ ! -e "$daemon_marker" ] && [ ! -L "$daemon_marker" ]; then
+    && [ ! -e "$heartbeat_marker" ] && [ ! -L "$heartbeat_marker" ]; then
     if [ ! -e "$manifest" ] && [ ! -L "$manifest" ]; then
       return 0
     fi
@@ -2584,11 +2548,9 @@ status_line_is_unread_surface() {  # <status-line>
 # Prints nothing when none are unread. Directory scan rejects status symlinks
 # the same way scan_open_decisions does.
 scan_unread_surface_lines() {  # <state>
-  local state=$1 f task lines line exclude
-  exclude=$(status_scan_parent_channel_exclude "$state")
+  local state=$1 f task lines line
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
-    [ "$f" = "$exclude" ] && continue
     task=$(basename "$f"); task="${task%.status}"
     lines=$(status_new_lines_since_cursor "$f") || return 1
     [ -n "$lines" ] || continue
@@ -2994,8 +2956,7 @@ EOF
         [ -n "$live_line" ] && [ "$line_number" -eq "$live_line" ] || continue
         [ -n "$events" ] && events="${events} ; "
         events="${events}${line}"
-        if [ "$verb" = needs-decision ] || { [ "$verb" = blocked ] &&
-          _fm_is_pending_reply_escalation "$key" "$(status_line_note "$line")"; }; then
+        if [ "$verb" = needs-decision ]; then
           _fm_span_needs_decision=1
         fi
         rc=0
@@ -3233,11 +3194,7 @@ crew_worktree_written_since() {  # <id> <state> <anchor-file>
   [ -f "$anchor" ] || return 1
   wt=$(grep '^worktree=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
   [ -n "$wt" ] && [ -d "$wt" ] || return 1
-  kind=$(grep '^kind=' "$state/$id.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
-  [ "$kind" != secondmate ] || return 1
-  if [ -e "$wt/.fm-secondmate-home" ] || [ -L "$wt/.fm-secondmate-home" ]; then
-    return 1
-  fi
+  case "$kind" in ""|ship|scout) ;; *) return 1 ;; esac
   read -r -a names <<< "$FM_WORKTREE_WRITE_PRUNE"
   for name in ${names[@]+"${names[@]}"}; do
     [ "${#prune[@]}" -eq 0 ] || prune+=( -o )
@@ -3261,45 +3218,6 @@ crew_worktree_written_since() {  # <id> <state> <anchor-file>
 # Files are mapped to task ids by stripping the .status / .turn-ended suffix;
 # a no-verb wake with nothing
 # provably working must surface, so an empty/unresolvable list returns 1.
-# A kind=secondmate task's .status stream doubles as its routed-reply channel,
-# so the lines new since the watcher's classified position are read before any
-# busy evidence counts: a decision, blocker, terminal outcome, `note:`, any line
-# carrying a correlation marker (fm_pending_reply_corr_token, bracketed or not),
-# and any verb this library does not know is parent-directed content the
-# supervisor must read, so it surfaces regardless of how busy the mate is. Only
-# unmarked routine `working:` and `paused:` progress falls through
-# to the same provably-working absorb an ordinary crewmate gets, so a healthy
-# mate's progress no longer wakes the primary on every append while an unproven
-# mate still surfaces. The span starts at the classified position its owner
-# reports (fm_wake_signal_seen_size, bin/fm-wake-lib.sh, loaded by every watcher
-# caller); a caller without that library reads the whole log, which can only
-# surface more. An unreadable span surfaces. Scoped to .status files - a mate's
-# bare turn-ended ping always used the ordinary provably-working absorb.
-_fm_secondmate_status_new_lines_routine() {  # <status-file> <state>
-  local f=$1 state=$2 start=0 size chunk line verb
-  if command -v fm_wake_signal_seen_size >/dev/null 2>&1; then
-    start=$(fm_wake_signal_seen_size "$state" "$f")
-  fi
-  case "$start" in ''|*[!0-9]*) start=0 ;; esac
-  size=$(_fm_status_file_size "$f") || return 1
-  size=${size//[[:space:]]/}
-  case "$size" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$start" -le "$size" ] || start=0
-  [ "$start" -lt "$size" ] || return 0
-  chunk=$(_fm_status_read_span "$f" "$start" "$((size - start))") || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
-    case "$line" in *corr=*) return 1 ;; esac
-    status_line_verb "$line" verb
-    case "$verb" in
-      working|"${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}") ;;
-      *) return 1 ;;
-    esac
-  done <<EOF
-$chunk
-EOF
-  return 0
-}
 signal_crew_provably_working() {  # <file> ...
   local f base dir task seen=""
   for f in "$@"; do
@@ -3312,13 +3230,6 @@ signal_crew_provably_working() {  # <file> ...
       *)            continue ;;
     esac
     [ -n "$task" ] || continue
-    case "$base" in
-      *.status)
-        if [ "$(grep '^kind=' "$dir/$task.meta" 2>/dev/null | tail -1 | cut -d= -f2-)" = secondmate ]; then
-          _fm_secondmate_status_new_lines_routine "$f" "$dir" || return 1
-        fi
-        ;;
-    esac
     case " $seen " in *" $task "*) continue ;; esac
     seen="$seen $task"
     crew_is_provably_working "$task" || return 1

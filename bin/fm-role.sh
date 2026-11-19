@@ -39,7 +39,6 @@ report)
   [ -z "$FM_ROLE_SCOPE" ] || line="$line $FM_ROLE_SCOPE"
   case $FM_ROLE_SOURCE in
   local) line="$line (local)" ;;
-  inherited) line="$line (inherited)" ;;
   absent)
     if [ -z "$FM_ROLE_DIAG" ]; then
       line="$line (default)"

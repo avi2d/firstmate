@@ -28,8 +28,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-parent-channel-lib.sh
-. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 
@@ -56,10 +54,7 @@ if [ ! -f "$META" ] || [ -L "$META" ] || [ "$(fm_pr_file_link_count "$META")" !=
   exit 1
 fi
 KIND=$(fm_dod_meta_value "$META" kind)
-if [ "$KIND" = secondmate ]; then
-  echo "error: $ID is a secondmate, not a delivery lane - $URL belongs to a task in the mate's own home, which records it there" >&2
-  exit 1
-fi
+case "${KIND:-ship}" in ship) ;; *) echo "error: $ID is not a delivery task" >&2; exit 1 ;; esac
 if [ "$(fm_dod_meta_value "$META" forge)" != external ]; then
   echo "error: $ID does not record forge=external, so it has no external review to record; a pull request is recorded with bin/fm-pr-check.sh" >&2
   exit 1
@@ -112,12 +107,4 @@ META_TMP=
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 
-READY_LINE="done [key=child-review-$ID]: child $ID review ready: $URL"
-[ -z "$MODE" ] || READY_LINE="$READY_LINE mode=$(fm_parent_channel_clean_note "$MODE")"
-READY_RC=0
-fm_parent_channel_report "$FM_HOME" "$STATE" "$READY_LINE" || READY_RC=$?
-case "$READY_RC" in
-  0|1) ;;
-  *) printf 'actionable: review %s is recorded but its ready line did not reach the parent channel (rc=%s)\n' "$URL" "$READY_RC" >&2 ;;
-esac
 printf 'recorded: review=%s (no merge watch: a human approves and merges the review; escalate it to the captain)\n' "$URL"

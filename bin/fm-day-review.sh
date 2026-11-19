@@ -13,7 +13,6 @@ BADCONFIG="$STATE/.day-review-badconfig"
 OUT="$DATA/day-review"
 CHECK_ID="day-review"
 CHECK_SHIM="$STATE/$CHECK_ID.check.sh"
-REGISTRY="$DATA/secondmates.md"
 PY="$SCRIPT_DIR/fm-day-review.py"
 DEFAULT_SCHEDULE="21:00 Europe/Moscow"
 RECORD_SCHEMA=fm-day-review-v1
@@ -25,19 +24,16 @@ MAX_LINE=240
 . "$SCRIPT_DIR/fm-check-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 usage() {
   cat <<'EOF'
 Usage:
   fm-day-review.sh [check]   print one wake line when the day review is due, silent otherwise
   fm-day-review.sh run [--force]
-                             collect this home and every registered secondmate, write the board,
+                             collect this home and write the board,
                              print its path; --force runs before the scheduled time without
                              marking the day done
   fm-day-review.sh collect --since <epoch> --until <epoch>
-                             print this home's raw review data as JSON; run reaches remote
-                             secondmates through bin/fm-on.sh with this command
+                             print this home's raw review data as JSON
   fm-day-review.sh arm       write and register state/day-review.check.sh
   fm-day-review.sh disarm    remove the shim, trust binding, and due records
   fm-day-review.sh --help    print this help
@@ -105,7 +101,6 @@ report_bad_config() {
 }
 do_check() {
   # A parked supervisor cannot act on the wake; the next review still covers the time since the last one.
-  [ -e "$STATE/.afk" ] && return 0
   case "$(due_line '')" in
     due\ *) fm_cap_line "day-review due: run bin/fm-day-review.sh run, then open the board it prints with lavish-axi" "$MAX_LINE" ;;
     bad-config) report_bad_config ;;
@@ -138,18 +133,8 @@ do_collect() {
   case "$since:$until" in *[!0-9:]*|:*|*:) usage >&2; return 2 ;; esac
   collect_home "$FM_HOME" "$since" "$until"
 }
-collect_secondmate() {
-  local n="$1" since="$2" until="$3" out="$4" err="$5"
-  if [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ]; then
-    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-on.sh" "$SECONDMATE_REGISTRY_ID" fm-day-review.sh collect \
-      --since "$since" --until "$until" > "$out" 2>>"$err" < /dev/null || return 1
-  else
-    collect_home "$SECONDMATE_REGISTRY_HOME" "$since" "$until" > "$out" 2>>"$err" || return 1
-  fi
-  [ -s "$out" ]
-}
 do_run() {
-  local force="" line="" day="" since="" until="" dir="" n=0 err="" zone="" inputs=() gaps=() gap_args=() gap=""
+  local force="" line="" day="" since="" until="" dir="" err="" zone="" inputs=() gaps=() gap_args=() gap=""
   case "${1:-}" in
     --force) force=--force ;;
     '') ;;
@@ -170,17 +155,6 @@ do_run() {
     inputs+=("$SELF_LABEL=$dir/collect/0.json")
   else
     gaps+=("The $SELF_LABEL home could not be read, so its work is missing.")
-  fi
-  if [ -f "$REGISTRY" ] && [ ! -L "$REGISTRY" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-      secondmate_registry_parse_line "$line" 2>/dev/null || continue
-      n=$((n + 1))
-      if collect_secondmate "$n" "$since" "$until" "$dir/collect/$n.json" "$err"; then
-        inputs+=("$SECONDMATE_REGISTRY_ID=$dir/collect/$n.json")
-      else
-        gaps+=("The $SECONDMATE_REGISTRY_ID second mate could not be read, so its work is missing.")
-      fi
-    done < "$REGISTRY"
   fi
   [ "${#inputs[@]}" -gt 0 ] || { echo "error: no home could be read; see $err" >&2; return 1; }
   for gap in ${gaps[@]+"${gaps[@]}"}; do gap_args+=(--gap "$gap"); done

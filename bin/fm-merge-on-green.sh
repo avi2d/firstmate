@@ -14,8 +14,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
-# shellcheck source=bin/fm-parent-channel-lib.sh
-. "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 
@@ -554,11 +552,6 @@ merge_task() {  # <task-id> <now>
     return
   fi
   log_line "$id" merged "$(printf '%s\n' "$out" | grep '^verified:' | tail -1)"
-  # A secondmate home's own merge reports only upward, and no turn of this home
-  # performed it, so the home gets the wake its merge poll would have queued.
-  if fm_parent_channel_destination "$FM_HOME" "$STATE" >/dev/null 2>&1; then
-    fm_wake_append check "merged-$id-$URL" "check: merge landed: $id $URL" || true
-  fi
 }
 
 update_task() {  # <task-id> <now>

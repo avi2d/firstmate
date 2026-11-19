@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Execute one tracked Firstmate command in a configured remote secondmate home.
+# Run one tracked command in an execution home.
 #
 # Usage:
-#   fm-on.sh [--stdin] <secondmate-id|unambiguous-ssh-alias> <fm-command> [args...]
+#   fm-on.sh [--stdin] <route-id|unambiguous-ssh-alias> <fm-command> [args...]
 #
-# Routes come only from remote records in data/secondmates.md. A record names an
+# Routes come only from data/remote-homes.md. A record names an
 # SSH config alias, remote Firstmate code root, and remote FM_HOME. A host alias
 # may be used directly only when exactly one record selects it; an ambiguous
 # alias is refused. The command must be a genuine executable in this checkout's
@@ -38,14 +38,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-REG="$DATA/secondmates.md"
 EXEC_REG="$DATA/remote-homes.md"
 PROTOCOL=1
 
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
-# shellcheck source=bin/fm-timeout-lib.sh
-. "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-remote-registry-lib.sh
+. "$SCRIPT_DIR/fm-remote-registry-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -64,7 +61,7 @@ ROUTE=$1
 COMMAND=$2
 shift 2
 
-case "$ROUTE" in ''|-*|*[!A-Za-z0-9._-]*) die "remote route must be a safe secondmate id or SSH alias: $ROUTE" ;; esac
+case "$ROUTE" in ''|-*|*[!A-Za-z0-9._-]*) die "remote route must be a safe route id or SSH alias: $ROUTE" ;; esac
 case "$COMMAND" in
   fm-*.sh) ;;
   *) die "remote command must be a basename in the fm-*.sh namespace: $COMMAND" ;;
@@ -75,32 +72,24 @@ LOCAL_COMMAND="$FM_ROOT/bin/$COMMAND"
   || die "remote command is not a genuine tracked executable in this Firstmate checkout: $COMMAND"
 git -C "$FM_ROOT" ls-files --error-unmatch "bin/$COMMAND" >/dev/null 2>&1 \
   || die "remote command is not tracked by this Firstmate checkout: $COMMAND"
-HAVE_REG=0
-HAVE_EXEC_REG=0
-if [ -f "$REG" ] && [ ! -L "$REG" ]; then HAVE_REG=1; fi
-if [ -f "$EXEC_REG" ] && [ ! -L "$EXEC_REG" ]; then HAVE_EXEC_REG=1; fi
-[ "$HAVE_REG" -eq 1 ] || [ "$HAVE_EXEC_REG" -eq 1 ] || die "no safe secondmate registry at $REG"
+[ -f "$EXEC_REG" ] && [ ! -L "$EXEC_REG" ] || die "no safe execution-home registry at $EXEC_REG"
 
 MATCHES=0
 HOST=
 ROOT=
 HOME_PATH=
-for registry_file in "$REG" "$EXEC_REG"; do
-  [ -f "$registry_file" ] && [ ! -L "$registry_file" ] || continue
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in '- '*) ;; *) continue ;; esac
-    secondmate_registry_parse_line "$line" || die "malformed secondmate registry entry: $line"
-    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] || continue
-    if [ "$SECONDMATE_REGISTRY_ID" = "$ROUTE" ] || [ "$SECONDMATE_REGISTRY_HOST" = "$ROUTE" ]; then
-      MATCHES=$((MATCHES + 1))
-      HOST=$SECONDMATE_REGISTRY_HOST
-      ROOT=$SECONDMATE_REGISTRY_ROOT
-      HOME_PATH=$SECONDMATE_REGISTRY_HOME
-    fi
-  done < "$registry_file"
-done
-[ "$MATCHES" -gt 0 ] || die "no remote secondmate or SSH alias matches '$ROUTE'"
-[ "$MATCHES" -eq 1 ] || die "remote route '$ROUTE' is ambiguous across $MATCHES configured secondmates; use a secondmate id"
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in '- '*) ;; *) continue ;; esac
+  fm_remote_registry_parse_line "$line" || die "malformed execution-home registry entry: $line"
+  if [ "$FM_REMOTE_REGISTRY_ID" = "$ROUTE" ] || [ "$FM_REMOTE_REGISTRY_HOST" = "$ROUTE" ]; then
+    MATCHES=$((MATCHES + 1))
+    HOST=$FM_REMOTE_REGISTRY_HOST
+    ROOT=$FM_REMOTE_REGISTRY_ROOT
+    HOME_PATH=$FM_REMOTE_REGISTRY_HOME
+  fi
+done < "$EXEC_REG"
+[ "$MATCHES" -gt 0 ] || die "no execution-home route or SSH alias matches '$ROUTE'"
+[ "$MATCHES" -eq 1 ] || die "remote route '$ROUTE' is ambiguous across $MATCHES configured execution homes; use a route id"
 case "$HOST" in ''|-*|*[!A-Za-z0-9._-]*) die "configured SSH alias is unsafe: $HOST" ;; esac
 case "$ROOT" in /*) ;; *) die "configured remote root is not absolute: $ROOT" ;; esac
 case "$HOME_PATH" in /*) ;; *) die "configured remote home is not absolute: $HOME_PATH" ;; esac
@@ -120,12 +109,6 @@ case "$ALIVE_INTERVAL" in ''|*[!0-9]*) die "FM_SSH_ALIVE_INTERVAL must be a posi
 case "$ALIVE_COUNT_MAX" in ''|*[!0-9]*) die "FM_SSH_ALIVE_COUNT_MAX must be a positive integer: $ALIVE_COUNT_MAX" ;; esac
 [ "$ALIVE_INTERVAL" -gt 0 ] || die "FM_SSH_ALIVE_INTERVAL must be a positive integer: $ALIVE_INTERVAL"
 [ "$ALIVE_COUNT_MAX" -gt 0 ] || die "FM_SSH_ALIVE_COUNT_MAX must be a positive integer: $ALIVE_COUNT_MAX"
-CALL_TIMEOUT=${FM_SECOND_MATE_STARTUP_CALL_TIMEOUT:-}
-case "$CALL_TIMEOUT" in
-  '') ;;
-  *[!0-9]*) die "FM_SECOND_MATE_STARTUP_CALL_TIMEOUT must be a positive integer: $CALL_TIMEOUT" ;;
-  *) [ "$CALL_TIMEOUT" -gt 0 ] || die "FM_SECOND_MATE_STARTUP_CALL_TIMEOUT must be a positive integer: $CALL_TIMEOUT" ;;
-esac
 
 SSH_ARGS=(
   -o ForwardAgent=no
@@ -135,15 +118,7 @@ SSH_ARGS=(
   -o "ServerAliveCountMax=$ALIVE_COUNT_MAX"
   -- "$HOST" fm-remote-entrypoint.sh "$PROTOCOL" "$ROOT_B64" "$HOME_B64" "$ARGV_B64"
 )
-if [ -n "$CALL_TIMEOUT" ]; then
-  if [ "$STDIN_MODE" = caller ]; then
-    fm_run_timed "$CALL_TIMEOUT" "$SSH_BIN" "${SSH_ARGS[@]}"
-  else
-    fm_run_timed "$CALL_TIMEOUT" "$SSH_BIN" "${SSH_ARGS[@]}" < /dev/null
-  fi
-else
-  if [ "$STDIN_MODE" = caller ]; then
-    exec "$SSH_BIN" "${SSH_ARGS[@]}"
-  fi
-  exec "$SSH_BIN" "${SSH_ARGS[@]}" < /dev/null
+if [ "$STDIN_MODE" = caller ]; then
+  exec "$SSH_BIN" "${SSH_ARGS[@]}"
 fi
+exec "$SSH_BIN" "${SSH_ARGS[@]}" < /dev/null

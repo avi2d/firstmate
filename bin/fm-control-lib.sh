@@ -77,7 +77,6 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
     hermes) case "$kind" in ship|scout) ;; *) return 1 ;; esac ;;
-    muse|gemini|rovo|devin|commandcode|polytoken|cortex|kiro) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -444,12 +443,7 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id> [ki
     # --settings and the Stop pointer that carries the same busy generation.
     # A crewmate's hook file is the worktree settings.local.json.
     claude)
-      if [ "$kind" = secondmate ]; then
-        printf '%s\n' "$state/$id.claude-settings.json"
-        printf '%s\n' "$wt/.fm-busy-stop"
-      else
-        printf '%s\n' "$wt/.claude/settings.local.json"
-      fi
+      printf '%s\n' "$wt/.claude/settings.local.json"
       ;;
     opencode) printf '%s\n' "$wt/.opencode/plugins/fm-busy-state.js" ;;
     pi|pi-signed) printf '%s\n' "$state/$id.pi-ext.ts" ;;

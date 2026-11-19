@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Check, and optionally repair, one remote account's second-mate readiness.
+# Check, and optionally repair, whether an execution host is ready.
 #
 # Usage:
-#   bin/fm-on.sh <secondmate-id|ssh-alias> fm-remote-doctor.sh [--fix] [--backend herdr|rex|any]
+#   bin/fm-on.sh <route|ssh-alias> fm-remote-doctor.sh [--fix] [--backend herdr|rex|any]
 #
 # Run it through fm-on.sh so the fixed entrypoint invokes this readiness owner
 # over its plain SSH bootstrap. The command reports the same filesystem-composed
 # PATH used by worker jobs while retaining authority to inspect and repair the
 # worker itself.
 #
-# A remote second mate runs on one session-provider backend: herdr (the
+# An execution home runs on one session-provider backend: herdr (the
 # default) in the dedicated fm-remote session, or rex on the host's own
-# persistent rex server in a 2ndmate-<id>-<hash> session. --backend names the
+# persistent rex server in a Firstmate session. --backend names the
 # one to verify; the default `any` resolves herdr when its CLI is present, then
 # rex, so a host offering both is still verified for the default backend. On
 # the Herdr backend the account needs the Firstmate-owned Aqua Herdr agent plus
@@ -630,14 +630,14 @@ check_herdr() {
     return 0
   fi
   record herdr "human: the herdr CLI does not resolve on the remote runtime PATH" \
-    "install herdr from https://herdr.dev on that account, or add a ~/.local/bin wrapper for it; the remote second mate's herdr backend needs this CLI"
+    "install herdr from https://herdr.dev on that account, or add a ~/.local/bin wrapper for it; the execution home herdr backend needs this CLI"
 }
 
 # Reported only when no supported backend CLI resolves at all: one session-
 # provider gap rather than one gap per missing CLI.
 check_backend() {
   record backend "human: neither the herdr nor the rex CLI resolves on the remote runtime PATH" \
-    "install herdr from https://herdr.dev or Rex on that account, or add a ~/.local/bin wrapper for one; a remote second mate needs one session-provider backend"
+    "install herdr from https://herdr.dev or Rex on that account, or add a ~/.local/bin wrapper for one; a execution home needs one session-provider backend"
 }
 
 # Rex server calls below read through a resolved rex CLI that can never
@@ -664,7 +664,7 @@ check_rex() {
   local rex raw client_api
   if ! rex=$(rex_bin) || [ ! -x "$rex" ]; then
     record rex "human: the rex CLI does not resolve on the remote runtime PATH" \
-      "install Rex on that account, or add a ~/.local/bin wrapper for it; the remote second mate's rex backend needs this CLI"
+      "install Rex on that account, or add a ~/.local/bin wrapper for it; the execution home rex backend needs this CLI"
     return 0
   fi
   raw=$("$rex" version 2>/dev/null || true)
@@ -724,14 +724,14 @@ check_rex_server() {
       return 0
       ;;
     *)
-      record rex-server "human: the rex server endpoint '$endpoint' is not a local unix socket; remote second mates stay on the account's personal unix:// server" \
+      record rex-server "human: the rex server endpoint '$endpoint' is not a local unix socket; execution homes stay on the account's personal unix:// server" \
         "reconfigure that account's rex to serve the default unix:// endpoint, then rerun this command"
       return 0
       ;;
   esac
   exit_empty=$(printf '%s' "$whoami" | jq -r '.exit_empty | select(type == "boolean")' 2>/dev/null) || exit_empty=
   if [ "$exit_empty" = true ]; then
-    record rex-server "human: the rex server at $endpoint exits when empty, so a second mate's session would not survive an idle stretch" \
+    record rex-server "human: the rex server at $endpoint exits when empty, so a worker session would not survive an idle stretch" \
       "at a time when nothing runs on that account's rex server, run 'rex server stop' and then 'rex server start' there to bring it back as a persistent server, then rerun this command; Firstmate never stops an answering server, because that ends every process in its sessions"
     return 0
   fi
@@ -861,11 +861,11 @@ check_herdr_server() {
         ;;
       unproven)
         record herdr-server "fixable: session $HERDR_SESSION_NAME is running but no herdr process can be shown to own its socket, so its birth cannot be proven" \
-          "rerun this command with --fix so the launch agent takes the session over (its current panes close and the parent firstmate relaunches its mates)"
+          "rerun this command with --fix so the launch agent takes the session over (its current panes close)"
         ;;
       *)
         record herdr-server "fixable: session $HERDR_SESSION_NAME is served by pid ${birth#* } born outside the Aqua login session (${birth%% *}), so its panes cannot reach the login keychain" \
-          "rerun this command with --fix so the launch agent takes the session over (its current panes close and the parent firstmate relaunches its mates)"
+          "rerun this command with --fix so the launch agent takes the session over (its current panes close)"
         ;;
     esac
     return 0
@@ -1144,14 +1144,10 @@ done
 if [ "${#MISSING[@]}" -gt 0 ]; then
   printf 'error: required tools do not resolve on the remote runtime PATH: %s\n' "${MISSING[*]}" >&2
   printf 'fix: install each one where it resolves on the path reported above, or put a wrapper script for it in %s/.local/bin, which is always on that PATH.\n' "${HOME:-~}" >&2
-  printf 'fix: tools in an unselected nvm version or outside the discovered asdf or mise paths need an absolute wrapper; see docs/remote-secondmates.md for the wrapper recipe.\n' >&2
+  printf 'fix: tools in an unselected nvm version or outside the discovered asdf or mise paths need an absolute wrapper; see docs/remote-workers.md for the wrapper recipe.\n' >&2
 fi
-DOCTOR_HOME_KIND="second mate"
-DOCTOR_HOME_WORD="second-mate"
-if [ -n "${FM_HOME:-}" ] && [ -f "$FM_HOME/.fm-exec-home" ] && [ ! -e "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ]; then
-  DOCTOR_HOME_KIND="execution home"
-  DOCTOR_HOME_WORD="execution-home"
-fi
+DOCTOR_HOME_KIND="execution home"
+DOCTOR_HOME_WORD="execution-home"
 if [ "${#MISSING[@]}" -gt 0 ] || [ "${#GAPS[@]}" -gt 0 ]; then
   NAMES=
   for i in ${GAPS[@]+"${GAPS[@]}"}; do

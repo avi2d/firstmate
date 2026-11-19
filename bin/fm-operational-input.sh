@@ -60,7 +60,6 @@ FM_OPERATIONAL_KINDS='session-start watcher turn-end-guard away-supervisor launc
 
 # Compatibility name retained for the away-mode owner and its tests.
 # shellcheck disable=SC2034 # Public source-library variable used by callers.
-FM_INJECT_MARK=$FM_OPERATIONAL_MARK
 
 # The from-firstmate carrier stays byte-compatible with live secondmate charter
 # context while this owner supplies its construction and structural kind.

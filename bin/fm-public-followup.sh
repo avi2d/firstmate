@@ -147,12 +147,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 # shellcheck source=bin/fm-public-followup-lib.sh
 . "$SCRIPT_DIR/fm-public-followup-lib.sh"
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 
 RETRY_BACKOFF=${FM_PF_RETRY_BACKOFF_SECS:-900}
 case "$RETRY_BACKOFF" in ''|*[!0-9]*) RETRY_BACKOFF=900 ;; esac
@@ -277,8 +274,8 @@ cmd_register() {
   fm_pf_slug_valid "$id"       || die "unsafe obligation id: $id"
   fm_pf_slug_valid "$relation" || die "unsafe relation id: $relation"
   fm_pf_slug_valid "$work_id"  || die "unsafe work id: $work_id"
-  fm_pf_home_id_valid "$work_home" \
-    || die "work home must be 'main' or 'secondmate:<stable-id>', got '$work_home'"
+  [ "$work_home" = main ] \
+    || die "work home must be 'main', got '$work_home'"
   case "$generation" in
     ''|*[!0-9]*) die "generation must be a positive integer, got '$generation'" ;;
   esac
@@ -310,14 +307,6 @@ cmd_register() {
     request_context_b64=$(printf '%s' "$request_json" | fm_pf_b64_encode)
   fi
   work_home_path=
-  case "$work_home" in
-    secondmate:*)
-      work_home_path=$(public_followup_secondmate_home "${work_home#secondmate:}" 2>/dev/null || true)
-      case "$work_home_path" in
-        *$'\n'*|*$'\r'*) work_home_path= ;;
-      esac
-      ;;
-  esac
 
   local mkdir_target registry_state retired_file
   for mkdir_target in "$(fm_pf_registry_dir "$STATE")" "$(fm_pf_events_dir "$STATE")" \
@@ -352,49 +341,10 @@ cmd_register() {
 
 # --- subcommand: brief ------------------------------------------------------
 
-# public_followup_route_kind <secondmate-id> <recorded-local-home>: print remote
-# or local only when the current route still proves which transport owns it.
-public_followup_route_kind() {
-  local id=$1 recorded_home=$2 resolved
-  if public_followup_route_is_remote "$id"; then
-    printf 'remote\n'
-    return 0
-  fi
-  [ -n "$recorded_home" ] || return 1
-  resolved=$(public_followup_secondmate_home "$id" 2>/dev/null) || return 1
-  [ "$resolved" = "$recorded_home" ] || return 1
-  printf 'local\n'
-}
-
-# brief_emit_target <work-home> <recorded-local-home>: two lines on stdout - the
-# absolute path of the emit script the bound worker must run, and its home flag.
-brief_emit_target() {
-  local work_home=$1 recorded_home=${2:-} sid kind root home configured_path
-  case "$work_home" in
-    secondmate:*) sid=${work_home#secondmate:} ;;
-    *) printf '%s\n--home %s\n' "$FM_ROOT/bin/fm-public-followup-emit.sh" "$FM_HOME"; return 0 ;;
-  esac
-  kind=$(public_followup_route_kind "$sid" "$recorded_home") || return 1
-  if [ "$kind" = local ]; then
-    printf '%s\n--home %s\n' "$FM_ROOT/bin/fm-public-followup-emit.sh" "$FM_HOME"
-    return 0
-  fi
-  root=$(secondmate_registry_field "$DATA/secondmates.md" "$sid" root 2>/dev/null) || root=
-  home=$(secondmate_registry_field "$DATA/secondmates.md" "$sid" home 2>/dev/null) || home=
-  case "$root" in /*) ;; *) return 1 ;; esac
-  case "$home" in /*) ;; *) return 1 ;; esac
-  case "$root$home" in *[!A-Za-z0-9/._+@:-]*) return 1 ;; esac
-  for configured_path in "$root" "$home"; do
-    case "/$configured_path/" in */../*|*/./*) return 1 ;; esac
-    case "$configured_path" in *'//'*) return 1 ;; esac
-  done
-  printf '%s\n--stage-in %s\n' "$root/bin/fm-public-followup-emit.sh" "$home"
-}
-
 cmd_brief() {
-  local id=${1:-} relation work_home work_home_path work_id generation payload expected keys key deliverable_flags
+  local id=${1:-} relation work_home work_id generation payload expected keys key deliverable_flags
   local outcome value format deliverable_formats require_flags
-  local emit_target emit_script emit_home_flag closing_note
+  local emit_script emit_home_flag closing_note
   [ -n "$id" ] || { usage; exit 2; }
   fm_pf_slug_valid "$id" || die "unsafe obligation id: $id"
   fm_pf_relay_active "$FM_HOME" || die "the relay is not active for this home" 1
@@ -403,29 +353,13 @@ cmd_brief() {
 
   relation=$(fm_pf_registry_get "$STATE" "$id" relation_id)
   work_home=$(fm_pf_registry_get "$STATE" "$id" work_home)
-  work_home_path=$(fm_pf_registry_get "$STATE" "$id" work_home_path)
   work_id=$(fm_pf_registry_get "$STATE" "$id" work_id)
   generation=$(fm_pf_registry_get "$STATE" "$id" generation)
 
-  emit_target=$(brief_emit_target "$work_home" "$work_home_path") \
-    || die "the work home for '$id' is a remote route with no usable code root and home in data/secondmates.md; fix that record before briefing the bound worker" 1
-  emit_script=$(printf '%s\n' "$emit_target" | sed -n '1p')
-  emit_home_flag=$(printf '%s\n' "$emit_target" | sed -n '2p')
-  # The closing paragraph has to match the destination the command above names,
-  # because "the home above" is the owning home only when the work runs on this
-  # machine. A remote worker is told where its result waits instead.
-  case "$emit_home_flag" in
-    --stage-in*)
-      closing_note='Do not post anything publicly yourself and do not look for the public thread:
-the home that owes that reply is on another machine and owns it. Leave the
-result exactly where the command above puts it; that home collects it over the
-same route it reaches you on, and nothing here needs a path back to it.'
-      ;;
-    *)
-      closing_note='Do not post anything publicly yourself and do not look for the public thread:
+  emit_script="$FM_ROOT/bin/fm-public-followup-emit.sh"
+  emit_home_flag="--home $FM_HOME"
+  closing_note='Do not post anything publicly yourself and do not look for the public thread:
 the home above owns the reply.'
-      ;;
-  esac
 
   require_tools
   payload=$(obligation_json "$id") \
@@ -597,115 +531,15 @@ $(printf '%s' "$expected" | jq -r '.public_followup.expected_final.required_deli
 EOF
 }
 
-# collect_remote_staged_events: pull every typed terminal result a REMOTE work
-# home has staged for this home into this home's own inbox, so the ordinary
-# reconciliation below sees it. The route transport only runs main -> secondmate,
-# so this is a pull; a worker on the other machine has no path back here.
-#
-# The current registry record is the route drained. A reassignment between
-# staging and collection is not detected; the staged result stays on the
-# original host and must be re-emitted after the reassignment.
-collect_remote_staged_events() {
-  local dir file id loop_state work_home work_home_path sid route_kind rc=0 collect_rc payload line event_id dropped
-  dir=$(fm_pf_registry_dir "$STATE")
-  [ -d "$dir" ] && [ ! -L "$dir" ] || return 0
-  for file in "$dir"/*; do
-    id=$(basename "$file")
-    fm_pf_slug_valid "$id" || continue
-    if [ ! -f "$file" ] || [ -L "$file" ]; then
-      printf 'unreached %s: registration is not a safe regular record, so its terminal result stays retained for reconciliation\n' "$id"
-      rc=1
-      continue
-    fi
-    loop_state=$(fm_pf_registry_loop_state "$STATE" "$id")
-    [ "$loop_state" = open ] || continue
-    if ! public_followup_registration_valid "$id"; then
-      work_home=$(fm_pf_registry_get "$STATE" "$id" work_home)
-      printf 'unreached %s: registration cannot resolve its work home route %s, so its terminal result stays retained for reconciliation\n' \
-        "$id" "${work_home:-unknown}"
-      rc=1
-      continue
-    fi
-    work_home=$(fm_pf_registry_get "$STATE" "$id" work_home)
-    case "$work_home" in secondmate:*) sid=${work_home#secondmate:} ;; *) continue ;; esac
-    work_home_path=$(fm_pf_registry_get "$STATE" "$id" work_home_path)
-    route_kind=$(public_followup_route_kind "$sid" "$work_home_path") || {
-      printf 'unreached %s: the work home route %s cannot be resolved; its terminal result stays retained for reconciliation; fix data/secondmates.md\n' \
-        "$id" "$sid"
-      rc=1
-      continue
-    }
-    [ "$route_kind" = remote ] || continue
-    command -v jq >/dev/null 2>&1 \
-      || die "jq is required to collect a terminal result from a remote work home" 1
-
-    collect_rc=0
-    payload=$("$FM_ROOT/bin/fm-on.sh" "$sid" fm-public-followup-collect.sh drain "$id") \
-      || collect_rc=$?
-    # fm-on.sh returns ssh's status unchanged, so 255 is the established
-    # "delivered but completion unknown" status this codebase reconciles rather
-    # than reads as done or refused.
-    if [ "$collect_rc" -eq 255 ]; then
-      printf 'unreached %s: the work home %s never answered, so its terminal result stays retained there for reconciliation\n' \
-        "$id" "$sid"
-      rc=1
-      continue
-    fi
-    if [ "$collect_rc" -ne 0 ]; then
-      printf 'unreached %s: the work home %s refused the collection (exit %s), so its terminal result stays retained there for reconciliation\n' \
-        "$id" "$sid" "$collect_rc"
-      rc=1
-      continue
-    fi
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      event_id=$(printf '%s' "$line" | jq -r '.event_id // empty' 2>/dev/null)
-      if [ "${#line}" -gt "$FM_PF_EVENT_BYTES_MAX" ] \
-        || [ -z "$event_id" ] || ! fm_pf_slug_valid "$event_id"; then
-        printf 'unreached %s: the work home %s returned an unusable terminal result, which stays retained there\n' \
-          "$id" "$sid"
-        rc=1
-        continue
-      fi
-      printf '%s\n' "$line" \
-        | fmx_private_artifact_publish_stdin_once "$(fm_pf_events_dir "$STATE")" "$event_id.json" 600
-      case $? in
-        0|1) ;;
-        *)
-          printf 'unreached %s: a collected terminal result could not be stored here, so it stays retained on %s\n' \
-            "$id" "$sid"
-          rc=1
-          continue
-          ;;
-      esac
-      # Retiring the staged copy is best effort by design: this home now holds
-      # the event durably, and a retained copy is only ever collected again and
-      # dropped as a duplicate.
-      dropped=0
-      "$FM_ROOT/bin/fm-on.sh" "$sid" fm-public-followup-collect.sh drop "$id" "$event_id" \
-        >/dev/null 2>&1 || dropped=$?
-      [ "$dropped" -eq 0 ] \
-        || printf 'collected %s: the copy staged on %s could not be retired and will be collected again\n' \
-             "$event_id" "$sid"
-    done <<EOF
-$payload
-EOF
-  done
-  return "$rc"
-}
-
 cmd_consume() {
   gate_or_exit
-  local collect_rc=0
-  collect_remote_staged_events || collect_rc=1
   if ! fm_pf_has_events "$STATE"; then
-    [ "$collect_rc" -eq 0 ] || exit 1
     exit 0
   fi
   require_tools
 
   local events_dir consumed_dir stderr_file file event_id payload derived out rc reason detail
-  local consume_rc=$collect_rc
+  local consume_rc=0
   local obligation delivery request platform
   events_dir=$(fm_pf_events_dir "$STATE")
   consumed_dir=$(fm_pf_consumed_dir "$STATE")
@@ -961,104 +795,16 @@ public_followup_registration_valid() {
   case "$generation" in ''|*[!0-9]*) return 1 ;; esac
 }
 
-public_followup_secondmate_home() {
-  local id=$1 include_absent=${2:-} meta_home registry_home home marker
-  fm_pf_home_id_valid "secondmate:$id" || return 1
-  meta_home=$(fmx_meta_get "$STATE/$id.meta" home)
-  registry_home=
-  if [ -f "$DATA/secondmates.md" ] && [ ! -L "$DATA/secondmates.md" ]; then
-    registry_home=$(secondmate_registry_field "$DATA/secondmates.md" "$id" home || true)
-  fi
-  if [ -n "$meta_home" ] && [ -n "$registry_home" ] && [ "$meta_home" != "$registry_home" ]; then
-    return 2
-  fi
-  home=${meta_home:-$registry_home}
-  [ -n "$home" ] || return 4
-  case "$home" in /*) ;; *) return 2 ;; esac
-  if [ ! -e "$home" ]; then
-    [ ! -L "$home" ] || return 2
-    [ "$include_absent" = include-absent ] && printf '%s\n' "$home"
-    return 3
-  fi
-  home=$(CDPATH='' cd -- "$home" 2>/dev/null && pwd -P) || return 2
-  [ -f "$home/.fm-secondmate-home" ] && [ ! -L "$home/.fm-secondmate-home" ] || return 2
-  marker=$(sed -n '1p' "$home/.fm-secondmate-home" 2>/dev/null)
-  [ "$marker" = "$id" ] || return 2
-  printf '%s\n' "$home"
-}
-
-# public_followup_route_is_remote <secondmate-id>: 0 when data/secondmates.md
-# holds a genuine REMOTE route for that id. The registry is the route authority
-# here for the same reason fm-on.sh and fm-send.sh treat it as one: a remote home
-# has no local path, so nothing on this disk can answer the question. Resolving
-# it live also means a registration written before this check (they all record an
-# empty work_home_path for a remote route) still resolves.
-public_followup_route_is_remote() {
-  local id=$1 remote
-  fm_pf_home_id_valid "secondmate:$id" || return 1
-  [ -f "$DATA/secondmates.md" ] && [ ! -L "$DATA/secondmates.md" ] || return 1
-  remote=$(secondmate_registry_field "$DATA/secondmates.md" "$id" remote 2>/dev/null) || return 1
-  [ "$remote" = 1 ]
-}
-
-# clear_public_followup_link_remote <secondmate-id> <work-id> <request-id>:
-# clear the bound legacy X link inside a REMOTE secondmate home over that route's transport,
-# because the link lives in the remote home's state and no local path reaches it.
-# fm-on.sh returns ssh's status unchanged, so 255 is the established "delivered
-# but completion unknown" status this codebase already reconciles rather than
-# reads as done or refused (bin/fm-on.sh, bin/fm-remote-readiness-lib.sh,
-# bin/fm-teardown.sh). It is passed through so a caller can say the remote never
-# confirmed instead of claiming the clear definitely failed. The remote clear
-# is guarded by the registration's Relay request identity and remains idempotent
-# when the target has no link, so a reconciling retry is safe.
-clear_public_followup_link_remote() {
-  local id=$1 work_id=$2 request_id=$3 rc=0
-  "$FM_ROOT/bin/fm-on.sh" "$id" fm-x-followup.sh --clear "$work_id" \
-    --expect-request "$request_id" </dev/null >/dev/null || rc=$?
-  [ "$rc" -ne 255 ] || return 255
-  [ "$rc" -eq 0 ] || return 1
-  return 0
-}
-
-# Returns 0 when the link is cleared, 255 when a remote home never confirmed the
-# clear (completion unknown), and 1 for any other refusal.
 clear_public_followup_link() {
-  local id=$1 work_home work_home_path work_id request_id home state rc
+  local id=$1 work_home work_id home state
   public_followup_registration_valid "$id" || return 1
   work_home=$(fm_pf_registry_get "$STATE" "$id" work_home)
   work_id=$(fm_pf_registry_get "$STATE" "$id" work_id)
-  request_id=$(fm_pf_registry_get "$STATE" "$id" request_id)
   [ -n "$work_home" ] && [ -n "$work_id" ] || return 1
   case "$work_home" in
     main)
       home=$FM_HOME
       state=$STATE
-      ;;
-    secondmate:*)
-      # A remote route is decided from the registry BEFORE any local path is
-      # consulted: the recorded remote home path is meaningful only on its own
-      # host, so a same-named local directory must never stand in for it.
-      if public_followup_route_is_remote "${work_home#secondmate:}"; then
-        clear_public_followup_link_remote "${work_home#secondmate:}" "$work_id" "$request_id"
-        return $?
-      fi
-      work_home_path=$(fm_pf_registry_get "$STATE" "$id" work_home_path)
-      case "$work_home_path" in /*) ;; *) return 1 ;; esac
-      case "$work_home_path" in *$'\n'*|*$'\r'*) return 1 ;; esac
-      rc=0
-      home=$(public_followup_secondmate_home "${work_home#secondmate:}" include-absent) || rc=$?
-      if [ "$rc" -eq 3 ]; then
-        [ "$home" = "$work_home_path" ] || return 1
-        [ ! -e "$work_home_path" ] && [ ! -L "$work_home_path" ] || return 1
-        return 0
-      fi
-      if [ "$rc" -eq 4 ]; then
-        [ ! -e "$work_home_path" ] && [ ! -L "$work_home_path" ] || return 1
-        return 0
-      fi
-      [ "$rc" -eq 0 ] || return 1
-      [ "$home" = "$work_home_path" ] || return 1
-      state="$home/state"
       ;;
     *) return 1 ;;
   esac
@@ -1098,7 +844,6 @@ public_followup_legacy_link_status() {
     [ -n "$work_home" ] && [ -n "$work_id" ] || return 2
     case "$work_home" in
       main) home=$FM_HOME ;;
-      secondmate:*) home=$(public_followup_secondmate_home "${work_home#secondmate:}") || return 2 ;;
       *) return 2 ;;
     esac
     meta="$home/state/$work_id.meta"
@@ -1430,8 +1175,8 @@ cmd_rechain() {
   fm_pf_slug_valid "$new_id" || die "unsafe obligation id: $new_id"
   fm_pf_slug_valid "$from" || die "unsafe source obligation id: $from"
   fm_pf_slug_valid "$work_id" || die "unsafe work id: $work_id"
-  fm_pf_home_id_valid "$work_home" \
-    || die "work home must be 'main' or 'secondmate:<stable-id>', got '$work_home'"
+  [ "$work_home" = main ] \
+    || die "work home must be 'main', got '$work_home'"
   case "$expected" in
     pr-merged|report-ready|local-main) ;;
     *) die "--expected must be pr-merged, report-ready, or local-main, got '$expected'" ;;

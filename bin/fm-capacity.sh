@@ -186,19 +186,13 @@ fi
 
 # --- lanes ------------------------------------------------------------------
 lanes=0
-secondmates=0
 pr_ready=0
 lane_ids=
 for meta in "$STATE"/*.meta; do
-  [ -f "$meta" ] || continue
-  if grep -qx 'kind=secondmate' "$meta" 2>/dev/null; then
-    secondmates=$((secondmates + 1))
-  else
-    lanes=$((lanes + 1))
-    lane_ids="$lane_ids$(basename "$meta" .meta)
+  lanes=$((lanes + 1))
+  lane_ids="$lane_ids$(basename "$meta" .meta)
 "
-    grep -q '^pr=..*' "$meta" 2>/dev/null && pr_ready=$((pr_ready + 1))
-  fi
+  grep -q '^pr=..*' "$meta" 2>/dev/null && pr_ready=$((pr_ready + 1))
 done
 
 # --- config/lane-capacity ---------------------------------------------------
@@ -574,15 +568,14 @@ heavy_queue_line() {
   echo "Heavy queue: ${depth:-unreadable}."
 }
 if [ "$mode" = report ]; then
-  printf 'capacity: free_lanes=%s reason=%s lanes=%s target=%s secondmates=%s load1=%s cores=%s mem_free_pct=%s disk_free_mb=%s\n' \
-    "$free_lanes" "$reason" "$lanes" "$target" "$secondmates" "$load1" "$cores" "$mem_free_pct" "$disk_free_mb"
+  printf 'capacity: free_lanes=%s reason=%s lanes=%s target=%s load1=%s cores=%s mem_free_pct=%s disk_free_mb=%s\n' \
+    "$free_lanes" "$reason" "$lanes" "$target" "$load1" "$cores" "$mem_free_pct" "$disk_free_mb"
 
   case "$target" in
     none) echo "Lanes: $lanes running, no target set (config/lane-capacity absent)." ;;
     invalid) echo "Lanes: $lanes running, target unreadable ($target_error)." ;;
     *) echo "Lanes: $lanes running of $target target, $free_lanes open." ;;
   esac
-  [ "$secondmates" -eq 0 ] || echo "Secondmates: $secondmates (hold no lane)."
   mem_text="${mem_free_pct}%"; [ "$mem_free_pct" != unknown ] || mem_text=unknown
   disk_text="$disk_free_mb MB"; [ "$disk_free_mb" != unknown ] || disk_text=unknown
   echo "Host: load $load1 on $cores cores, memory free $mem_text, disk free $disk_text."
@@ -602,11 +595,6 @@ fi
 
 # --- document (--json, --publish) -------------------------------------------
 home=main
-if [ -f "$FM_HOME/.fm-secondmate-home" ] && [ ! -L "$FM_HOME/.fm-secondmate-home" ]; then
-  IFS= read -r v < "$FM_HOME/.fm-secondmate-home" 2>/dev/null || v=
-  v=$(printf '%s' "$v" | tr -d '[:space:]')
-  case "$v" in ''|*[!A-Za-z0-9._-]*) ;; *) home=$v ;; esac
-fi
 machine=$first_host
 if [ -z "$machine" ]; then
   machine=$(hostname 2>/dev/null) || machine=
@@ -652,10 +640,7 @@ fi
 captain=not-configured
 if [ -n "$captain_idle" ]; then
   captain=unknown
-  if [ -f "$STATE/.afk-contract" ] &&
-    [ "$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" = away ]; then
-    captain=away
-  elif [ "$os" = Darwin ]; then
+  if [ "$os" = Darwin ]; then
     v=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/{print int($NF / 1000000000); exit}')
     if is_uint "$v"; then
       if [ "$v" -lt "$captain_idle" ]; then captain=present; else captain=idle; fi

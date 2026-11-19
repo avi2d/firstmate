@@ -1,82 +1,13 @@
 #!/usr/bin/env bash
 # Durable ownership of the authority under which a task's merge was accepted.
-#
-# The away-posture record (state/.afk-contract) is resolved only at the merge
-# gate. After a forge accepts the merge, bin/fm-pr-merge.sh persists that answer
-# as:
-#   state/<task-id>.merge-authority
-#   fm-merge-authority-v1
-#   <provider>
-#   <host>
-#   <path>
-#   <number>
-#   <authority>                 away | attended
-# While an away record exists every merge runs under away authority (the
-# record's presence is the whole mechanical fact; which merge the captain's
-# away words meant is the supervision session's reading); without one, or while
-# the record is quiet mode's (bin/fm-afk-contract.sh mode: the captain is
-# present), the merge is attended. The retired values yolo and away-grant are
-# still accepted when an existing record is read, so a merge persisted before
-# the words model landed is still consumed, but they are never written again.
-# The identity comes from the merge run's immutable canonical URL parse;
-# persistence revalidates the task's current pr= metadata under its metadata
-# and lifecycle locks and refuses a mismatch. The file is atomically published,
-# mode 0600, single-link, and on the state filesystem. A poll consumes it only
-# when all identity fields match its own validated snapshot. Missing, malformed,
-# or mismatched state means external; it is never resolved again from a later
-# away-posture record.
-#
-# Resolution authorizes nothing by itself. bin/fm-pr-merge.sh owns the merge
-# gate and persists only after a forge command succeeds, before releasing the
-# task lifecycle lock. After observing a landed merge, bin/fm-watch.sh acquires
-# that same lock, revalidates the poll, publishes its durable outcome, and
-# retires only the exact authority record it read. Teardown uses the same lock,
-# so it cannot interleave with that consumption transaction, and removes any
-# remaining record.
-#
-# Sourced by those scripts and by tests. No side effects on source beyond its
-# sourced libraries.
-
 _FM_MERGE_AUTHORITY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$_FM_MERGE_AUTHORITY_LIB_DIR/fm-pr-lib.sh"
-# shellcheck source=bin/fm-afk-contract.sh
-. "$_FM_MERGE_AUTHORITY_LIB_DIR/fm-afk-contract.sh"
 
 # shellcheck disable=SC2034 # Public results consumed by sourcing callers.
 FM_MERGE_AUTHORITY=
 # shellcheck disable=SC2034 # Public results consumed by sourcing callers.
-FM_MERGE_AUTHORITY_REASON=
-# shellcheck disable=SC2034 # Public results consumed by sourcing callers.
 FM_MERGE_AUTHORITY_RECORD_IDENTITY=
-
-fm_merge_authority_resolve() {  # <home> <state> <meta> <task-id>
-  local home=${1-} state=${2-} meta=${3-} id=${4-}
-  FM_MERGE_AUTHORITY=
-  FM_MERGE_AUTHORITY_REASON='invalid'
-  [ -n "$home" ] && [ -n "$state" ] && [ -n "$meta" ] && [ -n "$id" ] || return 1
-
-  if ! fm_afk_contract_present "$state"; then
-    FM_MERGE_AUTHORITY='attended'
-    FM_MERGE_AUTHORITY_REASON='attended'
-    return 0
-  fi
-  if ! FM_HOME="$home" FM_STATE_OVERRIDE="$state" \
-    "$_FM_MERGE_AUTHORITY_LIB_DIR/fm-afk-contract.sh" validate >/dev/null 2>&1; then
-    FM_MERGE_AUTHORITY_REASON='record-unreadable'
-    return 1
-  fi
-  if ! fm_afk_contract_away_present "$state"; then
-    FM_MERGE_AUTHORITY='attended'
-    FM_MERGE_AUTHORITY_REASON='attended'
-    return 0
-  fi
-  FM_MERGE_AUTHORITY='away'
-  # shellcheck disable=SC2034 # Public results consumed by sourcing callers.
-  FM_MERGE_AUTHORITY_REASON='away'
-  return 0
-}
-
 fm_merge_authority_record_matches() {  # <record> <device> <provider> <host> <path> <number>
   local record=$1 device=$2 expected_provider=$3 expected_host=$4 expected_path=$5 expected_number=$6
   local version provider host path number authority
@@ -93,7 +24,7 @@ fm_merge_authority_record_matches() {  # <record> <device> <provider> <host> <pa
     return 1
   fi
   exec 8<&-
-  case "$authority" in away|attended|yolo|away-grant) ;; *) return 1 ;; esac
+  case "$authority" in attended|yolo) ;; *) return 1 ;; esac
   [ "$version" = fm-merge-authority-v1 ] \
     && [ "$provider" = "$expected_provider" ] \
     && [ "$host" = "$expected_host" ] \
@@ -106,7 +37,7 @@ fm_merge_authority_persist() {  # <state> <task-id> <meta> <provider> <host> <pa
   local state=$1 id=$2 meta=$3 provider=$4 host=$5 path=$6 number=$7 authority=$8
   local record tmp='' state_device lock status=0
   fm_pr_task_id_valid "$id" || return 1
-  case "$authority" in away|attended) ;; *) return 1 ;; esac
+  case "$authority" in attended) ;; *) return 1 ;; esac
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
   state_device=$(fm_pr_file_device "$state") || return 1
   fm_pr_metadata_identity_parse "$meta" || return 1

@@ -34,8 +34,6 @@ PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-project-capacity-lib.sh
@@ -144,9 +142,7 @@ while IFS="$(printf '\t')" read -r id kind repo; do
     *"|$repo=1|"*) admit=1 ;;
     *"|$repo=0|"*) admit=0 ;;
     *)
-      if [ "$kind" = secondmate ]; then
-        admit=1
-      elif repo_admits "$repo"; then
+      if repo_admits "$repo"; then
         admit=1
       else
         admit=0

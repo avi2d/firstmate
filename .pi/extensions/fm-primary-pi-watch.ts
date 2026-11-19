@@ -24,16 +24,6 @@
 // text. A no-prompt custom trigger cannot consume it, even with equal content.
 // Either user boundary finishes the pending record, and a still-unconsumed
 // record rides the replacement handoff.
-//
-// Postures (stated once here; docs/pi-supervision-branch.md "Postures"):
-// the away-posture record state/.afk-contract is read as a file at every
-// routing decision, never inferred from chat. While it exists every
-// actionable row is offered to the branch as eligible and main is offered
-// nothing the branch can take; a wake the branch declines or cannot take
-// (a broken branch, an unresolvable or corrupt queue) and every
-// watcher-failure alarm still reach main exactly as attended, because only
-// main can repair supervision itself. Nothing else about delivery or
-// consumption changes.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -44,7 +34,6 @@ import { Box, Container, Text, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { registerFirstmateTool } from "./lib/fm-native-contract.ts";
 import {
-  afkPostureRecordPresent,
   branchOfferForWake,
   createBranchDispatchOffer,
   FM_BRANCH_DISPATCH_EVENT,
@@ -793,8 +782,8 @@ export default function (pi: ExtensionAPI) {
   function offerWakeToBranch(message: string): Promise<void> | null {
     // lib/fm-branch-dispatch.ts owns the offer rule for one close, shared with
     // the supervision host off Pi (bin/fm-branch-dispatch.mjs offer).
-    const { scope, heartbeat, eligible, awayOnly } = branchOfferForWake(state, message, afkPostureRecordPresent(state));
-    const offer = createBranchDispatchOffer(message, scope.projects, heartbeat, eligible, awayOnly);
+    const { scope, heartbeat, eligible } = branchOfferForWake(state, message);
+    const offer = createBranchDispatchOffer(message, scope.projects, heartbeat, eligible);
     pi.events?.emit?.(FM_BRANCH_DISPATCH_EVENT, offer);
     return offer.accepted ? offer.settlement : null;
   }

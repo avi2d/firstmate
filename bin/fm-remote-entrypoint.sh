@@ -149,7 +149,7 @@ elif [ "$COMMAND" = fm-remote-doctor.sh ]; then
   [ "$ACTUAL_DOCTOR_SHA256" = "$DOCTOR_SHA256" ] \
     || die "required tool git is unavailable and the doctor does not match the trusted bootstrap identity"
 else
-  die "required tool git does not resolve on the remote operator PATH; install git there or put a wrapper for it in ~/.local/bin using the recipe in docs/remote-secondmates.md"
+  die "required tool git does not resolve on the remote operator PATH; install git there or put a wrapper for it in ~/.local/bin"
 fi
 if [ "$COMMAND" = fm-remote-doctor.sh ]; then
   fm_remote_job_build_child_path "$ROOT" >/dev/null

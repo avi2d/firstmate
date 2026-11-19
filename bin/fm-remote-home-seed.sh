@@ -1,24 +1,6 @@
 #!/usr/bin/env bash
-# Register and provision a whole secondmate home on an SSH-reachable host.
-#
-# Usage:
-#   fm-remote-home-seed.sh <id> <ssh-alias> <remote-root> <remote-home> {<project>[=<origin-url>]...|--no-projects}
-#
-# The SSH alias must already reach a host whose non-interactive PATH exposes the
-# fixed fm-remote-entrypoint.sh from <remote-root>. The command records the
-# remote host dimension in data/secondmates.md, gates the host on
-# fm-remote-doctor.sh readiness before touching it, sends a bounded provisioning
-# manifest through fm-on.sh, and lets the remote host clone its own Firstmate
-# home and project origins. No project tree or secret environment is copied.
-#
-# Each project needs an origin the remote account can clone. Firstmate resolves
-# that origin and names it as <project>=<origin-url>, so seeding never requires
-# a clone of that project in this home; a bare <project> is accepted only when
-# this home already has projects/<project>, whose origin is then read instead.
-# bin/fm-project-origin-lib.sh owns which URLs are accepted, and this home's
-# data/projects.md still owns the project's registered delivery mode, so an
-# unregistered or local-only project, or one whose registry entry
-# bin/fm-project-mode.sh refuses, is refused rather than provisioned.
+# Usage: fm-remote-home-seed.sh --exec [--summary TEXT] [--scope TEXT] [--session NAME]
+#   <route> <ssh-alias> <remote-root> <remote-home> {<project>[=<origin-url>]...|--no-projects}
 # Seeding writes nothing under projects/ and needs no fleet sync first.
 #
 # Known provisioning failure rolls the registry back. SSH status 255 preserves
@@ -31,13 +13,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-REG="$DATA/secondmates.md"
+REG="$DATA/remote-homes.md"
 MAX_MANIFEST_BYTES=1048576
 
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
-# shellcheck source=bin/fm-secondmate-charter-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-charter-lib.sh"
+# shellcheck source=bin/fm-remote-registry-lib.sh
+. "$SCRIPT_DIR/fm-remote-registry-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
@@ -46,9 +26,22 @@ MAX_MANIFEST_BYTES=1048576
 . "$SCRIPT_DIR/fm-project-origin-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; printf '%s\n' 'Execution-home form:' '  fm-remote-home-seed.sh --exec [--summary TEXT] [--scope TEXT] [--session NAME] <id> <ssh-alias> <remote-root> <remote-home> {<project>[=<origin-url>]...|--no-projects}'; exit 2; }
+usage() { sed -n '2,3p' "$0" | sed 's/^# //'; exit 2; }
 encode() { base64 | tr -d '\n'; }
 safe_id() { case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
+
+normalize_registry_text() {
+  awk '
+    {
+      gsub(/[;()]/, " ")
+      gsub(/[[:space:]]+/, " ")
+      sub(/^ /, "")
+      sub(/ $/, "")
+      if ($0 != "") out = out (out == "" ? "" : " ") $0
+    }
+    END { print out }
+  '
+}
 
 TMP=
 REGISTRY_LOCK=
@@ -62,40 +55,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-EXEC_HOME=0
 EXEC_SUMMARY=
 EXEC_SCOPE=
 EXEC_SESSION=fm-remote
-if [ "${1:-}" = --exec ]; then
-  EXEC_HOME=1
-  shift
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --summary|--scope|--session)
-        [ "$#" -ge 2 ] || die "$1 needs a value"
-        case "$1" in
-          --summary) EXEC_SUMMARY=$2 ;;
-          --scope) EXEC_SCOPE=$2 ;;
-          --session) EXEC_SESSION=$2 ;;
-        esac
-        shift 2
-        ;;
-      --) shift; break ;;
-      -*) die "unknown execution-home seed option: $1" ;;
-      *) break ;;
-    esac
-  done
-fi
+[ "${1:-}" = --exec ] || usage
+shift
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --summary|--scope|--session)
+      [ "$#" -ge 2 ] || die "$1 needs a value"
+      case "$1" in
+        --summary) EXEC_SUMMARY=$2 ;;
+        --scope) EXEC_SCOPE=$2 ;;
+        --session) EXEC_SESSION=$2 ;;
+      esac
+      shift 2
+      ;;
+    --) shift; break ;;
+    -*) die "unknown execution-home seed option: $1" ;;
+    *) break ;;
+  esac
+done
 [ "$#" -ge 5 ] || usage
 ID=$1
 HOST=$2
 REMOTE_ROOT=$3
 REMOTE_HOME=$4
 shift 4
-safe_id "$ID" || die "invalid secondmate id: $ID"
-if [ "$EXEC_HOME" -eq 1 ]; then
-  case "$EXEC_SESSION" in ''|*[!A-Za-z0-9._-]*) die "invalid Herdr session name: $EXEC_SESSION" ;; esac
-fi
+safe_id "$ID" || die "invalid route id: $ID"
+case "$EXEC_SESSION" in ''|*[!A-Za-z0-9._-]*) die "invalid Herdr session name: $EXEC_SESSION" ;; esac
 case "$HOST" in ''|-*|*[!A-Za-z0-9._-]*) die "invalid SSH config alias: $HOST" ;; esac
 for path in "$REMOTE_ROOT" "$REMOTE_HOME"; do
   case "$path" in /*) ;; *) die "remote root and home must be absolute paths" ;; esac
@@ -132,85 +120,34 @@ else
   [ "${#PROJECT_NAMES[@]}" -gt 0 ] || die "at least one project or --no-projects is required"
 fi
 
-if [ "$EXEC_HOME" -eq 1 ]; then
-  REG="$DATA/remote-homes.md"
-  OTHER_REG="$DATA/secondmates.md"
-else
-  OTHER_REG="$DATA/remote-homes.md"
-fi
 mkdir -p "$STATE" || die "cannot create parent state directory"
-REGISTRY_LOCK=$(secondmate_registry_lock_path "$STATE")
-fm_lock_acquire_wait "$REGISTRY_LOCK" || die "cannot lock the secondmate registry"
+REGISTRY_LOCK=$(fm_remote_registry_lock_path "$STATE")
+fm_lock_acquire_wait "$REGISTRY_LOCK" || die "cannot lock the execution-home registry"
 REGISTRY_LOCK_HELD=1
 
-if secondmate_registry_line_for_id "$OTHER_REG" "$ID" 2>/dev/null; then
-  die "$ID is already registered in $OTHER_REG"
-fi
 if [ -e "$REG" ] || [ -L "$REG" ]; then
-  [ -f "$REG" ] && [ ! -L "$REG" ] || die "secondmate registry is unavailable or unsafe: $REG"
-  secondmate_registry_validate_bindings "$REG" secondmate_registry_path_key \
-    || die "$SECONDMATE_REGISTRY_ERROR"
-  if secondmate_registry_line_for_id "$REG" "$ID"; then
-    [ "$SECONDMATE_REGISTRY_REMOTE" -eq 1 ] \
-      && [ "$SECONDMATE_REGISTRY_HOST" = "$HOST" ] \
-      && [ "$SECONDMATE_REGISTRY_ROOT" = "$REMOTE_ROOT" ] \
-      && [ "$SECONDMATE_REGISTRY_HOME" = "$REMOTE_HOME" ] \
-      || die "secondmate $ID is already registered to a different local or remote home"
+  [ -f "$REG" ] && [ ! -L "$REG" ] || die "execution-home registry is unavailable or unsafe: $REG"
+  fm_remote_registry_validate_bindings "$REG" \
+    || die "$(fm_remote_registry_error)"
+  if fm_remote_registry_line_for_id "$REG" "$ID"; then
+    [ "$FM_REMOTE_REGISTRY_HOST" = "$HOST" ] \
+      && [ "$FM_REMOTE_REGISTRY_ROOT" = "$REMOTE_ROOT" ] \
+      && [ "$FM_REMOTE_REGISTRY_HOME" = "$REMOTE_HOME" ] \
+      || die "route $ID is already registered to a different execution home"
   fi
 fi
 
 mkdir -p "$DATA"
-BRIEF="$DATA/$ID/brief.md"
-BRIEF_CREATED=0
-if [ "$EXEC_HOME" -eq 0 ]; then
-  if [ ! -f "$BRIEF" ]; then
-    [ -n "${FM_SECONDMATE_CHARTER:-}" ] || die "no filled charter at $BRIEF; set FM_SECONDMATE_CHARTER or scaffold one first"
-    if [ "$NO_PROJECTS" -eq 1 ]; then
-      "$SCRIPT_DIR/fm-brief.sh" "$ID" --secondmate --no-projects >/dev/null
-    else
-      "$SCRIPT_DIR/fm-brief.sh" "$ID" --secondmate "${PROJECT_NAMES[@]}" >/dev/null
-    fi
-    BRIEF_CREATED=1
-  fi
-  if grep -F '{TASK}' "$BRIEF" >/dev/null 2>&1; then
-    [ "$BRIEF_CREATED" -eq 0 ] || rm -f -- "$BRIEF"
-    die "secondmate charter still contains {TASK}: $BRIEF"
-  fi
-  SUMMARY=$(registry_summary_for_brief "$BRIEF")
-  SCOPE=$(registry_scope_for_brief "$BRIEF")
-  [ -n "$SUMMARY" ] && [ -n "$SCOPE" ] || die "charter summary and routing scope must be nonempty"
-else
-  [ -n "$EXEC_SUMMARY" ] || EXEC_SUMMARY="Headless execution home $ID on $HOST."
-  [ -n "$EXEC_SCOPE" ] || EXEC_SCOPE="Headless execution of remote worker tasks."
-  SUMMARY=$(printf '%s' "$EXEC_SUMMARY" | normalize_registry_text)
-  SCOPE=$(printf '%s' "$EXEC_SCOPE" | normalize_registry_text)
-  [ -n "$SUMMARY" ] && [ -n "$SCOPE" ] || die "execution-home summary and routing scope must be nonempty"
-fi
+[ -n "$EXEC_SUMMARY" ] || EXEC_SUMMARY="Headless execution home $ID on $HOST."
+[ -n "$EXEC_SCOPE" ] || EXEC_SCOPE="Headless execution of remote worker tasks."
+SUMMARY=$(printf '%s' "$EXEC_SUMMARY" | normalize_registry_text)
+SCOPE=$(printf '%s' "$EXEC_SCOPE" | normalize_registry_text)
+[ -n "$SUMMARY" ] && [ -n "$SCOPE" ] || die "execution-home summary and routing scope must be nonempty"
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-home-seed.XXXXXX") || die "cannot create seed staging directory"
 REG_EXISTED=0
 [ -f "$REG" ] && { cp "$REG" "$TMP/registry.before"; REG_EXISTED=1; }
 
-# Keep the parent charter as its durable source, but publish a remote copy whose
-# status path is the remote append-only relay log and whose steering-inbox path
-# is the host-local parent-route inbox the remote control plane writes to,
-# rather than local Mac paths. The two parents differ only by suffix, so the
-# two whole-string rewrites are order-independent and every mention - bare
-# path, /*.msg listing, and handled/ acknowledgement - lands host-local.
-# Each rewrite stays its own plain assignment: on stock macOS bash a quoted
-# substitution nested inside a double-quoted argument leaks literal quotes
-# into the replacement text.
-if [ "$EXEC_HOME" -eq 0 ]; then
-  PARENT_STATUS="$STATE/$ID.status"
-  REMOTE_STATUS="$REMOTE_HOME/state/parent-replies.status"
-  PARENT_INBOX="$STATE/$ID.inbox"
-  REMOTE_INBOX="$REMOTE_HOME/state/parent-route/$ID.inbox"
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=${line//"$PARENT_STATUS"/"$REMOTE_STATUS"}
-    line=${line//"$PARENT_INBOX"/"$REMOTE_INBOX"}
-    printf '%s\n' "$line"
-  done < "$BRIEF" > "$TMP/charter.remote"
-fi
 
 PROJECTS_CSV=
 : > "$TMP/project.records"
@@ -248,27 +185,10 @@ EOF
   PROJECTS_CSV="${PROJECTS_CSV}${PROJECTS_CSV:+, }$project"
 done
 
-if [ "$EXEC_HOME" -eq 1 ]; then
-  PROVISION_SCHEMA=fm-remote-exec-home-provision.v1
-else
-  PROVISION_SCHEMA=fm-remote-home-provision.v1
-fi
 {
-  printf 'schema=%s\n' "$PROVISION_SCHEMA"
+  printf 'schema=fm-remote-exec-home-provision.v1\n'
   printf 'id_b64=%s\n' "$(printf '%s' "$ID" | encode)"
-  if [ "$EXEC_HOME" -eq 0 ]; then
-    printf 'charter_b64=%s\n' "$(encode < "$TMP/charter.remote")"
-  fi
-  if [ "$EXEC_HOME" -eq 1 ]; then
-    printf 'session_b64=%s\n' "$(printf '%s' "$EXEC_SESSION" | encode)"
-  fi
-  # The SSH alias reaching this host from the parent's own config, carried
-  # only so the remote-provisioned home can record durably that its parent
-  # lives on another machine (bin/fm-teardown.sh's cleanup gate). It is
-  # diagnostic identity, never a route the remote host could use to reach
-  # back; the parent's real filesystem path is never sent, since it names
-  # nothing on the remote filesystem.
-  printf 'parent_host_b64=%s\n' "$(printf '%s' "$HOST" | encode)"
+  printf 'session_b64=%s\n' "$(printf '%s' "$EXEC_SESSION" | encode)"
   printf 'project_count=%s\n' "${#PROJECT_NAMES[@]}"
   cat "$TMP/project.records"
 } > "$TMP/manifest"
@@ -277,24 +197,18 @@ MANIFEST_BYTES=$(LC_ALL=C wc -c < "$TMP/manifest" | tr -d ' ')
   || die "remote provisioning manifest exceeds the $MAX_MANIFEST_BYTES-byte bound"
 
 TODAY=$(date +%F)
-REG_TMP="$TMP/secondmates.next"
+REG_TMP="$TMP/remote-homes.next"
 if [ -f "$REG" ]; then grep -vE "^- $ID( |$)" "$REG" > "$REG_TMP" || true; else : > "$REG_TMP"; fi
-if [ "$EXEC_HOME" -eq 1 ]; then
-  printf -- '- %s - %s (host: %s; root: %s; home: %s; session: %s; scope: %s; projects: %s; added %s)\n' \
-    "$ID" "$SUMMARY" "$HOST" "$REMOTE_ROOT" "$REMOTE_HOME" "$EXEC_SESSION" "$SCOPE" "$PROJECTS_CSV" "$TODAY" >> "$REG_TMP"
-else
-  printf -- '- %s - %s (host: %s; root: %s; home: %s; scope: %s; projects: %s; added %s)\n' \
-    "$ID" "$SUMMARY" "$HOST" "$REMOTE_ROOT" "$REMOTE_HOME" "$SCOPE" "$PROJECTS_CSV" "$TODAY" >> "$REG_TMP"
-fi
+printf -- '- %s - %s (host: %s; root: %s; home: %s; session: %s; scope: %s; projects: %s; added %s)\n' \
+  "$ID" "$SUMMARY" "$HOST" "$REMOTE_ROOT" "$REMOTE_HOME" "$EXEC_SESSION" "$SCOPE" "$PROJECTS_CSV" "$TODAY" >> "$REG_TMP"
 mv -f -- "$REG_TMP" "$REG"
-if ! secondmate_registry_validate_bindings "$REG" secondmate_registry_path_key "$ID" "$REMOTE_HOME"; then
+if ! fm_remote_registry_validate_bindings "$REG" "$ID" "$REMOTE_HOME"; then
   if [ "$REG_EXISTED" -eq 1 ]; then cp "$TMP/registry.before" "$REG"; else rm -f -- "$REG"; fi
-  die "$SECONDMATE_REGISTRY_ERROR"
+  die "$(fm_remote_registry_error)"
 fi
 
-restore_registry_and_brief() {
+restore_registry() {
   if [ "$REG_EXISTED" -eq 1 ]; then cp "$TMP/registry.before" "$REG"; else rm -f -- "$REG"; fi
-  [ "$BRIEF_CREATED" -eq 0 ] || rm -f -- "$BRIEF"
 }
 
 # Preflight and, where it can, repair the remote runtime before anything is
@@ -306,14 +220,11 @@ PREFLIGHT_RC=$?
 set -e
 if [ "$PREFLIGHT_RC" -ne 0 ]; then
   if [ "$PREFLIGHT_RC" -ne 255 ]; then
-    restore_registry_and_brief
+    restore_registry
   fi
   [ -z "$FM_REMOTE_READINESS_OUT" ] || printf '%s\n' "$FM_REMOTE_READINESS_OUT" >&2
   if [ "$PREFLIGHT_RC" -eq 255 ]; then
-    if [ "$EXEC_HOME" -eq 1 ]; then
-      die "remote readiness completion is unknown; route preserved for same-host reconciliation"
-    fi
-    die "remote readiness completion is unknown; route and brief preserved for same-host reconciliation"
+    die "remote readiness completion is unknown; route preserved for same-host reconciliation"
   fi
   die "remote runtime preflight failed; nothing was provisioned. Close the gaps listed above, or update the remote code root if it predates the current fm-remote-doctor.sh"
 fi
@@ -324,7 +235,7 @@ PROVISION_RC=$?
 set -e
 if [ "$PROVISION_RC" -ne 0 ]; then
   if [ "$PROVISION_RC" -ne 255 ]; then
-    restore_registry_and_brief
+    restore_registry
   fi
   [ -z "$PROVISION_OUT" ] || printf '%s\n' "$PROVISION_OUT" >&2
   if [ "$PROVISION_RC" -eq 255 ]; then

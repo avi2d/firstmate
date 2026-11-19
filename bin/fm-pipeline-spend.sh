@@ -114,7 +114,6 @@ META="$STATE/$ID.meta"
 meta_value() {  # <key>
   grep "^$1=" "$META" 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
-[ "$(meta_value kind)" != secondmate ] || fail "$ID is a secondmate, not a task"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required to read no-mistakes' state database"
 
 WT=$(meta_value worktree)

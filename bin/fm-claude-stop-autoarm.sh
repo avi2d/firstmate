@@ -263,8 +263,6 @@ if ! fm_session_lock_owned_by_self "$STATE"; then
   RECOVER_SESSION_LOCK=1
 fi
 
-# --- AFK: the away daemon owns the watcher and triage; never rewake ----------
-[ -e "$STATE/.afk" ] && exit 0
 
 # --- need: whatever bin/fm-supervision-lib.sh counts as supervision need ------
 need_supervision() {
@@ -355,9 +353,7 @@ stopfailure_pace() {
   [ "$remaining" -gt 0 ] || return 0
   sleep "$remaining" &
   wait "$!" 2>/dev/null || true
-  if [ -e "$STATE/.afk" ]; then
-    autoarm_record afk
-  elif ! need_supervision; then
+  if ! need_supervision; then
     autoarm_record clean
   else
     return 0
@@ -407,8 +403,7 @@ autoarm_commit_attended_alarm() {
     && [ "$FM_AUTOARM_GEN" = "$MY_GEN" ] \
     && [ "$FM_AUTOARM_OWNER" = "${BASHPID:-$$}" ] \
     && [ -e "$FAILURE_NOTICE" ] \
-    && [ ! -e "$FAILURE_ALARM" ] \
-    && [ ! -e "$STATE/.afk" ]; then
+    && [ ! -e "$FAILURE_ALARM" ]; then
     if fm_watcher_healthy "$STATE" "$SCRIPT_DIR/fm-watch.sh" "$GRACE" "$FM_HOME"; then
       rc=2
     else
@@ -646,13 +641,6 @@ while [ "$attempt" -lt "$AUTOARM_ATTEMPTS" ]; do
     run_arm "$OUT"
   fi
 
-  # AFK may have appeared mid-cycle: the daemon owns triage now, so suppress
-  # every subsequent classification and handoff.
-  if [ -e "$STATE/.afk" ]; then
-    autoarm_record afk
-    [ -z "$OUT" ] || rm -f "$OUT" 2>/dev/null || true
-    exit 0
-  fi
 
   ACTIONABLE=0
   if [ -n "$OUT" ]; then
@@ -741,10 +729,6 @@ if [ "$ACTIONABLE" -eq 1 ]; then
       [ -n "$OUT" ] && awk '/^supervision-host:/ { print; next } /^(signal:|stale:|check:|heartbeat)/ && shown++ < 8' "$OUT" 2>/dev/null
     else
       [ -n "$OUT" ] && grep -E '^(signal:|stale:|check:|heartbeat)' "$OUT" 2>/dev/null | head -8
-    fi
-    if [ "$HOST_MODE" -eq 1 ] && [ -e "$STATE/.afk-contract" ] \
-      && [ "$(FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-afk-contract.sh" mode 2>/dev/null)" != quiet ]; then
-      printf 'This wake comes from automatic supervision under the away-posture record, not from the captain: it is not a return, so handle it under the away posture.\n'
     fi
     [ -z "$SUCCESSOR_FAILURE" ] || printf '%s\n' "$SUCCESSOR_FAILURE"
     printf 'Run bin/fm-wake-drain.sh first, handle the wake, then run its exact WAKE_ACK_REQUIRED --ack-through command. Until that post-handling acknowledgement, interruption leaves the wake durable for idempotent re-handling. This Stop hook owns watcher continuity: when the handling turn ends, the next needed cycle arms automatically - do NOT run bin/fm-watch-arm.sh after an ordinary wake.\n'

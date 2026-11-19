@@ -64,8 +64,3 @@ Never work around a refusal by pointing the task at a second checkout, fork, or 
 
 `/updatefirstmate` and every guarded sync pull **from** upstream, which is consumption, not publication, and stays allowed for every role.
 The boundary covers only traffic that writes to the upstream repository.
-
-## Secondmates
-
-Follow the [role inheritance and receipt limits](../../../docs/configuration.md#firstmate-role-configfirstmate-role); supported propagation must never grant a child a role the primary does not resolve.
-Deliberately forged local records are outside this accidental-publication safeguard, not a provenance guarantee.

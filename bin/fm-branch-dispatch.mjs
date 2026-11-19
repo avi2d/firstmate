@@ -9,34 +9,7 @@
 // The Pi branch extension and this entry therefore apply identical rules.
 //
 // Usage:
-//   fm-branch-dispatch.mjs scope [--heartbeat] [--afk]
-//     Print scopeForUnreadWake's verdict for this home's wake queue, one
-//     key=value line each:
-//       status=safe|empty|unsafe
-//       corrupted=0|1   1 only when the scan itself is untrustworthy
-//       rows=<seq> ...  the exact sequence numbers the branch may claim
-//       tasks=<id> ...  the task ids those rows resolve to
-//       unscoped=0|1    1 when the claim names no task (a heartbeat review, or
-//                       a claimed heartbeat or check row), so a report on any
-//                       task or on fleet is in scope
-//     --heartbeat marks a heartbeat wake; --afk applies the away-posture
-//     collapse (docs/pi-supervision-branch.md "Postures").
-//   fm-branch-dispatch.mjs offer [--afk]
-//     Read one actionable close's reason line from stdin and print
-//     branchOfferForWake's verdict: eligible=0|1 (whether the branch may take
-//     this close at all, trigger class included), then the same five lines
-//     `scope` prints for the scan it judged. --afk judges it under the away
-//     posture.
-//   fm-branch-dispatch.mjs wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]
-//     Read the watcher's wake reason from stdin and print the branch wake
-//     prompt naming <surface> as the report surface. --mirror-file puts the
-//     host's dialog-mirror feed (bin/fm-host-mirror.sh) at its head; an empty
-//     feed adds nothing, and a feed that cannot be read exits 3 with no
-//     prompt, so the host hands the wake to main. --away appends the away tail with the
-//     record read-back from <path>; a missing or empty read-back prints the
-//     tail's fixed unavailable notice instead.
-//
-// The state directory is FM_STATE_OVERRIDE, else $FM_HOME/state, else the
+// Usage: fm-branch-dispatch.mjs scope [--heartbeat] | offer | wake-prompt --report <surface> [--mirror-file <path>]
 // repository's own state/. Exit 0 on success, 2 on invalid use, 3 when a
 // wake-prompt --mirror-file cannot be read.
 
@@ -49,7 +22,7 @@ const dispatch = await import(pathToFileURL(path.join(root, ".pi", "extensions",
 
 function usage() {
   process.stderr.write(
-    "usage: fm-branch-dispatch.mjs scope [--heartbeat] [--afk] | offer [--afk] | wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]\n",
+    "usage: fm-branch-dispatch.mjs scope [--heartbeat] | offer | wake-prompt --report <surface> [--mirror-file <path>]\n",
   );
   process.exit(2);
 }
@@ -61,7 +34,7 @@ function stateDir() {
 }
 
 function scopeLines(scope, heartbeat) {
-  const unscoped = heartbeat || scope.checkSeqs.length > 0 || scope.heartbeatSeqs.length > 0;
+  const unscoped = heartbeat;
   return (
     `status=${scope.status}\n` +
     `corrupted=${scope.corrupted ? 1 : 0}\n` +
@@ -71,45 +44,26 @@ function scopeLines(scope, heartbeat) {
   );
 }
 
-function readOptional(file) {
-  if (!file) return "";
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
-}
-
 const [command, ...args] = process.argv.slice(2);
 
 if (command === "scope") {
   let heartbeat = false;
-  let afk = false;
   for (const arg of args) {
     if (arg === "--heartbeat") heartbeat = true;
-    else if (arg === "--afk") afk = true;
     else usage();
   }
-  process.stdout.write(scopeLines(dispatch.scopeForUnreadWake(stateDir(), heartbeat, afk), heartbeat));
+  process.stdout.write(scopeLines(dispatch.scopeForUnreadWake(stateDir(), heartbeat), heartbeat));
 } else if (command === "offer") {
-  let afk = false;
-  for (const arg of args) {
-    if (arg === "--afk") afk = true;
-    else usage();
-  }
+  if (args.length !== 0) usage();
   const message = readFileSync(0, "utf8").split(/\r?\n/)[0] ?? "";
-  const verdict = dispatch.branchOfferForWake(stateDir(), message, afk, true);
+  const verdict = dispatch.branchOfferForWake(stateDir(), message, true);
   process.stdout.write(`eligible=${verdict.eligible ? 1 : 0}\n${scopeLines(verdict.scope, verdict.heartbeat)}`);
 } else if (command === "wake-prompt") {
   let report = "";
-  let away = false;
-  let readbackFile = "";
   let mirrorFile = "";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--report" && index + 1 < args.length) report = args[++index];
-    else if (arg === "--away") away = true;
-    else if (arg === "--readback-file" && index + 1 < args.length) readbackFile = args[++index];
     else if (arg === "--mirror-file" && index + 1 < args.length) mirrorFile = args[++index];
     else usage();
   }
@@ -124,8 +78,7 @@ if (command === "scope") {
       process.exit(3);
     }
   }
-  const tail = away ? dispatch.awayPostureTailFor(readOptional(readbackFile)) : "";
-  process.stdout.write(`${dispatch.branchWakePrompt(message, report, tail, mirror)}\n`);
+  process.stdout.write(`${dispatch.branchWakePrompt(message, report, mirror)}\n`);
 } else {
   usage();
 }

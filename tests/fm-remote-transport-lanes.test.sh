@@ -62,14 +62,14 @@ trap cleanup_lane_fixture EXIT
 
 cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-mkdir-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" \
   "$ROOT/bin/fm-remote-entrypoint.sh" "$ROOT/bin/fm-remote-delta-read.sh" \
-  "$ROOT/bin/fm-remote-secondmate-control.sh" "$ROOT/bin/fm-backend.sh" \
-  "$ROOT/bin/fm-pending-reply-lib.sh" "$ROOT/bin/fm-task-inbox-lib.sh" \
+  "$ROOT/bin/fm-backend.sh" \
+ "$ROOT/bin/fm-task-inbox-lib.sh" \
   "$ROOT/bin/fm-wake-lib.sh" "$ROOT/bin/fm-path-lib.sh" "$ROOT/bin/fm-marker-lib.sh" \
   "$ROOT/bin/fm-operational-input.sh" "$ROOT/bin/fm-tmux-lib.sh" \
   "$ROOT/bin/fm-hermes-process-lib.sh" \
   "$ROOT/bin/fm-composer-lib.sh" "$ROOT/bin/fm-cursor-lib.sh" \
   "$ROOT/bin/fm-classify-lib.sh" "$ROOT/bin/fm-timeout-lib.sh" \
-  "$ROOT/bin/fm-ff-lib.sh" "$ROOT/bin/fm-secondmate-registry-lib.sh" \
+  "$ROOT/bin/fm-ff-lib.sh" "$ROOT/bin/fm-remote-registry-lib.sh" \
   "$REMOTE_ROOT/bin/"
 mkdir -p "$REMOTE_ROOT/bin/backends"
 cp "$ROOT/bin/backends/herdr.sh" "$REMOTE_ROOT/bin/backends/herdr.sh"
@@ -105,7 +105,7 @@ git -C "$REMOTE_ROOT" add AGENTS.md bin
 git -C "$REMOTE_ROOT" commit -qm 'lane transport fixture'
 
 # ios routes to home A, build routes to home B.
-cat > "$LOCAL_HOME/data/secondmates.md" <<EOF
+cat > "$LOCAL_HOME/data/remote-homes.md" <<EOF
 - ios - iOS delivery (host: remote-mac; root: $REMOTE_ROOT; home: $HOME_A; scope: iOS work; projects: alpha; added 2026-08-02)
 - build - build delivery (host: remote-mac; root: $REMOTE_ROOT; home: $HOME_B; scope: build work; projects: beta; added 2026-08-02)
 EOF
@@ -387,19 +387,15 @@ pass "bounded reads after a cancellation meet their own budget with no convoy"
 
 # T6: a non-payload call with an OPEN stdin pipe completes instead of wedging
 # staging on a stdin capture that never reaches EOF.
-printf 'rsm\n' > "$HOME_A/.fm-secondmate-home"
-printf '# fixture secondmate home\n' > "$HOME_A/AGENTS.md"
-mkdir -p "$HOME_A/state" "$HOME_A/bin"
 rc=0
 fm_run_timed 20 env FM_HOME="$LOCAL_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
   FM_SSH_BIN="$FAKEBIN/fake-ssh" \
   FM_FAKE_REMOTE_ENTRYPOINT="$REMOTE_ROOT/bin/fm-remote-entrypoint.sh" \
   FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
-  "$ROOT/bin/fm-on.sh" ios fm-remote-secondmate-control.sh state rsm \
+  "$ROOT/bin/fm-on.sh" ios fm-touch-job.sh "$TMP_ROOT/open-stdin-complete" \
   < <(sleep 30) > "$TMP_ROOT/state-out" 2> "$TMP_ROOT/state-err" || rc=$?
-[ "$rc" -ne 124 ] || fail "a control-state call with an open stdin pipe wedged staging"
-assert_grep 'missing' "$TMP_ROOT/state-out" \
-  "the control-state call did not complete through the worker: $(cat "$TMP_ROOT/state-err")"
+[ "$rc" -eq 0 ] || fail "a non-payload call with an open stdin pipe failed with $rc"
+assert_present "$TMP_ROOT/open-stdin-complete" "the open stdin call did not reach the worker"
 pass "an open caller stdin no longer wedges a non-payload remote command"
 
 # A live explicit stdin stage can exceed the litter age while waiting for EOF;

@@ -14,8 +14,8 @@ DOCUMENT_LOCAL_FAILURE=2
 
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
-# shellcheck source=bin/fm-secondmate-registry-lib.sh
-. "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
+# shellcheck source=bin/fm-remote-registry-lib.sh
+. "$SCRIPT_DIR/fm-remote-registry-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-backend.sh
@@ -73,9 +73,7 @@ validate_task() {
 }
 
 route_is_remote() {
-  local route=$1 remote
-  remote=$(secondmate_registry_field "$DATA/remote-homes.md" "$route" remote 2>/dev/null || true)
-  [ "$remote" = 1 ] || die "route $route is not a configured execution home"
+  fm_remote_registry_line_for_id "$DATA/remote-homes.md" "$1" || die "route $1 is not a configured execution home"
 }
 
 source_id() {
