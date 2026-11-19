@@ -290,6 +290,36 @@ test_wrapper_ready_orders_by_project_tier() {
   pass "fm-tasks-axi.sh ready lists higher project tiers first and refuses a malformed tier file"
 }
 
+test_backlog_md_lifecycle_does_not_leave_a_held_task_in_flight() {
+  local home="$TMP_ROOT/backlog-md-lifecycle" out
+  mkdir -p "$home/data/backlog/tasks" "$home/config" "$home/state"
+  printf '%s\n' 'filesystem_only: true' 'statuses: [Queued, Waiting, In Flight, Done]' 'task_prefix: task' > "$home/data/backlog/config.yml"
+  printf '%s\n' backlog-md > "$home/config/backlog-backend"
+  (
+    export FM_HOME="$home"
+    . "$ROOT/bin/fm-tasks-axi-lib.sh"
+    . "$ROOT/bin/fm-backlog-transition-lib.sh"
+    bash "$WRAPPER" add transition-task "Lifecycle task" >/dev/null || exit 1
+    printf '%s\n' 'spawn_gen=s1.1.1' > "$home/state/transition-task.meta"
+    fm_backlog_transition_applies "$home/config" "$home/data" ship || exit 1
+    fm_backlog_atomic_transition dispatch "$home/state/transition-task.meta" "$home/data" transition-task "$home/state" || exit 1
+    bash "$ROOT/bin/fm-captain-hold.sh" hold transition-task --reason "Decision needed" >/dev/null || exit 1
+    fm_backlog_retain "$home/data" transition-task || exit 1
+    out=$(bash "$WRAPPER" show transition-task) || exit 1
+    printf '%s\n' "$out" | grep -q '^  state: queued$' || exit 1
+    printf '%s\n' "$out" | grep -q '^  held: yes$' || exit 1
+    printf '%s\n' approved > "$home/decision"
+    bash "$ROOT/bin/fm-captain-hold.sh" answer transition-task --decision-file "$home/decision" --release >/dev/null || exit 1
+    fm_backlog_atomic_transition dispatch "$home/state/transition-task.meta" "$home/data" transition-task "$home/state" || exit 1
+    : > "$home/state/transition-task.backlog-close"
+    fm_backlog_atomic_transition close "$home/state/transition-task.meta" "$home/state/transition-task.backlog-close" "$home/data" transition-task "$home/state" || exit 1
+    out=$(bash "$WRAPPER" show transition-task) || exit 1
+    printf '%s\n' "$out" | grep -q '^  state: done$' || exit 1
+  ) || fail "Backlog.md lifecycle did not retain and complete the task"
+  pass "Backlog.md lifecycle retains a held task as queued and completes it"
+}
+
+test_backlog_md_lifecycle_does_not_leave_a_held_task_in_flight
 test_guard_reports_regular_code_root_backlog
 test_guard_reports_foreign_link_and_archive
 test_guard_silent_for_single_home

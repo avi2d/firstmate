@@ -303,6 +303,14 @@ jobs:
             npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
           fi
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
+      - name: Install Backlog.md dependencies for the lifecycle test
+        env:
+          FM_SERIAL_LANE: portable-serial-${{ matrix.shard }}of${{ strategy.job-total }}
+        run: |
+          set -eu
+          if bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" --list | grep -Fx 'tests/fm-tasks-axi.test.sh'; then
+            npm ci --prefix bin/fm-backlog-md --no-audit --no-fund
+          fi
       - name: Run portable serial shard ${{ matrix.shard }}
         env:
           # job-total rather than a literal, so shrinking or growing the matrix

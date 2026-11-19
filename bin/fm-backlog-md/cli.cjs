@@ -13,6 +13,8 @@ const commands = {
   list: { args: '[flags]', flags: [...baseFields, 'state', 'limit', 'fields'], switches: ['blocked'], count: 0 },
   ready: { args: '[--repo <name>] [--include-held]', flags: ['repo'], switches: ['include-held'], count: 0 },
   update: { args: '<id> [flags]', flags: ['title', ...patchFields], switches: ['archive-body', 'json'], count: 1 },
+  start: { args: '<id>', flags: [], switches: ['json'], count: 1 },
+  reopen: { args: '<id>', flags: [], switches: ['json'], count: 1 },
   done: { args: '<id> [flags]', flags: ['pr', 'report', 'note', 'keep'], switches: ['no-prune', 'json'], count: 1 },
   block: { args: '<id> --by <other>', flags: ['by'], switches: ['json'], count: 1 },
   unblock: { args: '<id> --by <other>', flags: ['by'], switches: ['json'], count: 1 },
@@ -303,6 +305,23 @@ function hold(action, book, ticket, options, now, project) {
   return mutation(action, project(ticket), options, { message, hints, showTask: true, ...(already ? { already } : {}) });
 }
 
+function transition(action, book, ticket, options, now, project) {
+  const task = project(ticket);
+  if (action === 'start' && (task.held || task.blocked || task.state === 'done')) reject('Task is not dispatchable');
+  const target = action === 'start' ? 'in_flight' : 'queued';
+  const already = task.state === target;
+  if (!already) {
+    const hold = holdRecord(ticket.fields);
+    ticket.fields.status = target === 'in_flight' ? 'In Flight' : 'Queued';
+    ticket.fields.labels = (ticket.fields.labels ?? []).filter(label => label !== 'firstmate-in-flight');
+    delete ticket.fields.closed_date;
+    saveHold(ticket, hold);
+    ticket.fields.updated_date = now;
+    book.save(ticket);
+  }
+  return mutation(action, project(ticket), options, { message: `${action} ${ticket.fields.id} -> ${target}`, hints: [], ...(already ? { already } : {}) });
+}
+
 function done(book, ticket, options, now, project) {
   const { fields } = ticket;
   const already = fields.status === 'Done';
@@ -357,6 +376,8 @@ function main(root, verb, args) {
   switch (command) {
     case 'show': return show(project(ticket), options.full, '--full').join('\n');
     case 'update': return update(book, ticket, options, now, project);
+    case 'start':
+    case 'reopen': return transition(command, book, ticket, options, now, project);
     case 'done': return done(book, ticket, options, now, project);
     case 'hold':
     case 'unhold': return hold(command, book, ticket, options, now, project);
