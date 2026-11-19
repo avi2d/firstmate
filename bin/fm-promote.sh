@@ -74,8 +74,6 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
-# shellcheck source=bin/fm-public-followup-lib.sh
-. "$SCRIPT_DIR/fm-public-followup-lib.sh"
 
 MODE=
 YOLO=
@@ -420,20 +418,3 @@ INSTRUCTIONS_Q=$(printf '%q' "$INSTRUCTIONS")
 echo "promoted $ID to ship mode=$MODE yolo=$YOLO$PROMOTE_FORGE_WORDS$PROMOTE_PR_WORDS (teardown protection restored)"
 echo "wrote ship instructions for mode=$MODE$PROMOTE_FORGE_WORDS$PROMOTE_PR_WORDS: $INSTRUCTIONS"
 echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID \"\$(cat $INSTRUCTIONS_Q)\""
-
-promote_print_rechain_hint() {
-  local consent_home=$1 work_home=$2 task_id=$3 id prefix
-  prefix=
-  [ "$consent_home" = "$FM_HOME" ] || prefix="FM_HOME=$(printf '%q' "$consent_home") "
-  while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    [ "$(fm_pf_registry_get "$consent_home/state" "$id" state)" = delivered ] || continue
-    echo "next: ${prefix}bin/fm-public-followup.sh rechain <new-obligation-id> --from $id --work-home $work_home --work-id $task_id --expected pr-merged"
-  done <<EOF
-$(fm_pf_registry_ids_for_work "$consent_home/state" "$work_home" "$task_id")
-EOF
-}
-
-if fm_pf_relay_active "$FM_HOME"; then
-  promote_print_rechain_hint "$FM_HOME" main "$ID"
-fi
