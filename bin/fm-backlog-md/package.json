@@ -1,0 +1,8 @@
+{
+  "name": "fm-backlog-md",
+  "private": true,
+  "dependencies": {
+    "backlog.md": "1.55.3",
+    "yaml": "2.8.3"
+  }
+}

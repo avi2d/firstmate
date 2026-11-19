@@ -130,40 +130,46 @@ for arg in "$@"; do
   esac
 done
 
-command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is not on PATH; run bin/fm-bootstrap.sh for the install command"
-
 FM_PROJECT_TIERS=
 if [ "${1:-}" = ready ] && ! fm_project_tiers_read "$CONFIG"; then
   fail "fix or remove $FM_PROJECT_TIERS_FILE to list ready work"
 fi
 
-FM_BACKLOG_TRANSITION_ERROR=
-if ! fm_backlog_tasks_axi_addressing "$DATA"; then
-  fail "${FM_BACKLOG_TRANSITION_ERROR:-data directory cannot be resolved: $DATA}"
-fi
-
-if [ -n "$FM_BACKLOG_AXI_FILE" ]; then
-  if [ -L "$FM_BACKLOG_AXI_FILE" ]; then
-    fail "$FM_BACKLOG_AXI_FILE is a symlink; a tasks-axi write would replace it with a regular file and fork the backlog - make it this home's real file"
-  fi
-  export TASKS_AXI_FILE="$FM_BACKLOG_AXI_FILE"
+if [ "$(fm_backlog_backend_value "$CONFIG")" = backlog-md ]; then
+  command -v python3 >/dev/null 2>&1 || fail "Backlog.md requires python3 for its write lock"
+  command -v node >/dev/null 2>&1 || fail "Backlog.md requires node"
+  BACKLOG=(python3 "$SCRIPT_DIR/fm-backlog-md/locked.py" "$DATA" "$SCRIPT_DIR/fm-backlog-md/cli.cjs")
 else
-  unset TASKS_AXI_FILE
-fi
+  command -v tasks-axi >/dev/null 2>&1 || fail "tasks-axi is not on PATH; run bin/fm-bootstrap.sh for the install command"
+  FM_BACKLOG_TRANSITION_ERROR=
+  if ! fm_backlog_tasks_axi_addressing "$DATA"; then
+    fail "${FM_BACKLOG_TRANSITION_ERROR:-data directory cannot be resolved: $DATA}"
+  fi
 
-cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
+  if [ -n "$FM_BACKLOG_AXI_FILE" ]; then
+    if [ -L "$FM_BACKLOG_AXI_FILE" ]; then
+      fail "$FM_BACKLOG_AXI_FILE is a symlink; a tasks-axi write would replace it with a regular file and fork the backlog - make it this home's real file"
+    fi
+    export TASKS_AXI_FILE="$FM_BACKLOG_AXI_FILE"
+  else
+    unset TASKS_AXI_FILE
+  fi
+
+  cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
+  BACKLOG=(tasks-axi)
+fi
 case "${1:-}" in
   show|view|list)
     set -o pipefail
-    tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
+    "${BACKLOG[@]}" ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
     exit $?
     ;;
   ready)
     if [ -n "$FM_PROJECT_TIERS" ]; then
       set -o pipefail
-      tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_project_tiers_order_ready
+      "${BACKLOG[@]}" ${ARGS[@]+"${ARGS[@]}"} | fm_project_tiers_order_ready
       exit $?
     fi
     ;;
 esac
-exec tasks-axi ${ARGS[@]+"${ARGS[@]}"}
+exec "${BACKLOG[@]}" ${ARGS[@]+"${ARGS[@]}"}
