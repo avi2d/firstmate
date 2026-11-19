@@ -1167,7 +1167,7 @@ for (const itemClass of visibility.CALM_TRANSCRIPT_CLASSES) {
 }
 const watcherBody =
   "FIRSTMATE WATCHER WAKE: signal: /tmp/probe.status\n\n" +
-  "Run bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.";
+  "Run bin/fm-wake-drain.sh first.";
 const watcherMessage = operationalInput.encodeFirstmateOperationalInput("watcher", watcherBody);
 const legacyAwayMessage = "\u2063Supervisor escalate (legacy presentation compatibility)";
 const operationalHistory = [];
@@ -2072,7 +2072,7 @@ let latestInputRole: "user" | "custom" | undefined;
 
 const EXACT_WATCHER_INPUT =
   "\u2063FIRSTMATE_OP: v1 watcher: FIRSTMATE WATCHER WAKE: signal: /home/fixture/github/kunchenguid/firstmate/state/oss-triage-t4.status\n\n" +
-  "Run bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.";
+  "Run bin/fm-wake-drain.sh first.";
 
 function monitorInput(suffix: "ONE" | "TWO"): string {
   if (label === "exact_watcher" && suffix === "ONE") return EXACT_WATCHER_INPUT;
@@ -2255,7 +2255,7 @@ TS
       if [ "$label" = exact_watcher ]; then
         assert_not_contains "$pane" "FIRSTMATE WATCHER WAKE: signal: /home/fixture/github/kunchenguid/firstmate/state/oss-triage-t4.status" \
           "Pi exact watcher case rendered the Calm-hidden authoritative payload"
-        assert_not_contains "$pane" "Run bin/fm-wake-drain.sh first and handle the queued wake." \
+        assert_not_contains "$pane" "Run bin/fm-wake-drain.sh first." \
           "Pi exact watcher case rendered the Calm-hidden drain instruction"
       elif [ "$label" = legacy_away ]; then
         assert_not_contains "$pane" "LEGACY_AWAY_E2E" \
@@ -2293,7 +2293,7 @@ const handled = expected === 2
 const expectedOperationalTexts = Array.from({ length: expected }, (_, index) => {
   const suffix = index === 0 ? "ONE" : "TWO";
   return label === "exact_watcher" && suffix === "ONE"
-    ? "\u2063FIRSTMATE_OP: v1 watcher: FIRSTMATE WATCHER WAKE: signal: /home/fixture/github/kunchenguid/firstmate/state/oss-triage-t4.status\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned."
+    ? "\u2063FIRSTMATE_OP: v1 watcher: FIRSTMATE WATCHER WAKE: signal: /home/fixture/github/kunchenguid/firstmate/state/oss-triage-t4.status\n\nRun bin/fm-wake-drain.sh first."
     : label === "legacy_away" && suffix === "ONE"
       ? "\u2063Supervisor escalate (LEGACY_AWAY_E2E)"
       : `\u2063FIRSTMATE_OP: v1 watcher: MONITOR_${label}_${suffix}`;
@@ -2370,7 +2370,7 @@ const entries = fs.readFileSync(process.argv[2], "utf8").trim().split("\n").map(
 const text = (content) => typeof content === "string"
   ? content
   : (content ?? []).filter((item) => item.type === "text").map((item) => item.text).join("");
-const exact = "\u2063FIRSTMATE_OP: v1 watcher: FIRSTMATE WATCHER WAKE: signal: /home/fixture/github/kunchenguid/firstmate/state/oss-triage-t4.status\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.";
+const exact = "\u2063FIRSTMATE_OP: v1 watcher: FIRSTMATE WATCHER WAKE: signal: /home/fixture/github/kunchenguid/firstmate/state/oss-triage-t4.status\n\nRun bin/fm-wake-drain.sh first.";
 const users = entries.filter((entry) => entry.type === "message" && entry.message.role === "user" && text(entry.message.content) === exact);
 const responses = entries.filter((entry) => entry.type === "message" && entry.message.role === "assistant" && text(entry.message.content) === "MONITOR_HANDLED_exact_watcher_ONE");
 if (users.length !== 1 || responses.length !== 1) {

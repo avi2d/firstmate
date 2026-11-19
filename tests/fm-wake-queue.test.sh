@@ -1453,12 +1453,12 @@ SH
   awk -F '\t' 'NF == 5 { print }' "$out" > "$actual"
   cmp -s "$expected" "$actual" || fail "enrichment changed or reordered an authoritative raw row"
 
-  annotation_count=$(grep -c '^wake annotation:' "$out" || true)
+  annotation_count=$(grep -c "^  [^ :]*\.status[ :]" "$out" || true)
   [ "$annotation_count" -eq 1 ] || fail "expected only the unreadable-race-safe status annotation, got $annotation_count"
-  if grep -E '^wake annotation:.*: task\.status:' "$out" >/dev/null; then
+  if grep -E "^  task\.status[ :]" "$out" >/dev/null; then
     fail "replaced status file produced an annotation"
   fi
-  grep -F 'latest wake-EVENT observed at drain, not current state; historical / not necessarily the triggering event: turn-only.status:' "$out" >/dev/null \
+  grep -F '  turn-only.status latest, historical, maybe not the trigger:' "$out" >/dev/null \
     || fail "bare turn-end mapping did not carry the historical warning"
   if grep -F 'must-not-be-read' "$out" >/dev/null; then
     fail "drain trusted a payload path or followed an out-of-state status symlink"
@@ -1493,20 +1493,20 @@ test_enrichment_preserves_all_unread_lines_and_status_file_failures() {
   raw_count=$(awk -F '\t' 'NF == 5 { count++ } END { print count + 0 }' "$out")
   [ "$raw_count" -eq 13 ] || fail "missing, unreadable, malformed, empty, or oversized status input hid a raw row"
 
-  expected="wake annotation: latest wake-EVENT observed at drain, not current state: huge.status: $(cat "$state/huge.status")"
+  expected="  huge.status latest: $(cat "$state/huge.status")"
   grep -Fx "$expected" "$out" >/dev/null \
     || fail "the oversized unread status line was truncated or omitted"
   i=1
   while [ "$i" -le 8 ]; do
-    expected="wake annotation: latest wake-EVENT observed at drain, not current state: many-$i.status: $(cat "$state/many-$i.status")"
+    expected="  many-$i.status latest: $(cat "$state/many-$i.status")"
     grep -Fx "$expected" "$out" >/dev/null \
       || fail "readable status many-$i was truncated or omitted"
     i=$((i + 1))
   done
-  if grep -E '^wake annotation:.*(truncated|omitted)' "$out" >/dev/null; then
+  if grep -E "^  [^ :]*\.status[ :].*(truncated|omitted)" "$out" >/dev/null; then
     fail "complete unread annotation output still reported dropped content"
   fi
-  if grep -E ': (empty|missing|malformed|unreadable)\.status:' "$out" >/dev/null; then
+  if grep -E '^  (empty|missing|malformed|unreadable)\.status[ :]' "$out" >/dev/null; then
     fail "missing, unreadable, malformed, or empty status file produced an annotation"
   fi
   pass "every readable unread status line is annotated in full while invalid status files preserve their raw wakes"
@@ -1741,8 +1741,10 @@ test_main_is_never_told_to_drain_rows_only_the_branch_owns() {
   sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
   generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
   [ -n "$sequence" ] && [ -n "$generation" ] || fail "the released row was presented without an acknowledgement command"
-  grep -Fq 'queued wakes pending' "$err" || fail "guard stopped warning about a row main can actually drain"
-  ! grep -Fq 'wake rows held by the live supervision branch' "$err" \
+  ! grep -Fq 'queued wakes pending' "$err" || fail "the drain told its own reader to drain the rows it just presented"
+  FM_STATE_OVERRIDE="$state" "$GUARD" 2> "$dir/guard-released.err" || fail "guard failed after release"
+  grep -Fq 'queued wakes pending' "$dir/guard-released.err" || fail "guard stopped warning about a row main can actually drain"
+  ! grep -Fq 'wake rows held by the live supervision branch' "$dir/guard-released.err" \
     || fail "guard kept advising about a hold that was already released"
   FM_STATE_OVERRIDE="$state" "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
     || fail "acknowledgement of the released row failed"
@@ -3045,7 +3047,7 @@ test_live_presentation_holder_is_deadlined_without_weakening_ack() {
   fi
   grep "$(printf '\tsignal\t')" "$first_out" >/dev/null \
     || { kill "$presentation_holder" 2>/dev/null || true; fail "bounded presentation dropped the durable wake row"; }
-  if grep -F 'task.status: needs-decision [key=fixture]' "$first_out" >/dev/null; then
+  if grep -E '^  task\.status[ ,a-z]*: needs-decision \[key=fixture\]' "$first_out" >/dev/null; then
     kill "$presentation_holder" 2>/dev/null || true
     fail "contended presentation emitted status content without its cursor lock"
   fi
@@ -3054,7 +3056,7 @@ test_live_presentation_holder_is_deadlined_without_weakening_ack() {
   wait "$presentation_holder" 2>/dev/null || true
   FM_STATE_OVERRIDE="$state" FM_STATUS_PRESENTATION_LOCK_TIMEOUT=1 \
     "$DRAIN" > "$second_out" 2> "$second_err" || fail "presentation retry failed"
-  grep -F 'task.status: needs-decision [key=fixture]: presentation remains retriable' "$second_out" >/dev/null \
+  grep -F '  task.status latest: needs-decision [key=fixture]: presentation remains retriable' "$second_out" >/dev/null \
     || fail "the next presentation pass did not surface the skipped status"
 
   FM_STATE_OVERRIDE="$state" bash -c '
@@ -3161,7 +3163,7 @@ test_owned_growth_still_annotates_turn_ended() {
   append_wake "$state" signal scout.turn-ended "signal: $state/scout.turn-ended" \
     || fail "turn-ended wake append failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "drain failed"
-  sed -E 's/ \[at=[0-9]+\]//' "$out" | grep -F 'scout.status: resolved [key=budget]: answered: approved' >/dev/null \
+  sed -E 's/ \[at=[0-9]+\]//' "$out" | grep -E '^  scout\.status[ ,a-z]*: resolved \[key=budget\]: answered: approved' >/dev/null \
     || fail "owned growth hid this home's own close from the turn-ended annotation: $(cat "$out")"
   pass "owned growth suppresses the wake without hiding the turn-ended annotation"
 }
@@ -3184,7 +3186,7 @@ test_historical_annotation_skips_announced_status() {
   append_wake "$state" signal scout.turn-ended "signal: $state/scout.turn-ended" \
     || fail "turn-ended wake append failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "drain failed"
-  if grep -F 'scout.status: working: long scout still going' "$out" >/dev/null; then
+  if grep -E '^  scout\.status[ ,a-z]*: working: long scout still going' "$out" >/dev/null; then
     fail "a fully announced status line was replayed as a historical annotation"
   fi
   grep -F 'scout.turn-ended' "$out" >/dev/null \
@@ -3198,7 +3200,7 @@ test_historical_annotation_skips_announced_status() {
   append_wake "$state" signal scout.turn-ended "signal: $state/scout.turn-ended" \
     || fail "second turn-ended wake append failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "second drain failed"
-  grep -F 'historical / not necessarily the triggering event: scout.status: working: fresh unannounced progress' "$out" >/dev/null \
+  grep -F 'historical, maybe not the trigger: working: fresh unannounced progress' "$out" >/dev/null \
     || fail "an unannounced status line lost its historical annotation"
   ack_drain_err "$state" "$err" || fail "could not acknowledge the second drain"
 
@@ -3210,7 +3212,7 @@ test_historical_annotation_skips_announced_status() {
   append_wake "$state" signal scout.status "signal: $state/scout.status" \
     || fail "direct status wake append failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "third drain failed"
-  grep -F 'scout.status: done: scout finished' "$out" >/dev/null \
+  grep -F '  scout.status latest: done: scout finished' "$out" >/dev/null \
     || fail "a direct status row lost its annotation"
   pass "historical annotations replay nothing already announced and keep everything new"
 }

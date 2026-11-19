@@ -1,241 +1,5 @@
 #!/usr/bin/env bash
-# fm-session-start.sh - one command for the whole session start.
-#
-# Collapses AGENTS.md sections 3 (bootstrap) and 5 (recovery) into ONE script
-# producing ONE ordered digest, so a session starts in one or two turns
-# instead of the six-plus separate reads the old docs required: run
-# fm-bootstrap.sh, then separately read data/projects.md, data/secondmates.md,
-# data/captain.md, data/captain-shared.md, data/learnings.md, then run
-# fm-lock.sh, fm-wake-drain.sh, then read data/backlog.md, every state/*.meta,
-# and every state/*.status.
-# Every one of those reads is UNCONDITIONAL at every session start, so they
-# belong in a script, not in N agent turns.
-#
-# COMPOSITION, NOT DUPLICATION: this script calls fm-lock.sh, fm-bootstrap.sh,
-# fm-wake-drain.sh, and fm-startup-network.sh as real subprocesses and prints
-# their real output. It never re-implements their logic; all
-# sequencing/formatting logic added here stays local to this file. Those four
-# scripts remain fully working
-# standalone with unchanged default behavior - other flows (fm-bootstrap.sh
-# install <tools> after consent, /updatefirstmate, the afk daemon, existing
-# tests) still call them directly. The one seam this script needed -
-# bootstrap running its detect-only diagnostics without its six mutating
-# sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
-# itself (default unset/0 = unchanged behavior), not a fork.
-#
-# ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
-# was bootstrap-then-lock):
-#
-#   1. lock          - acquire the per-home session lock FIRST, before any
-#                       mutating step runs.
-#   1b. home role    - the resolved firstmate-repository role line
-#                      (bin/fm-role.sh report), purely local, no network.
-#   2. bootstrap      - home-local stale Herdr projection cleanup runs only
-#                       when this session actually holds the lock. Detect-only
-#                       diagnostics always run. Bootstrap's six MUTATING sweeps
-#                       (same-home backlog reconciliation,
-#                       secondmate convergence, secondmate liveness, pending remote
-#                       handoff retry, X-mode artifact writes, fleet sync) also run only when
-#                       locked; the four network sweeps run in the deferred
-#                       stage rather than this synchronous bootstrap section.
-#   3. wake-drain     - presents durable wakes and advances recovery handling
-#                       state, so it only runs when locked. The local bounded
-#                       inactive-outcome startup scan runs in the deferred worker.
-#                       First, on every harness and away posture, it seeds the
-#                       outcome store's display tail copy when that is absent
-#                       (bin/fm-branch-outcome.sh seed-tail).
-#   4. supervision-instructions - the one emitted operating block for the
-#                       detected primary harness.
-#   5. read-once contract - the do-not-re-read contract covering every source
-#                       represented by the two digests below.
-#   6. fleet digest   - a compact data/backlog.md identity/metadata listing,
-#                       every state/*.meta, a bounded state/*.status tail,
-#                       the away posture (state/.afk-contract and the legacy
-#                       state/.afk daemon flag), and a cheap per-task
-#                       endpoint-liveness read, each bounded and crash-
-#                       isolated so one task's read can never abort the
-#                       digest: read-only, always runs. The per-task reads
-#                       run serially, so with a wedged backend the stage's
-#                       ceiling is tasks x the per-read bound
-#                       (FM_SESSION_START_ENDPOINT_TIMEOUT, default 10s) and
-#                       can itself reach the digest's runtime bound.
-#   7. network checks - the result of the deferred network stage started back at
-#                       step 1, harvested WITHOUT waiting for it.
-#   8. context digest - data/projects.md, data/secondmates.md, data/captain.md,
-#                       data/captain-shared.md, data/learnings.md: read-only,
-#                       always safe, always runs.
-#   9. closing reminder - prints the context-specific watcher next step; this
-#                       script points back to the emitted harness supervision
-#                       block and deliberately never arms the watcher itself.
-#
-# Those ten names are also the runtime-bound stage list below, so a truncated
-# startup can name exactly which of them never ran - and the parent banners
-# EVERY nonzero child exit, not only the bound: a child that dies or is killed
-# mid-stage must never truncate the digest silently.
-#
-# NO NETWORK ON THE BLOCKING PATH. This digest runs on a session-open hook that
-# blocks session initialization, so anything it waits for is time the captain
-# waits before the first turn - and every external-network call it used to make
-# was individually unbounded. One unreachable remote secondmate could burn the
-# entire FM_SESSION_START_TIMEOUT and truncate the digest, so a slow network
-# could cost the work queue itself.
-# So no step between here and the last line below makes an external-network
-# call. The five that did - `gh auth status`, secondmate liveness, secondmate
-# convergence, pending remote handoff delivery, and the fleet-sync fetch - are
-# started as one detached bounded worker right after the lock (step 1) and
-# harvested at step 7 without ever blocking on it. The bounded inactive-outcome
-# startup scan joins that worker because its local current-state reads can also
-# be slow. bin/fm-startup-network.sh owns that stage and its safety argument;
-# bin/fm-bootstrap.sh and bin/fm-inactive-reconcile.sh remain the owners of the
-# work itself and still run it.
-# The digest is therefore composed from bounded local reads and local
-# subprocesses only, while slow network or inactive-state reconciliation delays
-# a reported check rather than startup.
-# What this deliberately trades: on a slow network the digest prints "IN
-# PROGRESS" and names exactly which checks are not yet confirmed, instead of
-# waiting for them. It never reports an unconfirmed check as passed.
-#
-# ORDERING, and why FLEET STATE now runs before CONTEXT: this digest is
-# delivered through a harness that truncates an oversized payload from the TAIL,
-# and it has really been truncated in practice - a 70KB digest arrived as lines
-# 1-435 of 578, cutting off eight lines before the live-task inventory. What a
-# truncated tail drops must therefore be the CHEAPEST thing to lose. Curated
-# memory is stable session to session, is already governed by a captain-set
-# budget (config/startup-memory-budget), and is recoverable with one targeted
-# read; live fleet identity - which tasks exist, their windows, worktrees,
-# backends, and endpoint liveness - changes every session and is exactly what
-# recovery depends on. So fleet state goes first and the memory files absorb the
-# truncation. The read-once contract moves ahead of both for the same reason: a
-# contract that only arrives after the payload it governs is the first thing a
-# truncated digest loses, and it carries the truncation caveat that keeps it
-# honest when a stage below it never ran.
-# The LOCK/BOOTSTRAP/WAKE-QUEUE safety preamble keeps its order: it establishes
-# mutation authority and this turn's work queue before anything else is read.
-#
-# On a Pi primary, the supervision-block step also checks whether Pi's two
-# tracked primary extensions are loaded and prints a PI_WATCH_EXTENSION
-# reminder line when one is missing.
-#
-# Why lock first: the old documented order (bootstrap, THEN lock) let a
-# SECOND concurrent session run bootstrap's mutating sweeps - converging
-# secondmate homes, retrying pending handoff outboxes and receiver wakes, writing
-# X-mode artifacts, and fetching or fast-forwarding every project clone - before
-# ever discovering another session already holds the lock. Two sessions racing
-# those sweeps is exactly the hazard the lock exists to prevent, so locking first closes the
-# hole outright: only the session that actually wins the lock ever touches
-# shared mutable state.
-#
-# The tradeoff this ordering accepts: a refused (read-only) session must not
-# go dark. So on refusal, bootstrap still runs (in FM_BOOTSTRAP_DETECT_ONLY=1
-# mode) for its local read-only detect lines - missing tools, the worktree-tangle
-# check, the harness override, crew-dispatch validation, tasks-axi and quota-axi
-# tool checks, and tasks-axi availability - none of which mutate shared state
-# and all of which are safe to compute without verified lock ownership.
-# It deliberately skips the network-only GitHub-auth probe because a read-only
-# session has no dispatch, spawn, steer, or merge action for that verdict to gate.
-# Only projection cleanup, the six bootstrap mutating sweeps, and wake-queue
-# presentation are skipped.
-# The context and fleet-state digests
-# below are always read-only, so they run unconditionally in both modes.
-#
-# BACKLOG DIGEST: the startup listing is a RECOVERY input, not a reporting
-# surface, so it carries what this turn can act on and nothing else.
-#   - `done` rows are never listed. Retained completion history belongs to the
-#     reporting surfaces (bin/fm-bearings-snapshot.sh, /ahoy), and at startup it
-#     is pure weight - 10 done rows cost 3.3KB in an observed main-home digest.
-#   - Every in-flight, held, and blocked row is listed IN FULL, with its
-#     hold_kind/hold_reason and blocked_by. Those are the rows AGENTS.md
-#     sections 7 and 10 make actionable at startup, so they are never bounded
-#     away.
-#   - Only the plain queued (dispatchable-now) listing is bounded, by
-#     FM_SESSION_START_QUEUED_LIMIT, default 20. Anything it omits is disclosed
-#     with an exact remainder count and the command that shows the rest, so a
-#     deep queue costs a counter rather than kilobytes.
-#     (This replaces FM_SESSION_START_BACKLOG_LIMIT, which bounded the whole
-#     listing indiscriminately and so could drop a held or blocked row.)
-# When compatible tasks-axi is selected and available, the shared tasks-axi
-# backend probe remains the compatibility owner and this script asks
-# `tasks-axi list` for the compact identity fields plus blocked_by, hold_kind,
-# and hold_reason, never body. The groups are the tool's own filters
-# (`--state in_flight`, `--state held`, `--state queued --blocked`, and
-# `tasks-axi ready`), so this script never reimplements task state; the groups
-# can overlap, because an in-flight item that is also held appears under both.
-# When manual mode is selected, or tasks-axi is unavailable or incompatible,
-# this script prints only backlog section headings and item title lines, so
-# title-line hold and blocked-by metadata remain visible while indented bodies
-# stay out of the startup digest; the same never-bound-a-held-or-blocked-row
-# rule applies, recognized there from the title line's own hold/blocked-by
-# markers.
-# Full bodies are targeted follow-up only: `bin/fm-tasks-axi.sh show <id> --full` when
-# compatible tasks-axi is available, or `data/backlog.md` when the file body is
-# truly needed.
-#
-# STATUS TAILS: FM_SESSION_START_STATUS_TAIL bounds how many lines each task's
-# tail prints, and bin/fm-line-cap-lib.sh bounds how long each of those lines
-# may be. Both bounds are safe because the section prints every task's full
-# status log path, and AGENTS.md section 8 treats a status line as a wake EVENT
-# rather than current state - bin/fm-crew-state.sh owns current state.
-#
-# RUNTIME BOUND: the digest is now executed through a native session-open
-# adapter (see bin/fm-sessionstart-run.sh), which blocks either hook-driven
-# session initialization or Pi's first provider preflight while it runs, so an
-# unbounded digest is no longer merely slow - it can strand a whole session or
-# first turn behind one hung subprocess. Every remaining step is local, but
-# local is not the same as bounded: tool version probes and the backlog
-# listing are unbounded subprocesses, while each per-task endpoint read runs
-# in its own crash-isolated child under FM_SESSION_START_ENDPOINT_TIMEOUT
-# (default 10s). So the whole digest still runs as ONE bounded child of this
-# script (FM_SESSION_START_TIMEOUT, default 120s). The deferred network stage
-# deliberately sits OUTSIDE that bound,
-# in its own process group under its own aggregate deadline, so a truncated
-# digest neither waits for it nor orphans it unbounded. The
-# child writes the digest straight to this script's stdout, so everything it
-# emitted before the child stopped is already delivered; the parent then prints
-# a loud STARTUP TRUNCATED banner on ANY nonzero child exit - the runtime bound
-# or an unexpected child death, named with its exit status - naming the stage
-# that did not finish and the sections that were therefore never emitted, and
-# still exits 0. The child
-# records its progress in FM_SESSION_START_STAGE_FILE, which is also the flag
-# that tells a child it is the child - the parent never recurses.
-# Hosts without timeout, gtimeout, or perl use the shared pure-Bash watchdog, so
-# the digest never runs without the same hard bound and process-group cleanup.
-#
-# Usage: fm-session-start.sh [--reemit] [--source <source>]
-#   Prints the full ordered digest to stdout and always exits 0: this is a
-#   reporting command, not a gate. A lock refusal is reported as a loud
-#   banner inline, never a silent failure or a non-zero exit that would make
-#   an agent skip the rest of the digest.
-#
-#   --reemit  This process ALREADY took the helm at its own startup and has
-#             only lost its context (a /clear or a compaction). Skip the
-#             mutating sweeps that startup already reconciled - the stale Herdr
-#             projection cleanup and bootstrap's six mutating sweeps (fleet
-#             sync, same-home backlog reconciliation, secondmate convergence and
-#             liveness, pending remote handoff retry, X-mode
-#             artifact writes) - and
-#             re-emit the rest. Wake-queue presentation is NOT skipped: queued
-#             records are this turn's work queue, they arrived after startup,
-#             and a session that owns the lock is exactly the session that must
-#             handle and acknowledge them. Lock acquisition still runs, because
-#             ownership must be re-verified rather than assumed: fm-lock.sh
-#             already treats a lock owned through shared ancestry or a trusted
-#             same-session Claude id as its own, so the re-emit proceeds, while
-#             a lock another live session took meanwhile still produces the
-#             ordinary read-only path. A re-emit prints a short RE-EMIT CUE
-#             first, so a harness that spills a large output and shows only its
-#             head still tells the model to read the saved full output.
-#
-#   --source  The native session-open source, supplied only by
-#             fm-sessionstart-run.sh. A genuine `startup` that owns the active
-#             session lock records AGENTS.md's SHA-256 baseline only after the
-#             digest completion record is published, keyed to that lock's
-#             harness pid. No resume, clear, reset, compact, or other rebuild
-#             creates or replaces it. Pi and pi-signed compaction are the only
-#             supported stale-cache rebuild pair: a missing baseline, a baseline
-#             for another harness pid, or a changed hash causes the complete
-#             current AGENTS.md to print before the bulky digest. The baseline
-#             remains immutable so every later drifted compaction refreshes
-#             again, while an equal baseline emits no instruction refresh.
+# fm-session-start.sh [--reemit] [--source <source>] - print the session-start digest.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -392,17 +156,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 if fm_tasks_axi_compatible; then TASKS_AXI_COMPATIBLE=1; else TASKS_AXI_COMPATIBLE=0; fi
 TASKS_AXI_CHECK_REASON=$(fm_tasks_axi_check_reason)
 
-if [ "$REEMIT" -eq 1 ]; then
-  STATUS_TAIL_DEFAULT=2
-  QUEUED_LIMIT_DEFAULT=10
-else
-  STATUS_TAIL_DEFAULT=5
-  QUEUED_LIMIT_DEFAULT=20
-fi
-STATUS_TAIL=${FM_SESSION_START_STATUS_TAIL:-$STATUS_TAIL_DEFAULT}
-case "$STATUS_TAIL" in ''|*[!0-9]*) STATUS_TAIL=$STATUS_TAIL_DEFAULT ;; esac
-QUEUED_LIMIT=${FM_SESSION_START_QUEUED_LIMIT:-$QUEUED_LIMIT_DEFAULT}
-case "$QUEUED_LIMIT" in ''|*[!0-9]*|0) QUEUED_LIMIT=$QUEUED_LIMIT_DEFAULT ;; esac
+QUEUED_LIMIT=${FM_SESSION_START_QUEUED_LIMIT:-10}
+case "$QUEUED_LIMIT" in ''|*[!0-9]*|0) QUEUED_LIMIT=10 ;; esac
 # One per-task endpoint read may never outlive this bound: a hung backend CLI
 # becomes that task's endpoint: error line instead of the digest's whole
 # runtime budget.
@@ -534,30 +289,42 @@ strip_axi_help() {
   awk '/^help\[/ { exit } { print }'
 }
 
-# Bound the dispatchable-now listing without rewriting the tool's own rendering:
-# `tasks-axi ready` rows are the indented lines under its ready[N]{...} header,
-# and every other line it prints (its count, its public-followup line) passes
-# through untouched. Whatever is cut is disclosed exactly.
-print_ready_queued_bounded() {
-  local ready=$1
-  printf '%s\n' "$ready" | awk -v max="$QUEUED_LIMIT" '
+# Rows are the indented lines under a tasks-axi <name>[N]{...} header. Every
+# other line passes through, and whatever is cut is disclosed exactly.
+print_listing_bounded() {  # <listing> <noun> <rest-command>
+  printf '%s\n' "$1" | awk -v max="$QUEUED_LIMIT" -v noun="$2" -v rest="$3" '
+    function note() {
+      if (!noted && total > shown)
+        printf "(shown %d of %d %s; %d more - %s)\n", shown, total, noun, total - shown, rest
+      noted = 1
+    }
     /^help\[/ { exit }
-    /^ready\[/ { rows = 1; print; next }
+    /^count: / { next }
+    /^[a-z_]+\[[0-9]+\]/ { rows = 1; print; next }
     rows && /^[[:space:]]/ {
       total++
       if (shown < max) { print; shown++ }
       next
     }
-    { rows = 0; print }
-    END {
-      if (total > 0) {
-        printf "(shown %d of %d ready queued item(s))\n", shown, total
-        if (total > shown) {
-          printf "(%d more queued - bin/fm-tasks-axi.sh ready)\n", total - shown
-        }
-      }
-    }
+    { if (rows) note(); rows = 0; print }
+    END { note() }
   '
+}
+
+print_ready_queued_bounded() {
+  print_listing_bounded "$1" "ready queued item(s)" "bin/fm-tasks-axi.sh ready"
+}
+
+# The work-under-way lines name every task with a worker record, so only an
+# in-flight row with no state/<id>.meta needs listing here.
+print_in_flight_without_meta() {  # <in-flight listing>
+  local row id
+  while IFS= read -r row; do
+    case "$row" in [[:space:]]*) ;; *) continue ;; esac
+    id=${row#"${row%%[![:space:]]*}"}
+    id=${id%%,*}
+    [ -f "$STATE/$id.meta" ] || printf '%s\n' "$row"
+  done < <(printf '%s\n' "$1" | strip_axi_help)
 }
 
 # tasks-axi listing header: count: <n>
@@ -585,6 +352,27 @@ print_backlog_reemit_groups() {
   fi
 }
 
+print_backlog_summary_groups() {  # <in-flight> <held> <blocked> <ready>
+  local in_flight=$1 held=$2 blocked=$3 unlisted
+  printf 'backlog summary (tasks-axi; done rows omitted; held rows in full; blocked and ready queued bounded to %s; task bodies omitted)\n' \
+    "$QUEUED_LIMIT"
+  printf 'counts: in flight %s, held %s (in-flight items included), blocked queued %s, ready queued %s\n' \
+    "$(listing_count "$in_flight")" "$(listing_count "$held")" "$(listing_count "$blocked")" "$(listing_count "$4")"
+  if [ "$(listing_count "$held")" != 0 ]; then
+    printf '\nheld (waiting on the captain or a date):\n'
+    printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help | sed '/^count: /d'
+  fi
+  unlisted=$(print_in_flight_without_meta "$in_flight" | fm_hold_reason_decode_stream)
+  if [ -n "$unlisted" ]; then
+    printf '\nin flight with no state/*.meta record:\n%s\n' "$unlisted"
+  fi
+  if [ "$(listing_count "$blocked")" != 0 ]; then
+    printf '\nblocked queued:\n'
+    print_listing_bounded "$(printf '%s\n' "$blocked" | fm_hold_reason_decode_stream)" \
+      "blocked queued item(s)" "bin/fm-tasks-axi.sh list --state queued --blocked"
+  fi
+}
+
 print_backlog_tasks_axi_compact() {
   local path=$1 in_flight_fields=$BACKLOG_FIELDS in_flight held blocked ready err
   [ "$REEMIT" -eq 0 ] || in_flight_fields=held
@@ -600,14 +388,7 @@ print_backlog_tasks_axi_compact() {
     if [ "$REEMIT" -eq 1 ]; then
       print_backlog_reemit_groups "$in_flight" "$held" "$blocked"
     else
-      printf 'compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to %s; task bodies omitted)\n' \
-        "$QUEUED_LIMIT"
-      printf '\nin flight:\n'
-      printf '%s\n' "$in_flight" | fm_hold_reason_decode_stream | strip_axi_help
-      printf '\nheld (captain- or time-gated; an in-flight item that is also held appears in both groups):\n'
-      printf '%s\n' "$held" | fm_hold_reason_decode_stream | strip_axi_help
-      printf '\nblocked queued:\n'
-      printf '%s\n' "$blocked" | fm_hold_reason_decode_stream | strip_axi_help
+      print_backlog_summary_groups "$in_flight" "$held" "$blocked" "$ready"
     fi
     printf '\nready queued (dispatchable now):\n'
     if fm_project_tiers_read "$CONFIG" 2>&1 && [ -n "$FM_PROJECT_TIERS" ]; then
@@ -643,26 +424,27 @@ print_backlog_compact() {
   fi
 }
 
-# One capped line for a task on context re-emit: <id> [<kind> <mode>]: <last status line>.
+last_status_line() {  # <status-file>
+  awk 'NF { line = $0 } END { print line }' "$1" 2>/dev/null
+}
+
+# <id> [<kind> <mode>]: <last status line>, the whole line capped.
 print_meta_reemit_line() {
   local meta=$1 id=$2 kind mode last
   kind=$(fm_meta_get "$meta" kind)
   mode=$(fm_meta_get "$meta" mode)
-  last=$(awk 'NF { line = $0 } END { print line }' "$STATE/$id.status" 2>/dev/null)
+  last=$(last_status_line "$STATE/$id.status")
   fm_cap_line "$id [${kind:-unknown kind}${mode:+ $mode}]: ${last:-(no status yet)}"
 }
 
-print_status_tail() {
-  local status=$1 line
-  printf 'status tail (last %s line(s), each capped at %s characters, wake-EVENT history, not current state; full log: %s):\n' \
-    "$STATUS_TAIL" "$FM_LINE_CAP_DEFAULT" "$status"
-  # A crewmate writes its own status lines, so their length is unbounded: one
-  # observed line ran 865 characters. Cap each one the way the wake digest's
-  # OPEN DECISIONS section does; the lede carries the state word and the key,
-  # and the full log path above reaches the rest.
-  while IFS= read -r line || [ -n "$line" ]; do
-    fm_cap_line "$line"
-  done < <(tail -n "$STATUS_TAIL" "$status")
+# Only the status part is capped, so the endpoint verdict always survives.
+print_meta_line() {  # <meta> <id> <endpoint-verdict>
+  local meta=$1 id=$2 kind mode last
+  kind=$(fm_meta_get "$meta" kind)
+  mode=$(fm_meta_get "$meta" mode)
+  last=$(last_status_line "$STATE/$id.status")
+  fm_cap_line_var "${last:-(no status yet)}"
+  printf '%s [%s] %s - latest: %s\n' "$id" "${kind:-unknown kind}${mode:+ $mode}" "$3" "$FM_LINE_CAP_LINE"
 }
 
 # fm_session_start_endpoint_read <backend> <target> [expected-label]: ONE
@@ -977,57 +759,42 @@ fi
 stage read-once
 section "READ-ONCE CONTRACT"
 cat <<'EOF'
-Everything below is printed in full for this session start: every state/*.meta,
-a compact data/backlog.md listing, a bounded tail of every state/*.status,
-data/projects.md, data/captain.md,
-and data/learnings.md.
+Below is a summary of data/backlog.md, one line per state/*.meta task with
+its latest state/*.status line, and data/projects.md, data/captain.md, and
+data/learnings.md in full.
 Do NOT re-read any of them after reading this digest, and do NOT bulk-read
-data/backlog.md or state/*.status: re-reading everything defeats the entire
-point of this command.
+data/backlog.md, state/*.meta, or state/*.status.
 
-Go to a source directly only when:
-  - this digest flagged it ABSENT (then rebuild or create it per AGENTS.md),
-  - its contents looked unparseable or corrupt,
-  - an individual full status log is needed for older wake-event history, or a
-    status line was capped and its tail matters (each task's full log path is
-    printed with its tail),
-  - a full task body is needed (bin/fm-tasks-axi.sh show <id> --full, or data/backlog.md),
-  - the backlog listing disclosed omitted queued items and this turn needs them,
-  - the NETWORK CHECKS section reported its checks still IN PROGRESS and this
-    turn needs their verdict (bin/fm-startup-network.sh report),
-  - or a STARTUP TRUNCATED banner named the stage that would have printed it, in
-    which case that stage's sources were never emitted and must be reconciled,
-  - or a context re-emit opened with a read cue because the
-    harness cut the digest short.
+Read one source only when:
+  - this digest flagged it ABSENT or it looked corrupt,
+  - one task's worktree, branch, or harness is needed (state/<id>.meta), or its
+    older status lines are (state/<id>.status),
+  - a full task body or an omitted row is needed (bin/fm-tasks-axi.sh show <id>
+    --full, or the command printed with the omission),
+  - NETWORK CHECKS reported IN PROGRESS and this turn needs the verdict
+    (bin/fm-startup-network.sh report),
+  - or a STARTUP TRUNCATED banner or a re-emit read cue says a stage never
+    printed.
 EOF
 
 if [ "$REEMIT" -eq 1 ]; then
   cat <<'EOF'
 
-On this context re-emit the "printed in full" line above does not hold for
-the CONTEXT section or the FLEET STATE backlog and work-under-way listings:
-  - CONTEXT is a manifest (path, byte size, hash) rather than full bodies;
-  - the backlog shows counts, the in-flight rows that are not held, and the
-    bounded ready queue, but not held or blocked rows;
-  - work under way is one line per state/*.meta task (id, kind, mode, last
-    status line), with no meta body, endpoint check, or status tail.
-Read a source, list held or blocked rows, or run bin/fm-crew-state.sh <id>
-only when this turn needs its content.
+On this context re-emit CONTEXT is a manifest (path, byte size, hash) rather
+than full bodies, the backlog shows counts, the in-flight rows that are not
+held, and the bounded ready queue, but not held or blocked rows, and work
+under way skips the endpoint check.
 EOF
 fi
 
 # --- 6. fleet-state digest ---------------------------------------------
-# Before CONTEXT: see this file's ORDERING note. Live fleet identity is what a
-# truncated tail must never take.
+# Before CONTEXT: a harness cuts an oversized digest from the tail, and live
+# fleet identity is what that cut must never take.
 stage fleet-state
 section "FLEET STATE"
 print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
 
-if [ "$REEMIT" -eq 1 ]; then
-  subsection "Work under way (state/*.meta; one line per task: id [kind mode]: last status line, capped at $FM_LINE_CAP_DEFAULT characters - wake-EVENT history, not current state)"
-else
-  subsection "Work under way (state/*.meta)"
-fi
+subsection "Work under way (state/*.meta; one line per task with its latest status line, an event rather than current state)"
 META_FOUND=0
 for meta in "$STATE"/*.meta; do
   [ -f "$meta" ] || continue
@@ -1037,9 +804,6 @@ for meta in "$STATE"/*.meta; do
     print_meta_reemit_line "$meta" "$id"
     continue
   fi
-  printf '\n--- %s ---\n' "$id"
-  cat "$meta"
-
   window=$(fm_meta_get "$meta" window)
   target=$(fm_backend_target_of_meta "$meta")
   if [ -n "$window" ]; then
@@ -1050,23 +814,16 @@ for meta in "$STATE"/*.meta; do
     # the bound firing and >=128 is a signal death. Every other nonzero status
     # is the probe's own verdict that the endpoint is gone.
     if [ "$endpoint_rc" -eq 0 ]; then
-      printf 'endpoint: alive (backend=%s window=%s)\n' "$backend" "$window"
+      endpoint="endpoint: alive (backend=$backend window=$window)"
     elif [ "$endpoint_rc" -eq 124 ] || [ "$endpoint_rc" -ge 128 ]; then
-      printf 'endpoint: error (backend=%s window=%s - the endpoint read died or hit its %ss bound; the digest continued past it)\n' \
-        "$backend" "$window" "$ENDPOINT_TIMEOUT"
+      endpoint="endpoint: error (backend=$backend window=$window - the endpoint read died or hit its ${ENDPOINT_TIMEOUT}s bound; the digest continued past it)"
     else
-      printf 'endpoint: dead (backend=%s window=%s)\n' "$backend" "$window"
+      endpoint="endpoint: dead (backend=$backend window=$window)"
     fi
   else
-    printf 'endpoint: unknown (no window recorded)\n'
+    endpoint='endpoint: unknown (no window recorded)'
   fi
-
-  status="$STATE/$id.status"
-  if [ -f "$status" ]; then
-    print_status_tail "$status"
-  else
-    printf 'status tail: (no status file yet: %s)\n' "$status"
-  fi
+  print_meta_line "$meta" "$id" "$endpoint"
 done
 [ "$META_FOUND" -eq 1 ] || printf '(none)\n'
 
@@ -1077,8 +834,8 @@ for status in "$STATE"/*.status; do
   id=$(basename "$status" .status)
   [ -f "$STATE/$id.meta" ] && continue
   ORPHAN_STATUS_FOUND=1
-  printf '\n--- %s ---\n' "$id"
-  print_status_tail "$status"
+  fm_cap_line_var "$(last_status_line "$status")"
+  printf '%s (%s) - latest: %s\n' "$id" "$status" "$FM_LINE_CAP_LINE"
 done
 [ "$ORPHAN_STATUS_FOUND" -eq 1 ] || printf '(none)\n'
 
@@ -1119,10 +876,8 @@ else
 fi
 
 # --- 8. context digest -----------------------------------------------------
-# Last of the bulk sections deliberately: curated memory is stable session to
-# session, already governed by config/startup-memory-budget, and recoverable
-# with one targeted read, so it is the cheapest thing for a truncated tail to
-# take (see this file's ORDERING note).
+# Last of the bulk sections: curated memory is stable session to session and
+# recoverable with one read, so it is the cheapest thing for a tail cut to take.
 stage context
 section "CONTEXT"
 if [ -f "$DATA/backlog/decisions/.fm-memory" ]; then

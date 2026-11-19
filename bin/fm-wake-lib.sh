@@ -3170,8 +3170,9 @@ fm_wake_latest_event() {  # <validated-status-path> <tail-byte-cap>
 # Print supplemental drain-time context only after the caller has committed the
 # raw queue consumption and released the append lock.
 fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
-  local rows=$1 snapshot=${2:-} manifest status_key mode path prefix line task endpoint
+  local rows=$1 snapshot=${2:-} manifest status_key mode path label task endpoint
   local snapshot_task snapshot_endpoint _snapshot_ident offset last_event event_line
+  local header_printed=0
   local LC_ALL=C
 
   manifest=$(fm_wake_annotation_manifest "$rows" | awk -F '\t' '
@@ -3237,15 +3238,14 @@ EOF
     while IFS= read -r event_line || [ -n "$event_line" ]; do
       [ -n "$event_line" ] || continue
       event_line=$(printf '%s' "$event_line" | LC_ALL=C tr '\t\r' '  ')
-      prefix="wake annotation: latest wake-EVENT observed at drain, not current state"
-      if [ "$event_line" != "$last_event" ]; then
-        prefix="wake annotation: unread wake-EVENT since last drain, not current state"
+      if [ "$header_printed" -eq 0 ]; then
+        printf 'wake events unread since the last drain (events, not current state):\n' || return 1
+        header_printed=1
       fi
-      if [ "$mode" = historical ]; then
-        prefix="$prefix; historical / not necessarily the triggering event"
-      fi
-      line="$prefix: $status_key: $event_line"
-      printf '%s\n' "$line" || return 1
+      label=$status_key
+      [ "$event_line" != "$last_event" ] || label="$label latest"
+      [ "$mode" != historical ] || label="$label, historical, maybe not the trigger"
+      printf '  %s: %s\n' "$label" "$event_line" || return 1
     done <<EOF
 $FM_WAKE_UNREAD_LINES
 EOF

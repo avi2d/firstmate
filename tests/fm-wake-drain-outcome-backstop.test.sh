@@ -217,7 +217,7 @@ test_successful_backstop_is_idempotent_without_consuming_delayed_annotation() {
     || fail "could not publish the delayed signal"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$signal_out" 2>/dev/null \
     || fail "delayed-signal drain failed"
-  grep -F 'latest wake-EVENT observed at drain, not current state: receipt-task.status: done: keyless completion awaiting recovery' "$signal_out" >/dev/null \
+  grep -F '  receipt-task.status latest: done: keyless completion awaiting recovery' "$signal_out" >/dev/null \
     || fail "the backstop receipt consumed the delayed signal annotation: $(cat "$signal_out")"
   pass "backstop receipts prevent repeats without consuming delayed signal annotations"
 }

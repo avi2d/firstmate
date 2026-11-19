@@ -554,7 +554,7 @@ export default function (pi: ExtensionAPI) {
     if (!generationIsLive(owner)) return false;
     const content = encodeFirstmateOperationalInput(
       "watcher",
-      `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,
+      `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first.`,
     );
     if (pending) owner.unconsumedWakes.set(pending.token, { content, pending });
     try {
