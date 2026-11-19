@@ -832,8 +832,7 @@ spawn_abort_cleanup() {
       "$RELAUNCH_REPLACEMENT_HARNESS" \
       "$RELAUNCH_REPLACEMENT_WT" \
       "$RELAUNCH_REPLACEMENT_STATE" \
-      "$ID" \
-      "$KIND"; then
+      "$ID"; then
       echo "warning: could not remove replacement wiring after aborted relaunch of $ID" >&2
     fi
     if [ -n "$RELAUNCH_REPLACEMENT_BUSY_GEN" ]; then
@@ -982,29 +981,14 @@ spawn_herdr_presentation_order_lock_acquire() {
 }
 
 clear_relaunch_harness_wiring() {
-  local harness=$1 wt=$2 state=$3 id=$4 kind=${5-} token_path token auth_path path
+  local harness=$1 wt=$2 state=$3 id=$4 path
   # A raw launch records its command basename, so resolve that to the adapter first.
   harness=$(fm_control_harness_family "$harness") || harness=
-  token_path=$(fm_control_harness_turnend_token_path "$harness" "$state" "$id") || return 1
-  token=
-  if [ -n "$token_path" ] && [ -f "$token_path" ]; then
-    IFS= read -r token <"$token_path" || [ -n "$token" ] || return 1
-  fi
-  auth_path=$(fm_control_harness_turnend_auth_path "$harness" "$token") || return 1
-  if [ -n "$auth_path" ]; then
-    rm -f -- "$auth_path" || return 1
-  fi
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     rm -f -- "$path" || return 1
   done <<EOF
-$(fm_control_harness_wiring_paths "$harness" "$wt" "$state" "$id" "$kind")
-EOF
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    rm -rf -- "$path" || return 1
-  done <<EOF
-$(fm_control_harness_wiring_dirs "$harness" "$state" "$id")
+$(fm_control_harness_wiring_paths "$harness" "$wt" "$state" "$id")
 EOF
 }
 
@@ -1392,7 +1376,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   # `relaunch` cannot reach two different answers about one endpoint.
   RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
   if fm_control_absence_recheck_applies "$BACKEND" "$RELAUNCH_STATE"; then
-    RELAUNCH_ABSENCE=$(fm_control_endpoint_absence_verdict "$BACKEND" "$RELAUNCH_TARGET" "$RELAUNCH_META")
+    RELAUNCH_ABSENCE=$(fm_control_endpoint_absence_verdict "$BACKEND" "$RELAUNCH_TARGET")
     case "${RELAUNCH_ABSENCE%%$'\t'*}" in
       gone) RELAUNCH_STATE=missing ;;
       dead) RELAUNCH_STATE=dead ;;
@@ -2965,12 +2949,8 @@ exclude_path() {
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >>"$EXCL"
 }
 if [ "$RELAUNCH" -eq 1 ]; then
-  # Retire the previous incarnation's per-task harness wiring before arming the
-  # new one. Without this, a harness switch would leave the old adapter's hook
-  # files and turn-end token registry entries behind, and even a same-harness
-  # relaunch would orphan the retired busy generation's token
-  # (bin/fm-control-lib.sh owns where those artifacts live).
-  clear_relaunch_harness_wiring "$RELAUNCH_PRIOR_HARNESS" "$WT" "$STATE_REAL" "$ID" "$KIND" || {
+  # A kept extension would still write the retired busy generation.
+  clear_relaunch_harness_wiring "$RELAUNCH_PRIOR_HARNESS" "$WT" "$STATE_REAL" "$ID" || {
     echo "error: could not retire $RELAUNCH_PRIOR_HARNESS wiring for task $ID; refusing to arm the replacement" >&2
     exit 1
   }
