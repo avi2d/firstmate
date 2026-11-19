@@ -367,6 +367,10 @@ load_decision() {  # <path>; sets DECISION_TEXT and DECISION_DIGEST
 # mutate path.
 tasks_axi() {
   local data file root backend
+  if [ "$(fm_backlog_backend_value "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}")" = backlog-md ]; then
+    bash "$SCRIPT_DIR/fm-tasks-axi.sh" "$@"
+    return $?
+  fi
   data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
   root=$(fm_backlog_root "$data") || fail "$FM_BACKLOG_TRANSITION_ERROR"
   backend=$(fm_tasks_axi_backend "$root") || return 2
@@ -379,6 +383,9 @@ tasks_axi() {
 }
 
 require_tasks_axi() {
+  if [ "$(fm_backlog_backend_value "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}")" = backlog-md ]; then
+    return 0
+  fi
   fm_tasks_axi_compatible || fail "compatible tasks-axi is required"
   tasks-axi hold --help 2>&1 | grep -F -- '--kind captain' >/dev/null \
     || fail "tasks-axi does not expose the captain-hold contract"
@@ -2269,7 +2276,9 @@ command_diverged() {
   # A read-only listing on a per-wake path, so it skips the mutation-oriented
   # compatibility floor and its extra probes: a listing this parser cannot read
   # simply yields no candidates and the report stays silent.
-  command -v tasks-axi >/dev/null 2>&1 || return 0
+  if [ "$(fm_backlog_backend_value "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}")" != backlog-md ]; then
+    command -v tasks-axi >/dev/null 2>&1 || return 0
+  fi
   ids=$(open_task_ids) || return 0
   [ -n "$ids" ] || return 0
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
@@ -2339,8 +2348,9 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
     || { printf 'fm-captain-hold: data directory cannot be resolved: %s\n' "$DATA" >&2; exit 2; }
   root=$(fm_backlog_root "$data") \
     || { printf 'fm-captain-hold: %s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2; exit 2; }
-  if ! backend=$(fm_tasks_axi_backend_resolve "$root"); then
-    exit 2
+  backend=backlog-md
+  if [ "$(fm_backlog_backend_value "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}")" != backlog-md ]; then
+    backend=$(fm_tasks_axi_backend_resolve "$root") || exit 2
   fi
   if [ "$backend" = markdown ]; then
     file=$(fm_backlog_file "$data") \
@@ -2354,7 +2364,9 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
       return 1
     fi
   fi
-  fm_tasks_axi_compatible || { printf 'fm-captain-hold: compatible tasks-axi is required\n' >&2; exit 2; }
+  if [ "$(fm_backlog_backend_value "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}")" != backlog-md ]; then
+    fm_tasks_axi_compatible || { printf 'fm-captain-hold: compatible tasks-axi is required\n' >&2; exit 2; }
+  fi
   if fm_backlog_row_probe "$data" "$id"; then
     state=${FM_BACKLOG_ROW_STATE%% *}
     if [ "$state" != "done" ] && [ "$FM_BACKLOG_ROW_HOLD_KIND" = captain ]; then

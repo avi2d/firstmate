@@ -238,6 +238,11 @@ fm_backlog_config_present() {  # <root> <authorized-root>
 # its rows in its own workspace and need not carry <data>/backlog.md at all.
 fm_backlog_source_present() {  # <data-dir> <authorized-data-dir> [root authorized-root]
   local data=$1 authorized_data=$2 root=${3:-} authorized_root=${4:-} file backend
+  local config=${FM_CONFIG_OVERRIDE:-${FM_HOME:-$(dirname "$data")}/config}
+  if [ "$(fm_backlog_backend_value "$config")" = backlog-md ]; then
+    fm_backlog_record_parent_authorized "$data/backlog" "backlog data directory" "$authorized_data" parent-only
+    return $?
+  fi
   if [ -z "$root" ]; then
     root=$(fm_backlog_root "$data") || return 1
     authorized_root=$(fm_backlog_authorized_root "$authorized_data")
@@ -298,6 +303,10 @@ fm_backlog_transition_applies() {  # <config-dir> <data-dir> <kind>
   if ! data=$(fm_backlog_data_absolute "$2"); then
     FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $2"
     return 2
+  fi
+  if [ "$(fm_backlog_backend_value "$config")" = backlog-md ]; then
+    fm_backlog_source_present "$data" "$authorized_data" || return 2
+    return 0
   fi
   root=$(fm_backlog_root "$data") || return 2
   authorized_root=$(fm_backlog_authorized_root "$authorized_data")
@@ -371,12 +380,22 @@ fm_tasks_axi() {
 # once will wedge again within the same run.
 fm_backlog_row_show() {  # <resolved-data-dir> <id> [flag...]
   local data=$1 id=$2 out status addressing_status secs=${FM_BACKLOG_ROW_TIMEOUT_SECS:-10}
+  local config=${FM_CONFIG_OVERRIDE:-${FM_HOME:-$(dirname "$data")}/config} script_dir
   shift 2
   # Enforce fm-timeout-lib.sh's bound contract arithmetically: the digits test
   # alone accepts padded zero such as 00. Tolerate a value too large for the
   # shell to compare at all.
   case "$secs" in ''|*[!0-9]*) secs=10 ;; esac
   [ "$secs" -gt 0 ] 2>/dev/null || secs=10
+  if [ "$(fm_backlog_backend_value "$config")" = backlog-md ]; then
+    if [ "$FM_BACKLOG_ROW_SHOW_WEDGED" = 1 ]; then
+      printf 'Backlog.md show %s skipped: the backlog backend already exceeded its %ss read bound\n' "$id" "$secs"
+      return 124
+    fi
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" fm_run_timed "$secs" bash "$script_dir/fm-tasks-axi.sh" show "$id" "$@"
+    return $?
+  fi
   fm_backlog_tasks_axi_addressing "$data"
   addressing_status=$?
   if [ "$addressing_status" -ne 0 ]; then
@@ -407,8 +426,13 @@ fm_backlog_row_show() {  # <resolved-data-dir> <id> [flag...]
 }
 
 fm_backlog_row_list() {  # <resolved-data-dir> [flag...]
-  local data=$1 addressing_status
+  local data=$1 addressing_status config=${FM_CONFIG_OVERRIDE:-${FM_HOME:-$(dirname "$1")}/config} script_dir
   shift
+  if [ "$(fm_backlog_backend_value "$config")" = backlog-md ]; then
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" bash "$script_dir/fm-tasks-axi.sh" list "$@"
+    return $?
+  fi
   fm_backlog_tasks_axi_addressing "$data"
   addressing_status=$?
   if [ "$addressing_status" -ne 0 ]; then
@@ -490,6 +514,20 @@ fm_backlog_mutate() {  # <data-dir> <verb> <id> [flag...]
   fm_backlog_source_present "$data" "$authorized_data"
   source_status=$?
   [ "$source_status" -eq 0 ] || return "$source_status"
+  local config=${FM_CONFIG_OVERRIDE:-${FM_HOME:-$(dirname "$data")}/config} script_dir
+  if [ "$(fm_backlog_backend_value "$config")" = backlog-md ]; then
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    if [ -n "${FM_TASKS_AXI_TIMEOUT:-}" ]; then
+      out=$(FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" fm_exec_timed "$FM_TASKS_AXI_TIMEOUT" "$FM_TASKS_AXI_TIMEOUT" bash "$script_dir/fm-tasks-axi.sh" "$verb" "$id" "$@" 2>&1)
+    else
+      out=$(FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" bash "$script_dir/fm-tasks-axi.sh" "$verb" "$id" "$@" 2>&1)
+    fi
+    command_status=$?
+    if [ "$command_status" -ne 0 ]; then
+      FM_BACKLOG_TRANSITION_ERROR=${out%%$'\n'*}
+    fi
+    return "$command_status"
+  fi
   fm_backlog_tasks_axi_addressing "$data"
   source_status=$?
   [ "$source_status" -eq 0 ] || return "$source_status"
