@@ -481,7 +481,7 @@ A home may instead select another tasks-axi adapter such as Beads through its ow
 
 Set `config/backlog-backend` to `backlog-md` only in a disposable home.
 This option changes `bin/fm-tasks-axi.sh` but does not move the dispatch or completion transitions.
-It does not import `data/backlog.md` or `data/done-archive.md`.
+It does not import or replace either source file when you select it.
 
 Install the pinned Backlog.md package with `npm ci --prefix bin/fm-backlog-md`.
 From the lab home's `data` directory, run the installed `backlog init Firstmate --defaults --no-git --integration-mode none`.
@@ -498,6 +498,13 @@ On or after that date, `ready` no longer excludes the ticket for the hold.
 Run the installed `backlog browser` from the lab home's `data` directory to view the board.
 Write through `bin/fm-tasks-axi.sh` so all writes take the same lock.
 The native board and CLI do not take that lock.
+
+Use [`bin/fm-backlog-md-convert.sh`](../bin/fm-backlog-md-convert.sh) with copies of the tasks-axi backlog and its Done archive.
+Run `--help` for the dry-run and apply commands.
+The converter counts queued and in-flight tasks as open, and counts every open task with a recorded hold as waiting, even if the hold date has passed.
+It keeps archived tasks in the archive and retains non-blocking relations and blocker reasons in the ticket's implementation notes.
+The converter rejects duplicate ticket IDs and public follow-up obligations rather than dropping records.
+Keep both source copies if an import stops partway through, and retry in a fresh lab board.
 
 ### Captain holds on Beads
 

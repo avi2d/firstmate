@@ -3,6 +3,7 @@
   "private": true,
   "dependencies": {
     "backlog.md": "1.55.3",
+    "tasks-axi": "0.2.6",
     "yaml": "2.8.3"
   }
 }

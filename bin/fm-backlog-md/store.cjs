@@ -99,6 +99,12 @@ function setSection(ticket, section, body) {
     : `${ticket.markdown.trimEnd()}\n\n## ${heading}\n\n${block}\n`;
 }
 
+function draftTicket(fields, description) {
+  const ticket = { fields, markdown: '' };
+  if (description !== null) setSection(ticket, 'description', description);
+  return ticket;
+}
+
 function atomicWrite(file, content) {
   const temp = path.join(path.dirname(file), `.${randomUUID()}.tmp`);
   const fd = fs.openSync(temp, 'wx', 0o600);
@@ -142,7 +148,8 @@ function board(root) {
 
   return {
     tickets,
-    add(fields, description) {
+    add(draft) {
+      const { fields } = draft;
       if (boardIds.has(fields.id.toUpperCase())) {
         throw new Error(`Backlog.md treats ticket IDs case-insensitively: ${fields.id} already exists`);
       }
@@ -150,9 +157,9 @@ function board(root) {
       const file = path.join(active, `${prefix}-${fields.id.toLowerCase()} - ticket.md`);
       if (fs.existsSync(file)) throw configError(file, 'ticket filename already exists');
       const ordinal = Math.max(0, ...Array.from(tickets.values(), ticket => ticket.fields.ordinal ?? 0)) + 1000;
-      const ticket = { file, fields: { ...fields, ordinal }, markdown: '', archived: false };
-      if (description !== null) setSection(ticket, 'description', description);
+      const ticket = { ...draft, file, fields: { ...fields, ordinal }, archived: false };
       this.save(ticket);
+      boardIds.add(fields.id.toUpperCase());
       tickets.set(fields.id, ticket);
       return ticket;
     },
@@ -215,7 +222,7 @@ function projectTask(ticket, tickets, now) {
   const body = ['description', 'finalSummary'].map(section => sectionBody(ticket, section)).filter(Boolean).join('\n');
   return {
     id: fields.id,
-    title: [fields.title, ...refs].join(' '),
+    title: [fields.title, ...refs.filter(ref => !fields.title.includes(ref))].join(' '),
     state,
     kind: fields.type ?? null,
     repo: fields.project ?? null,
@@ -243,4 +250,4 @@ function taskOrder(left, right) {
   return (left.fields.ordinal ?? 0) - (right.fields.ordinal ?? 0) || left.fields.id.localeCompare(right.fields.id);
 }
 
-module.exports = { board, PR, SLUG, projectTask, holdRecord, saveHold, taskOrder, sectionBody, setSection };
+module.exports = { board, draftTicket, PR, SLUG, projectTask, holdRecord, saveHold, taskOrder, sectionBody, setSection };
