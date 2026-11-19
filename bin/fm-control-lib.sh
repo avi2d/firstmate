@@ -40,44 +40,14 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   fm_control_harness_supported "${1-}"
 }
 
-fm_control_interrupt_transport() {  # <harness>
-  fm_control_harness_supported "${1-}" || return 1
-  printf 'key'
-}
-
 fm_control_interrupt_key() {  # <harness>
   fm_control_harness_supported "${1-}" || return 1
   printf 'Escape'
 }
 
-fm_control_interrupt_repeat() {  # <harness>
-  fm_control_harness_supported "${1-}" || return 1
-  printf '1'
-}
-
-# Prints nothing: Pi sends its single press without waiting for a rendered arm.
-fm_control_interrupt_arm_signal() {  # <harness>
-  fm_control_harness_supported "${1-}"
-}
-
-fm_control_interrupt_press_gap() {  # <harness>
-  fm_control_harness_supported "${1-}" || return 1
-  printf '0.2'
-}
-
-# Prints nothing: no Pi surface opens on a mistimed Escape.
-fm_control_interrupt_hazard_signal() {  # <harness>
-  fm_control_harness_supported "${1-}"
-}
-
 # Prints nothing: Pi leaves its composer empty after an interrupt.
 fm_control_interrupt_clear_key() {  # <harness>
   fm_control_harness_supported "${1-}"
-}
-
-fm_control_interrupt_ack_source() {  # <harness>
-  fm_control_harness_supported "${1-}" || return 1
-  printf 'none'
 }
 
 fm_control_exit_command() {  # <harness>
@@ -92,10 +62,6 @@ fm_control_backend_supports_key() {  # <backend> <key>
 }
 
 fm_control_backend_state_verified() {  # <backend>
-  [ "${1-}" = herdr ]
-}
-
-fm_control_backend_exit_supported() {  # <backend>
   [ "${1-}" = herdr ]
 }
 
