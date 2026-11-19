@@ -154,9 +154,9 @@ Every `/bearings` chat response renders EXACTLY these four sections, in THIS ord
    When the section is empty but coverage is incomplete, say that no decision is recorded and give the checked/known count; a missing coverage field is also unverified.
 2. **Recently Landed** - the bounded current recent-completions baseline: merged PRs, completed scouts, and finished local-only merges across the main fleet and every registered secondmate home.
    Empty-state: "No recent completions are in the current baseline."
-3. **Underway** - live work progressing on its own, one line of current state per direct report.
+3. **Underway** - live work progressing on its own, one line of current state per direct report, naming the remaining pieces and the gate it waits on, never a forecast duration.
    Empty-state: "Nothing is underway."
-4. **Charted Next** - queued or gated work waiting on the fleet or a date, deferred or aged captain-hold safety gates, plus action-free fleet-integrity warnings.
+4. **Charted Next** - queued or gated work waiting on the fleet or a date, deferred or aged captain-hold safety gates, plus action-free fleet-integrity warnings, each row naming its blocker, date, age, or integrity reason and never a forecast duration.
    Empty-state: "Nothing is queued."
 
 Rules that keep the contract unambiguous:
