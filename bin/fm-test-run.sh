@@ -370,8 +370,7 @@ family_for_basename() {
     fm-harness-liveness-drift-live-e2e.test.sh|\
     fm-kimi-trust-prompt-live-e2e.test.sh|\
     fm-devin-signals-live-e2e.test.sh|fm-commandcode-signals-live-e2e.test.sh|fm-cortex-signals-live-e2e.test.sh|fm-hermes-signals-live-e2e.test.sh|fm-hermes-profile-safety-live-e2e.test.sh|fm-hermes-gateway-coexistence-live-e2e.test.sh|fm-muse-signals-live-e2e.test.sh|fm-rovo-signals-live-e2e.test.sh|fm-agy-signals-live-e2e.test.sh|fm-kiro-signals-live-e2e.test.sh|fm-polytoken-signals-live-e2e.test.sh|\
-    fm-launch-prompt-signals-live-e2e.test.sh|fm-backend-t3code-live-e2e.test.sh|\
-    fm-backend-t3code-pr-tools-live-e2e.test.sh|\
+    fm-launch-prompt-signals-live-e2e.test.sh|\
     fm-herdr-version-floor-live-e2e.test.sh|\
     fm-herdr-projected-cd-live-e2e.test.sh|\
     fm-herdr-pi-stale-registration-live-e2e.test.sh|\
@@ -397,7 +396,6 @@ family_for_basename() {
       printf '%s\n' live-harness-optin
       ;;
     fm-backend-herdr.test.sh|fm-backend.test.sh|\
-    fm-backend-t3code.test.sh|fm-t3-mcp.test.sh|\
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
@@ -494,7 +492,6 @@ list_proven_isolated() {
   cat <<'EOF'
 tests/fm-arm-pretool-check.test.sh
 tests/fm-backend-herdr.test.sh
-tests/fm-backend-t3code.test.sh
 tests/fm-brief.test.sh
 tests/fm-cd-pretool-check.test.sh
 tests/fm-composer-ghost.test.sh
@@ -512,7 +509,6 @@ tests/fm-send-settle.test.sh
 tests/fm-send-strict.test.sh
 tests/fm-spawn-batch.test.sh
 tests/fm-supervision-instructions.test.sh
-tests/fm-t3-mcp.test.sh
 tests/fm-test-run.test.sh
 tests/fm-tmux-submit-busy.test.sh
 tests/fm-transition-lib.test.sh
@@ -526,7 +522,6 @@ portable_parallel_weight_hints() {
   cat <<'EOF'
 tests/fm-arm-pretool-check.test.sh 60490
 tests/fm-backend-herdr.test.sh 66473
-tests/fm-backend-t3code.test.sh 287526
 tests/fm-brief.test.sh 44285
 tests/fm-cd-pretool-check.test.sh 23109
 tests/fm-composer-ghost.test.sh 3688
@@ -544,7 +539,6 @@ tests/fm-send-settle.test.sh 4224
 tests/fm-send-strict.test.sh 7673
 tests/fm-spawn-batch.test.sh 9781
 tests/fm-supervision-instructions.test.sh 3570
-tests/fm-t3-mcp.test.sh 57613
 tests/fm-test-run.test.sh 500350
 tests/fm-tmux-submit-busy.test.sh 3201
 tests/fm-transition-lib.test.sh 440
@@ -570,10 +564,8 @@ portable_parallel_lane_weight() {
 list_portable_parallel_1() {
   cat <<'EOF'
 tests/fm-lint.test.sh
-tests/fm-backend-t3code.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-pi-primary-types.test.sh
-tests/fm-t3-mcp.test.sh
 tests/fm-brief.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-grok-harness.test.sh
@@ -699,8 +691,6 @@ tests/fm-approval-failover.test.sh 9826
 tests/fm-ask-user-authority.test.sh 481
 tests/fm-assertions.test.sh 115
 tests/fm-backend-herdr-server-detach.test.sh 1460
-tests/fm-backend-t3code-live-e2e.test.sh 51
-tests/fm-backend-t3code-pr-tools-live-e2e.test.sh 52
 tests/fm-backend.test.sh 28709
 tests/fm-backlog-atomicity.test.sh 219379
 tests/fm-backlog-read-bound.test.sh 24743
@@ -1604,10 +1594,6 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       printf '%s\n' backend-dispatch
       ;;
-    bin/backends/t3code*|bin/fm-t3-mcp.mjs)
-      printf '%s\n' backend-dispatch
-      families_for_unmapped_bin "$path" || true
-      ;;
     tests/t3-fake-*)
       families_for_test_reference "$(basename "$path")" t3-fake-lib.sh \
         || printf '%s\n' "__unmapped__:$path"
@@ -1625,7 +1611,6 @@ families_for_changed_path() {
       ;;
     bin/fm-watch*|bin/fm-classify-lib.sh)
       printf '%s\n' watcher-wake-lock
-      printf '%s\n' "__script__:fm-backend-t3code.test.sh"
       ;;
     bin/fm-wake*|bin/fm-inactive-reconcile.sh|\
     bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
@@ -1781,7 +1766,6 @@ families_for_changed_path() {
       ;;
     bin/fm-teardown.sh)
       printf '%s\n' pr-forge
-      printf '%s\n' "__script__:fm-backend-t3code.test.sh"
       ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-review-diff.sh|\
     bin/fm-check*|bin/fm-pipeline-spend.sh)
