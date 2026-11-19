@@ -261,7 +261,7 @@ fm_control_exit_command() {  # <harness> [opencode-major]
 fm_control_backend_supports_key() {  # <backend> <key>
   local backend=${1-} key=${2-}
   case "$backend" in
-    tmux|herdr|zellij|cmux|paseo|rex|tern|hc)
+    tmux|herdr|zellij|paseo|rex|tern|hc)
       case "$key" in Escape|Enter|C-c|C-u) return 0 ;; esac
       ;;
     orca)

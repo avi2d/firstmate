@@ -5024,18 +5024,6 @@ EOF
     fi
     T="$ZELLIJ_SES:$ZELLIJ_PANE_ID"
     ;;
-  cmux)
-    fm_backend_cmux_container_ensure || exit 1
-    CMUX_TASK_IDS=$(fm_backend_cmux_create_task "$W" "$PROJ_ABS") || exit 1
-    read -r CMUX_WORKSPACE_ID CMUX_SURFACE_ID <<EOF
-$CMUX_TASK_IDS
-EOF
-    if [ -z "$CMUX_WORKSPACE_ID" ] || [ -z "$CMUX_SURFACE_ID" ]; then
-      echo "error: cmux did not return a workspace/surface id for $W" >&2
-      exit 1
-    fi
-    T="$CMUX_WORKSPACE_ID:$CMUX_SURFACE_ID"
-    ;;
   paseo)
     fm_backend_paseo_container_ensure || exit 1
     PASEO_TASK_IDS=$(fm_backend_paseo_create_task "$W" "$PROJ_ABS") || exit 1
@@ -5184,7 +5172,6 @@ spawn_send_text_line() { # <target> <text>
   herdr) fm_backend_herdr_send_text_line "$1" "$2" ;;
   zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_text_line "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
   paseo) fm_backend_paseo_send_text_line "$1" "$2" "$W" ;;
   rex) fm_backend_rex_send_text_line "$1" "$2" "$W" ;;
   t3code) fm_backend_t3code_send_literal "$1" "$2" ;;
@@ -5197,7 +5184,6 @@ spawn_current_path() { # <target>
   tmux) fm_backend_tmux_current_path "$1" ;;
   herdr) fm_backend_herdr_current_path "$1" ;;
   zellij) fm_backend_zellij_current_path "$1" "$W" ;;
-  cmux) fm_backend_cmux_current_path "$1" "$W" ;;
   paseo) fm_backend_paseo_current_path "$1" "$W" ;;
   rex) fm_backend_rex_current_path "$1" "$W" ;;
   tern) fm_backend_tern_current_path "$1" "$W" ;;
@@ -5212,7 +5198,6 @@ spawn_send_literal() { # <target> <text>
   herdr) fm_backend_herdr_send_literal "$1" "$guarded" ;;
   zellij) fm_backend_zellij_send_literal "$1" "$guarded" "$W" ;;
   orca) fm_backend_orca_send_literal "$1" "$guarded" ;;
-  cmux) fm_backend_cmux_send_literal "$1" "$guarded" "$W" ;;
   paseo) fm_backend_paseo_send_literal "$1" "$guarded" "$W" ;;
   rex) fm_backend_rex_send_literal "$1" "$guarded" "$W" ;;
   t3code) fm_backend_t3code_send_literal "$1" "$2" ;;
@@ -5230,7 +5215,6 @@ spawn_send_key() { # <target> <key>
   herdr) fm_backend_herdr_send_key "$1" "$2" ;;
   zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_key "$1" "$2" ;;
-  cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
   paseo) fm_backend_paseo_send_key "$1" "$2" "$W" ;;
   rex) fm_backend_rex_send_key "$1" "$2" "$W" ;;
   t3code) fm_backend_t3code_send_literal "$1" "$2" ;;
@@ -7134,10 +7118,6 @@ preserve_relaunch_meta() {
   if [ "$BACKEND" = orca ]; then
     echo "orca_worktree_id=$ORCA_WORKTREE_ID"
     echo "terminal=$ORCA_TERMINAL"
-  fi
-  if [ "$BACKEND" = cmux ]; then
-    echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
-    echo "cmux_surface_id=$CMUX_SURFACE_ID"
   fi
   if [ "$BACKEND" = paseo ]; then
     echo "paseo_terminal_id=$FM_PASEO_TASK_TERMINAL_ID"
