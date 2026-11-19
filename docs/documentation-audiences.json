@@ -790,6 +790,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/lean-switch.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/adr/0019-remote-worker-cleanup-and-reclaim.md",
       "audience": "maintainer-architecture"
     }
