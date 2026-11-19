@@ -428,9 +428,6 @@ family_for_basename() {
     fm-backend-rex.test.sh|fm-backend-rex-smoke.test.sh|fm-backend-rex-eventwait-smoke.test.sh)
       printf '%s\n' rex
       ;;
-    fm-backend-tern.test.sh|fm-backend-tern-smoke.test.sh)
-      printf '%s\n' tern
-      ;;
     fm-backend-hc.test.sh|fm-backend-hc-smoke.test.sh|fm-backend-hc-appdetect-smoke.test.sh)
       printf '%s\n' hc
       ;;
@@ -462,7 +459,7 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    rex|tern|hc) printf '%s\n' optional-binary ;;
+    rex|hc) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -481,7 +478,6 @@ pr-forge
 afk
 snapshot-bearings
 rex
-tern
 hc
 standalone
 unclassified
@@ -723,8 +719,6 @@ tests/fm-backend-rex-smoke.test.sh 42
 tests/fm-backend-rex.test.sh 15552
 tests/fm-backend-t3code-live-e2e.test.sh 51
 tests/fm-backend-t3code-pr-tools-live-e2e.test.sh 52
-tests/fm-backend-tern-smoke.test.sh 60
-tests/fm-backend-tern.test.sh 6000
 tests/fm-backend-tmux-smoke.test.sh 829
 tests/fm-backend.test.sh 28709
 tests/fm-backlog-atomicity.test.sh 219379
@@ -1633,10 +1627,6 @@ families_for_changed_path() {
       ;;
     bin/backends/rex*|bin/fm-rex-marks.sh|tests/rex-test-safety.sh)
       printf '%s\n' rex
-      printf '%s\n' backend-dispatch
-      ;;
-    bin/backends/tern*|tests/tern-test-safety.sh)
-      printf '%s\n' tern
       printf '%s\n' backend-dispatch
       ;;
     bin/backends/hc.sh|bin/fm-hc-lab.sh|tests/hc-test-safety.sh)

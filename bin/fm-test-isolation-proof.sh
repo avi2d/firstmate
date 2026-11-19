@@ -143,9 +143,6 @@ exclusion_reason() {
     fm-backend-herdr-workspace-per-home-e2e.test.sh|fm-herdr-session-cleanup-e2e.test.sh)
       printf '%s\n' 'real Herdr-gated; Herdr lane is a later phase'
       ;;
-    fm-backend-tern.test.sh|fm-backend-tern-smoke.test.sh)
-      printf '%s\n' 'tern optional backend; keep out of pure parallel pool'
-      ;;
     fm-backend-hc.test.sh|fm-backend-hc-smoke.test.sh)
       printf '%s\n' 'hc optional backend; keep out of pure parallel pool'
       ;;
