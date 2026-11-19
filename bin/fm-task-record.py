@@ -24,6 +24,7 @@ TERMINAL = {"done", "failed", "dropped", "cancelled"}
 BACKLOG_ROW = re.compile(r"^[-*]\s+(?:\[[ xX]\]\s+(\S+)|\*\*([^*]+)\*\*)\s+-\s+(.*)$")
 PR_URL = re.compile(r'https://[^\s<>"()]+/(?:pull|pulls|-/merge_requests)/[0-9]+(?=$|[\s<>"(),])')
 MIN_CASES = 5
+RESULTS = ("accepted", "failed", "dropped", "missing")
 
 
 @dataclass
@@ -136,6 +137,20 @@ def backlog_rows(data: Path, config: Path) -> dict[str, BacklogRow]:
 
 def fields(path: Path) -> dict[str, str]:
     return dict(line.split("=", 1) for line in (read_record(path) or "").splitlines() if "=" in line)
+
+
+def archived_results(state: Path) -> dict[str, dict[str, str]]:
+    results = {}
+    archive = state / "status-archive"
+    if archive.is_symlink():
+        return results
+    for path in archive.glob("*/result"):
+        if path.parent.is_symlink():
+            continue
+        record = fields(path)
+        if record.get("kind") in {"ship", "scout"} and record.get("result") in RESULTS:
+            results[path.parent.name] = record
+    return results
 
 
 def brief_birth(path: Path) -> int | None:
@@ -360,12 +375,13 @@ def pr_in(text: str) -> str | None:
 
 def task_record(task: str, paths: list[Path], state: Path, data: Path,
                 backlog: BacklogRow | None, receipts: set[str], spend: list[dict],
-                db: sqlite3.Connection | None) -> dict | None:
+                db: sqlite3.Connection | None, archived: dict[str, str]) -> dict | None:
     live = state / f"{task}.status"
     meta = fields(state / f"{task}.meta")
     streams = [(path, events_for(path)) for path in paths]
     live_events = next((events for path, events in streams if path == live), [])
-    if meta and live_events:
+    if meta and (live_events or archived):
+        archived = {}
         path, events = live, live_events
         if not any(e.verb in TERMINAL for e in live_events):
             return None
@@ -373,7 +389,9 @@ def task_record(task: str, paths: list[Path], state: Path, data: Path,
         path, events = max(streams, key=lambda stream: (status_score(stream[1]), stream[0] == live),
                            default=(None, []))
     stop = stop_index(events)
-    if stop is None and (not backlog or backlog.state != "done" or backlog.kind not in {"ship", "scout"}):
+    if stop is None and not archived and (
+        not backlog or backlog.state != "done" or backlog.kind not in {"ship", "scout"}
+    ):
         return None
     meta = meta if path == live or path is None else {}
     brief_path = data / task / "brief.md"
@@ -381,7 +399,7 @@ def task_record(task: str, paths: list[Path], state: Path, data: Path,
     setup = brief.partition("\n# Setup\n")[2].partition("\n# Rules\n")[0]
     mode = re.search(r"^Delivery contract: mode=(\S+)", brief, re.MULTILINE)
     project = re.search(r"^You are in a disposable git worktree of (.+), at a detached HEAD", setup, re.MULTILINE)
-    kind = meta.get("kind") or (backlog.kind if backlog else None)
+    kind = archived.get("kind") or meta.get("kind") or (backlog.kind if backlog else None)
     if not kind:
         kind = "scout" if "\nThis is a SCOUT task:" in setup else "ship" if mode else None
     if kind == "secondmate":
@@ -398,6 +416,8 @@ def task_record(task: str, paths: list[Path], state: Path, data: Path,
     backlog_pr = backlog.pr if backlog else None
     if pr and backlog_pr and pr != backlog_pr:
         result = None if result == "accepted" else result
+    if archived:
+        result = archived["result"] if archived["result"] != "missing" else None
     start = brief_birth(brief_path) if brief else None
     stop_at = end.at if end else None
     attribution_pr = pr or (backlog_pr if result == "accepted" else None)
@@ -406,7 +426,7 @@ def task_record(task: str, paths: list[Path], state: Path, data: Path,
         "id": task, "kind": kind,
         "repo": (backlog.repo if backlog else None)
         or (Path(meta["project"]).name if meta.get("project") else None) or (project[1] if project else None),
-        "mode": meta.get("mode") or (mode[1] if mode else None),
+        "mode": archived.get("mode") or meta.get("mode") or (mode[1] if mode else None),
         "size_band": meta.get("size_band") or (backlog.tag("size-band") if backlog else None),
         "result": result, **timing(measured, start),
         "blockers": sum(e.verb == "blocked" for e in measured) if measured else None,
@@ -461,15 +481,18 @@ The clock starts at brief creation and stops at the first done line, or
 the first failure or drop when there is no done line. Durations are seconds.
 Paused time counts as pipeline wait. A decision, a block, and active work
 each have their own bucket. Untimed transitions make timing missing.
-A done line alone does not prove acceptance. A backlog receipt can record
-acceptance or discard; a missing outcome stays missing.
+The cleanup result takes priority over older evidence, even if it is missing.
+For tasks without a cleanup result, the command checks the status and backlog.
+A done line alone does not prove acceptance.
 Aggregate uses all matching timed cases, including failed and dropped
-cases, and reports timing coverage. P90 uses the nearest rank.
+cases, and reports timing coverage. Use --result accepted for accepted cases
+only. P90 uses the nearest rank.
 Review rounds and pipeline fix rounds come from no-mistakes. Pipeline
 token counts come from the optional spend ledger. They exclude worker
 tokens and do not estimate cost. >= marks a recorded lower bound.""")
     parser.add_argument("--aggregate", action="store_true", help="summarize the matching cases")
     parser.add_argument("--nm-db", type=Path, help="no-mistakes database (default: NM_HOME/state.sqlite)")
+    parser.add_argument("--result", choices=RESULTS, help="include only cases with this result")
     for name in ("kind", "repo", "mode", "size-band"):
         parser.add_argument(f"--{name}")
     args = parser.parse_args()
@@ -481,6 +504,7 @@ tokens and do not estimate cost. >= marks a recorded lower bound.""")
     config = Path(os.environ.get("FM_CONFIG_OVERRIDE") or home / "config")
     backlog = backlog_rows(data, config)
     paths = status_paths(state, data)
+    results = archived_results(state)
     receipts = generations(state)
     spend = spend_by_task(data)
     filters = {key: getattr(args, key) for key in ("kind", "repo", "mode", "size_band")}
@@ -488,11 +512,13 @@ tokens and do not estimate cost. >= marks a recorded lower bound.""")
     db_path = args.nm_db or Path(os.environ.get("NM_HOME") or Path.home() / ".no-mistakes") / "state.sqlite"
     db = open_run_db(db_path)
     try:
-        for task in sorted(paths.keys() | backlog.keys()):
+        for task in sorted(paths.keys() | backlog.keys() | results.keys()):
             if not TASK_ID.fullmatch(task):
                 continue
             row = task_record(task, paths.get(task, []), state, data, backlog.get(task),
-                              receipts.get(task, set()), spend.get(task, []), db)
+                              receipts.get(task, set()), spend.get(task, []), db, results.get(task, {}))
+            if row and args.result and (row["result"] or "missing") != args.result:
+                continue
             if row and all(value is None or row.get(key) == value for key, value in filters.items()):
                 rows.append(row)
     finally:
