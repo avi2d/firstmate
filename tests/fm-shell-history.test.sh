@@ -9,7 +9,7 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT=$(fm_test_tmproot fm-shell-history-tests)
 
-command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr/zellij/cmux adapters)"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr/zellij adapters)"; exit 0; }
 
 SHELL_LINE='export FM_TASK_ID=fixture-1'
 SOURCE_LINE=". '/tmp/fm-fixture-1/launch.s1.sh'"
@@ -105,28 +105,6 @@ SH
   printf '%s\n' "$fb"
 }
 
-make_cmux_fakebin() {  # <dir> -> echoes fakebin dir
-  local fb="$1/fakebin"
-  mkdir -p "$fb"
-  cat > "$fb/cmux" <<'SH'
-#!/usr/bin/env bash
-set -u
-LOG="${FM_CMUX_LOG:?}"
-{
-  printf 'cmux'
-  for a in "$@"; do printf '\x1f%s' "$a"; done
-  printf '\n'
-} >> "$LOG"
-if [ "${1:-}" = list-panes ]; then
-  printf '{"panes":[{"surface_ids":["sf-1"]}]}\n'
-  exit 0
-fi
-exit 0
-SH
-  chmod +x "$fb/cmux"
-  printf '%s\n' "$fb"
-}
-
 test_helper_prefixes_one_space() {
   local out
   # shellcheck source=/dev/null
@@ -193,21 +171,6 @@ test_orca_shell_lines_carry_the_space() {
   pass "orca: shell lines guarded, literal transport verbatim"
 }
 
-test_cmux_shell_lines_carry_the_space() {
-  local dir="$TMP_ROOT/cmux" fb log home
-  mkdir -p "$dir"
-  home="$dir/home"
-  mkdir -p "$home"
-  fb=$(make_cmux_fakebin "$dir")
-  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_HOME="$home" \
-    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_text_line "ws-1:sf-1" "$1"; fm_backend_cmux_send_literal "ws-1:sf-1" "$2"' "$ROOT" "$SHELL_LINE" "$SOURCE_LINE"
-  log=$(cat "$dir/log")
-  assert_contains "$log" "$(printf '\x1fsend\x1f--workspace\x1fws-1\x1f--surface\x1fsf-1\x1f--\x1f %s' "$SHELL_LINE")" "cmux send_text_line did not guard its shell line from history"
-  assert_contains "$log" "$(printf '\x1fsend\x1f--workspace\x1fws-1\x1f--surface\x1fsf-1\x1f--\x1f%s' "$SOURCE_LINE")" "cmux send_literal must stay a verbatim transport"
-  assert_not_contains "$log" "$(printf '\x1fsend\x1f--workspace\x1fws-1\x1f--surface\x1fsf-1\x1f--\x1f %s' "$SOURCE_LINE")" "cmux send_literal must not guard composer-bound bytes"
-  pass "cmux: shell lines guarded, literal transport verbatim"
-}
-
 test_composer_text_stays_verbatim() {
   local dir="$TMP_ROOT/composer" fb log
   mkdir -p "$dir"
@@ -225,5 +188,4 @@ test_tmux_shell_lines_carry_the_space
 test_herdr_shell_lines_carry_the_space
 test_zellij_shell_lines_carry_the_space
 test_orca_shell_lines_carry_the_space
-test_cmux_shell_lines_carry_the_space
 test_composer_text_stays_verbatim
