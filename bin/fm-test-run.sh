@@ -323,7 +323,6 @@ family_for_basename() {
     fm-supervision-events.test.sh|fm-turnend-guard.test.sh|\
     fm-wake-drain-unread-status.test.sh|\
     fm-tool-update-check.test.sh|\
-    fm-mail.test.sh|fm-mail-check.test.sh|\
     fm-turnend-foreign-owner-arm-fix.test.sh|\
     fm-wake-queue.test.sh|fm-watch-arm.test.sh|fm-watch-checkpoint.test.sh|fm-watch-recovery-loop.test.sh|\
     fm-codex-stop-park.test.sh|\
@@ -871,8 +870,6 @@ tests/fm-mac-keepawake.test.sh 11273
 tests/fm-mac-load-day.test.sh 180
 tests/fm-mac-load-field.test.sh 740
 tests/fm-mac-load-gate.test.sh 42468
-tests/fm-mail-check.test.sh 7524
-tests/fm-mail.test.sh 9684
 tests/fm-merge-hold.test.sh 1889
 tests/fm-merge-local.test.sh 6156
 tests/fm-merge-on-green.test.sh 70538
