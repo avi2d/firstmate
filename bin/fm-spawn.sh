@@ -79,18 +79,14 @@
 #   makes a harness switch one ordinary relaunch. It refuses unless the
 #   recorded endpoint is positively agent-free on a backend with both a
 #   recovery-grade agent-state classifier and replacement-agent support
-#   (tmux or herdr), and clears the previous harness's per-task wiring
-#   before arming the new incarnation. T3 Code has the classifier but refuses
-#   relaunch because a thread keeps its conversation across turns and provider
-#   changes. Two verdicts are agent-free: a `dead`
+#   (herdr), and clears the previous harness's per-task wiring
+#   before arming the new incarnation. Two verdicts are agent-free: a `dead`
 #   endpoint is ADOPTED as-is, while an endpoint PROVEN gone is RE-CREATED in the recorded
 #   worktree and the republished record rebinds the task to it. That proof is
 #   its own step, because a backend's `missing` also covers an endpoint that is
-#   merely unreachable from here - and it is only available on HERDR, which must
+#   merely unreachable from here - so HERDR must
 #   still read the recorded pane as gone once that session's server is running
-#   again. A tmux `missing` always refuses: a task record carries no socket
-#   identity for its endpoint, so no read here can tell a destroyed window from
-#   one on a tmux server this process cannot address. An endpoint that turns out
+#   again. An endpoint that turns out
 #   to have survived refuses too. The worktree is reused untouched either way; a
 #   rebind is a recovery, never a teardown. Only a crewmate or scout rebinds: a
 #   secondmate whose endpoint is gone is respawned by its own owner
@@ -125,38 +121,10 @@
 #   --backend <name> is the explicit runtime session-provider backend for this
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
-#   config/backend, then runtime auto-detection from the runtime firstmate's
-#   environment: $TMUX, HERDR_ENV=1, TERM_PROGRAM=rex with REX_BLOCK, cmux
-#   runtime signals, or the Herdr app signals (via
-#   bin/fm-backend.sh's fm_backend_detect, with cmux fallback details in
-#   docs/cmux-backend.md and the app signals in docs/hc-backend.md),
-#   then tmux.
-#   Spawn-capable backends are the reference tmux adapter, verified herdr
-#   adapter, and experimental zellij, orca, cmux, paseo, rex, t3code, tern,
-#   and hc adapters. Orca owns both the task worktree and terminal, so ship/scout Orca
-#   spawns do not run treehouse get; cmux, paseo, rex, tern, and hc are session
-#   providers only, exactly like herdr/zellij, so they do. Auto-detected herdr
-#   and rex stay silent like tmux; auto-detected cmux and Herdr-app-driven hc
-#   print a loud stderr notice; zellij, orca, paseo, t3code, and tern are never
-#   auto-detected (the paseo and tern markers, like bare hc markers, leak into
-#   every descendant process). An app-detected hc also records its signal in
-#   meta's backend_detect= line.
+#   config/backend, then HERDR_ENV=1 auto-detection, then herdr; herdr is the
+#   only spawn-capable backend.
 #   Herdr leases its slot durably (treehouse get --lease) and moves the pane's
 #   top-level shell into it, because a restart restores that shell's cwd.
-#   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
-#   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. Orca, cmux, paseo, tern, and hc do not support
-#   --secondmate spawns.
-#   A rex crewmate or scout opens one tab in the Rex session the launching
-#   firstmate runs in when it runs directly inside Rex, otherwise in its home's
-#   own Rex session; a --secondmate launch opens its tab in that secondmate
-#   home's own Rex session (bin/backends/rex.sh owns placement).
-#   t3code is experimental (docs/t3code-backend.md): T3 Code
-#   owns the agent session, so the spawn leases a treehouse slot durably,
-#   launches a T3 thread on it, and sends the launch brief over T3's /mcp
-#   endpoint instead of typing into a pane; only claude and codex harnesses.
-#   The exports a pane would receive before launch travel as per-directory
-#   harness config instead (spawn_t3code_env_install).
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -1598,17 +1566,6 @@ spawn_remote_worker() {
 }
 
 BACKEND=
-ORCA_ABORT_CLEANUP=0
-ORCA_WORKTREE_ID=
-ORCA_TERMINAL=
-T3CODE_ABORT_CLEANUP=0
-T3CODE_LEASED=0
-T3CODE_HOME_ENV=0
-T3CODE_CLAUDE_CHANNEL_WRITTEN=0
-T3CODE_CREATE_UNCERTAIN=0
-T3CODE_LAUNCH_UNCONFIRMED=0
-T3CODE_PROJECT_ID=
-T3CODE_MODEL_SELECTION=
 HERDR_LEASED=0
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
@@ -1652,36 +1609,6 @@ spawn_fresh_commit_rollback() {
     return 0
   fi
   echo "error: $FM_BACKLOG_TRANSITION_ERROR" >&2
-  return 1
-}
-
-parse_orca_worktree_result() {
-  local raw=$1 rest
-  ORCA_WORKTREE_ID=${raw%%$'\t'*}
-  if [ "$raw" = "$ORCA_WORKTREE_ID" ]; then
-    WT=
-    ORCA_TERMINAL=
-    return 1
-  fi
-  rest=${raw#*$'\t'}
-  WT=${rest%%$'\t'*}
-  if [ "$rest" != "$WT" ]; then
-    ORCA_TERMINAL=${rest#*$'\t'}
-  else
-    ORCA_TERMINAL=
-  fi
-}
-
-# Non-forced unlink arbitration for a delivered Orca source-mode launch file:
-# the pane unlinks it before launching the worker and refuses when that unlink
-# fails, so exactly one side's unlink succeeds. Returns 0 when this spawn removed
-# it (the worker is refused), 1 when the pane already had, and 2 when the file
-# could not be removed.
-spawn_orca_reclaim_launch_file() {
-  rm -- "$SPAWN_STAGED_LAUNCH_FILE" 2>/dev/null && return 0
-  if [ -e "$SPAWN_STAGED_LAUNCH_FILE" ] || [ -L "$SPAWN_STAGED_LAUNCH_FILE" ]; then
-    return 2
-  fi
   return 1
 }
 
@@ -1732,98 +1659,6 @@ spawn_abort_cleanup() {
     HERDR_PRESENTATION_ORDER_LOCK_HELD=0
     fm_lock_release "$HERDR_PRESENTATION_ORDER_LOCK" || true
   fi
-  if [ "$ORCA_ABORT_CLEANUP" = 1 ]; then
-    ORCA_ABORT_CLEANUP=0
-    if [ -n "${ORCA_TERMINAL:-}" ]; then
-      fm_backend_kill orca "$ORCA_TERMINAL" 2>/dev/null && SPAWN_ENDPOINT_CLOSED=1 || true
-    fi
-    if [ -n "${ORCA_WORKTREE_ID:-}" ]; then
-      if ! fm_backend_remove_worktree orca "$ORCA_WORKTREE_ID" 2>/dev/null; then
-        if [ "$SPAWN_FRESH_COMMIT_PENDING" = 1 ]; then
-          if ! spawn_fresh_commit_rollback; then
-            status=1
-          fi
-          SPAWN_FRESH_COMMIT_PENDING=0
-        fi
-        mkdir -p "$STATE" 2>/dev/null || true
-        if [ -d "$STATE" ]; then
-          SPAWN_META_TMP="$STATE/.$ID.meta.orca-recovery.${BASHPID:-$$}"
-          {
-            echo "window=$W"
-            echo "endpoint_task_id=$ID"
-            echo "cleanup_recovery=orca"
-            echo "worktree=${WT:-}"
-            echo "project=$PROJ_ABS"
-            echo "harness=$HARNESS"
-            echo "kind=$KIND"
-            [ -z "${MODE:-}" ] || echo "mode=$MODE"
-            [ -z "${YOLO:-}" ] || echo "yolo=$YOLO"
-            [ -z "${BRANCH:-}" ] || echo "branch=$BRANCH"
-            echo "tasktmp=${TASK_TMP:-}"
-            echo "model=${MODEL:-default}"
-            echo "effort=${EFFORT:-default}"
-            echo "backend=orca"
-            echo "orca_worktree_id=$ORCA_WORKTREE_ID"
-            [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
-          } >"$SPAWN_META_TMP" 2>/dev/null &&
-            fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE" ||
-            true
-        fi
-      fi
-    fi
-  fi
-  # Nothing has run in a leased slot or secondmate home until T3 accepts the
-  # launch turn, so an abort before that, including one after T3 refused the
-  # turn, archives the thread (it must never act in a returned slot), removes
-  # the environment files the spawn wrote there as teardown does, and hands a
-  # lease back only once both succeeded; once T3 accepted the turn, or its
-  # outcome is unproven, the agent may be working there, so both are left in
-  # place.
-  if [ "$T3CODE_CREATE_UNCERTAIN" = 1 ]; then
-    # t3_thread_launch has no idempotency key, so a launch whose outcome was
-    # lost may have left a thread whose id never came back.
-    T3CODE_CREATE_UNCERTAIN=0
-    T3CODE_HOME_ENV=0
-    if [ "$T3CODE_LEASED" = 1 ]; then
-      T3CODE_LEASED=0
-      echo "warning: the T3 thread launch for $ID did not report an outcome; the leased worktree $WT stays leased until any thread T3 bound to it is found in T3 Code and archived, then run 'treehouse return --force $WT' from $PROJ_ABS" >&2
-    else
-      echo "warning: the T3 thread launch for $ID did not report an outcome; find and archive any thread it left in T3 Code, then remove the $PROJ_ABS/config/t3code-token link this spawn added, before reusing its home" >&2
-    fi
-  elif [ "$T3CODE_ABORT_CLEANUP" = 1 ]; then
-    T3CODE_ABORT_CLEANUP=0
-    if ! fm_backend_kill t3code "$T"; then
-      T3CODE_HOME_ENV=0
-      if [ "$T3CODE_LEASED" = 1 ]; then
-        T3CODE_LEASED=0
-        local t3_env_files="$WT/.claude/settings.local.json"
-        [ "$T3CODE_CLAUDE_CHANNEL_WRITTEN" != 1 ] || t3_env_files="$t3_env_files and $WT/CLAUDE.local.md"
-        echo "warning: could not stop and archive T3 thread $T for $ID, so the leased worktree $WT stays leased; archive the thread in T3 Code, undo the T3 environment this spawn wrote with '$SCRIPT_DIR/fm-t3code-codex-env.sh cleanup $WT' and by removing $t3_env_files, then run 'treehouse return --force $WT' from $PROJ_ABS" >&2
-      else
-        echo "warning: could not stop and archive T3 thread $T for $ID; archive it in T3 Code, then remove the T3 environment this spawn wrote into $PROJ_ABS: run '$SCRIPT_DIR/fm-t3code-codex-env.sh cleanup $PROJ_ABS', remove the keys FM_T3CODE_ENV_KEYS lists, and FM_T3CODE_ENV_KEYS itself, from its .claude/settings.local.json, and remove its config/t3code-token link" >&2
-      fi
-    fi
-  fi
-  if [ "$T3CODE_HOME_ENV" = 1 ]; then
-    T3CODE_HOME_ENV=0
-    fm_backend_t3code_home_env_cleanup "$PROJ_ABS" \
-      || echo "warning: could not remove the T3 environment this spawn wrote into $PROJ_ABS for $ID; remove it before the home runs again" >&2
-  fi
-  if [ "$T3CODE_LEASED" = 1 ] && [ -n "${WT:-}" ]; then
-    T3CODE_LEASED=0
-    rm -f "$WT/.claude/settings.local.json" 2>/dev/null || true
-    # Only a CLAUDE.local.md this spawn wrote: the channel install refuses one
-    # already in the slot, and that one stays as found.
-    [ "$T3CODE_CLAUDE_CHANNEL_WRITTEN" != 1 ] || rm -f "$WT/CLAUDE.local.md" 2>/dev/null || true
-    if ! "$SCRIPT_DIR/fm-t3code-codex-env.sh" cleanup "$WT" \
-      || [ -e "$WT/.claude/settings.local.json" ] \
-      || { [ "$T3CODE_CLAUDE_CHANNEL_WRITTEN" = 1 ] && [ -e "$WT/CLAUDE.local.md" ]; }; then
-      echo "warning: could not remove the T3 environment files this spawn wrote into $WT for $ID, so it stays leased; remove them, then run 'treehouse return --force $WT' from $PROJ_ABS" >&2
-    else
-      (cd "$PROJ_ABS" && treehouse return --force "$WT") >/dev/null 2>&1 \
-        || echo "warning: could not return the leased worktree $WT for $ID; run 'treehouse return --force $WT' from $PROJ_ABS" >&2
-    fi
-  fi
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
     fm_lock_release "$SPAWN_TASK_LOCK" || true
@@ -1851,9 +1686,7 @@ spawn_abort_cleanup() {
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
     if [ "$SPAWN_FRESH_ENDPOINT_OPENED" = 1 ] && [ "$SPAWN_LAUNCH_SENT" = 0 ] && [ -n "${T:-}" ]; then
       SPAWN_FRESH_ENDPOINT_OPENED=0
-      local abort_tab_id=
-      [ "$BACKEND" != zellij ] || abort_tab_id=${ZELLIJ_TAB_ID:-}
-      if fm_backend_kill "$BACKEND" "$T" "$abort_tab_id" "fm-$ID" 2>/dev/null; then
+      if fm_backend_kill "$BACKEND" "$T" "" "fm-$ID" 2>/dev/null; then
         SPAWN_ENDPOINT_CLOSED=1
       else
         echo "warning: could not close endpoint $T after the failed spawn of $ID; close it by hand so its slot returns to the pool" >&2
@@ -1876,7 +1709,7 @@ spawn_abort_cleanup() {
             SPAWN_TASK_TMP_CREATED=0
             rm -rf -- "$TASK_TMP" 2>/dev/null || true
           fi
-          if [ -n "$SPAWN_STAGED_LAUNCH_FILE" ] && [ "${ORCA_LAUNCH_ENV_ENABLED:-0}" != 1 ]; then
+          if [ -n "$SPAWN_STAGED_LAUNCH_FILE" ]; then
             rm -f -- "$SPAWN_STAGED_LAUNCH_FILE" 2>/dev/null || true
             rmdir -- "$(dirname "$SPAWN_STAGED_LAUNCH_FILE")" 2>/dev/null || true
           fi
@@ -1944,21 +1777,6 @@ spawn_abort_cleanup() {
   if [ "$status" -ne 0 ] && [ -n "$SPAWN_HOME_SNAPSHOT" ] &&
     [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
     rm -f "$SPAWN_HOME_SNAPSHOT" 2>/dev/null || true
-  fi
-  if [ "$status" -ne 0 ] && [ "${ORCA_LAUNCH_ENV_ENABLED:-0}" = 1 ] && [ -n "$SPAWN_STAGED_LAUNCH_FILE" ]; then
-    if [ "$SPAWN_LAUNCH_SENT" = 0 ] || [ "$SPAWN_ENDPOINT_CLOSED" = 1 ]; then
-      rm -f -- "$SPAWN_STAGED_LAUNCH_FILE" 2>/dev/null || true
-    else
-      # The open terminal may still source the delivered file, and no other
-      # owner is left to remove it once this spawn exits, so arbitrate exactly
-      # as the consume deadline does.
-      local reclaim_status=0
-      spawn_orca_reclaim_launch_file || reclaim_status=$?
-      case "$reclaim_status" in
-        0) kimi_spawn_fail "spawn ended before Orca terminal $T ran the launch command; removed the launch file and refused the worker launch" || true ;;
-        2) echo "warning: could not remove Orca launch file $SPAWN_STAGED_LAUNCH_FILE; remove it by hand" >&2 ;;
-      esac
-    fi
   fi
   # The per-id spawn lock is retaken so a concurrent spawn of the same id, which
   # reinstalls this hooks dir, is never undone. A launched agent whose endpoint
