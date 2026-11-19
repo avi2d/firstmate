@@ -87,24 +87,6 @@ SH
   printf '%s\n' "$fb"
 }
 
-make_orca_fakebin() {  # <dir> -> echoes fakebin dir
-  local fb="$1/fakebin"
-  mkdir -p "$fb"
-  cat > "$fb/orca" <<'SH'
-#!/usr/bin/env bash
-set -u
-LOG="${FM_ORCA_LOG:?}"
-{
-  printf 'orca'
-  for a in "$@"; do printf '\x1f%s' "$a"; done
-  printf '\n'
-} >> "$LOG"
-exit 0
-SH
-  chmod +x "$fb/orca"
-  printf '%s\n' "$fb"
-}
-
 test_helper_prefixes_one_space() {
   local out
   # shellcheck source=/dev/null
@@ -157,20 +139,6 @@ test_zellij_shell_lines_carry_the_space() {
   pass "zellij: shell lines guarded, literal transport verbatim"
 }
 
-test_orca_shell_lines_carry_the_space() {
-  local dir="$TMP_ROOT/orca" fb log
-  mkdir -p "$dir"
-  command -v node >/dev/null 2>&1 || { echo "skip: node not found (required by the orca adapter's JSON check)"; return 0; }
-  fb=$(make_orca_fakebin "$dir")
-  PATH="$fb:$PATH" FM_ORCA_LOG="$dir/log" \
-    bash -c '. "$0/bin/backends/orca.sh"; fm_backend_orca_send_text_line "term-1" "$1"; fm_backend_orca_send_literal "term-1" "$2"' "$ROOT" "$SHELL_LINE" "$SOURCE_LINE"
-  log=$(cat "$dir/log")
-  assert_contains "$log" "$(printf '\x1f--text\x1f %s' "$SHELL_LINE")" "orca send_text_line did not guard its shell line from history"
-  assert_contains "$log" "$(printf '\x1f--text\x1f%s' "$SOURCE_LINE")" "orca send_literal must stay a verbatim transport"
-  assert_not_contains "$log" "$(printf '\x1f--text\x1f %s' "$SOURCE_LINE")" "orca send_literal must not guard composer-bound bytes"
-  pass "orca: shell lines guarded, literal transport verbatim"
-}
-
 test_composer_text_stays_verbatim() {
   local dir="$TMP_ROOT/composer" fb log
   mkdir -p "$dir"
@@ -187,5 +155,4 @@ test_helper_prefixes_one_space
 test_tmux_shell_lines_carry_the_space
 test_herdr_shell_lines_carry_the_space
 test_zellij_shell_lines_carry_the_space
-test_orca_shell_lines_carry_the_space
 test_composer_text_stays_verbatim

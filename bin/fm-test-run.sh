@@ -434,9 +434,6 @@ family_for_basename() {
     fm-backend-zellij.test.sh|fm-backend-zellij-smoke.test.sh)
       printf '%s\n' zellij
       ;;
-    fm-backend-orca.test.sh)
-      printf '%s\n' orca
-      ;;
     fm-backend-tern.test.sh|fm-backend-tern-smoke.test.sh)
       printf '%s\n' tern
       ;;
@@ -471,7 +468,7 @@ expected_gate_skip_for_family() {
   case "$1" in
     real-herdr-gated) printf '%s\n' herdr ;;
     live-harness-optin) printf '%s\n' live-capability ;;
-    zellij|orca|paseo|rex|tern|hc) printf '%s\n' optional-binary ;;
+    zellij|paseo|rex|tern|hc) printf '%s\n' optional-binary ;;
     snapshot-bearings) printf '%s\n' optional-binary ;;
     *) printf '%s\n' none ;;
   esac
@@ -490,7 +487,6 @@ pr-forge
 afk
 snapshot-bearings
 zellij
-orca
 paseo
 rex
 tern
@@ -729,7 +725,6 @@ tests/fm-backend-herdr-server-detach.test.sh 1460
 tests/fm-backend-hc-liveness-live-e2e.test.sh 9000
 tests/fm-backend-hc-smoke.test.sh 3700
 tests/fm-backend-hc.test.sh 4000
-tests/fm-backend-orca.test.sh 27102
 tests/fm-backend-paseo-smoke.test.sh 40
 tests/fm-backend-paseo.test.sh 8000
 tests/fm-backend-rex-composer-live-e2e.test.sh 54
@@ -962,7 +957,6 @@ tests/fm-spawn-heavy-queue.test.sh 24536
 tests/fm-spawn-herdr-lease.test.sh 16635
 tests/fm-spawn-manual-pr-text.test.sh 7284
 tests/fm-spawn-missing-harness.test.sh 1664
-tests/fm-spawn-orca-worktree.test.sh 2400
 tests/fm-spawn-pool-base-freshen.test.sh 68652
 tests/fm-spawn-remote-worker.test.sh 18689
 tests/fm-spawn-worktree-settle.test.sh 13206
@@ -1676,9 +1670,8 @@ families_for_changed_path() {
       # coverage re-runs, mirroring the real-herdr-gated arm above.
       printf '%s\n' hc
       ;;
-    bin/backends/orca*|bin/backends/tmux.sh)
+    bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
-      printf '%s\n' orca
       ;;
     bin/backends/t3code*|bin/fm-t3-mcp.mjs)
       printf '%s\n' backend-dispatch

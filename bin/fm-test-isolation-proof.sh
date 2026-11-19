@@ -146,9 +146,6 @@ exclusion_reason() {
     fm-backend-zellij.test.sh|fm-backend-zellij-smoke.test.sh)
       printf '%s\n' 'zellij optional backend; keep out of pure parallel pool'
       ;;
-    fm-backend-orca.test.sh)
-      printf '%s\n' 'orca backend surface; keep serial until dedicated isolation proof'
-      ;;
     fm-backend-tern.test.sh|fm-backend-tern-smoke.test.sh)
       printf '%s\n' 'tern optional backend; keep out of pure parallel pool'
       ;;
