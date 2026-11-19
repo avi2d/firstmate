@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const { randomBytes } = require('node:crypto');
-const { board, PR, SLUG, projectTask, holdRecord, saveHold, taskOrder, sectionBody, setSection } = require('./store.cjs');
+const { board, draftTicket, PR, SLUG, projectTask, holdRecord, saveHold, taskOrder, sectionBody, setSection } = require('./store.cjs');
 const { scalar, help, show, table, mutation, EXTRA, HOLD } = require('./output.cjs');
 
 const states = ['queued', 'in_flight', 'done', 'held'];
@@ -140,7 +140,7 @@ function add(book, positionals, options, now, project) {
   if (!already) {
     dependencies.forEach(by => checkBlocker(book.tickets, id, by));
     const references = requestedReferences(options);
-    ticket = book.add({
+    ticket = book.add(draftTicket({
       id, title, status: 'Queued',
       ...(options.kind ? { type: options.kind } : {}),
       ...(options.repo ? { project: options.repo } : {}),
@@ -148,7 +148,7 @@ function add(book, positionals, options, now, project) {
       assignee: [], labels: [], dependencies,
       ...(references.length > 0 ? { references } : {}),
       created_date: now,
-    }, requestedBody(options));
+    }, requestedBody(options)));
   }
 
   const task = project(ticket);
