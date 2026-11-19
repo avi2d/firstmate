@@ -28,16 +28,6 @@ This is the same coverage `GOTMPDIR` already has and requires no trace-specific 
 Ship and scout spawns reach that site on every pane-typed spawn backend (`tmux`, `herdr`, `zellij`, `orca`, `cmux`, `paseo`, `rex`); a Secondmate reaches it on every pane backend that accepts a Secondmate spawn (`tmux`, `herdr`, `zellij`, `rex`), because `bin/fm-spawn.sh` rejects a Secondmate on `orca`, `cmux`, and `paseo`.
 `t3code` has no pane, so its `claude` and `codex` ship, scout, and Secondmate spawns receive the same `TRACEPARENT` value under the same conditions through the backend's [per-directory harness environment](t3code-backend.md#per-directory-harness-environment) instead.
 
-### Remote Secondmate routes
-
-A Secondmate on a [remote route](remote-secondmates.md) never reaches that export site in the parent's own process: the parent hands the launch to the configured host, which runs its own `bin/fm-spawn.sh` there.
-The identity is still the parent's, because the parent home holds the task metadata an observer reads.
-The parent therefore resolves the carrier against that task's own metadata under its own frozen decision - reused verbatim on relaunch, freshly rooted otherwise, never adopting the parent process's ambient `TRACEPARENT` - and passes it to the remote host, which exports it at the same unconditional pre-launch site and returns the carrier its endpoint actually holds.
-The parent records that returned value, so an already-alive remote endpoint that was not relaunched reports the identity its agent really received rather than one the parent merely intended.
-The remote host validates the delivered carrier as a strict W3C value before it can reach any pane, and a disabled parent passes nothing, leaving the remote launch identical to the untraced one.
-If the endpoint is already alive, no new launch or injection occurs; the parent still records any carrier that endpoint reports, even when the parent's current decision is `off`, so its metadata does not deny the running agent's actual identity.
-The enablement decision travels with it exactly as on the local path: the remote home inherits `config/trace-context` as declared inherited material and the new Secondmate process receives the parent's frozen `FM_TRACE_CONTEXT=on|off` snapshot.
-
 ## Root and recovery semantics
 
 The point of these rules is one trace per task: never merge unrelated tasks, and never mint a second identity for the same task.

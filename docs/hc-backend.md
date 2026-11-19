@@ -57,8 +57,6 @@ Nothing here changes the remote `herdr` path.
 
 Two limits apply to auto-detection specifically:
 
-- A `--secondmate` spawn under an auto-detected hc fails the existing refusal rather than silently choosing another backend; set `config/backend` explicitly for a home that spawns secondmates.
-- Away-mode supervisor discovery and hc refusal are owned by [Away-mode supervisor backend](configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target).
 
 ## Task shape and metadata
 

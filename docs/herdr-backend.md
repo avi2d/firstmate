@@ -28,7 +28,6 @@ Herdr provides the terminal session while Treehouse continues to provide task wo
 | What happens after a Herdr server restart and how liveness is judged | [Restart and liveness behavior](#restart-and-liveness-behavior) |
 | Keeping Firstmate from starting a server a service manager owns | [Externally managed servers](#externally-managed-servers) |
 | How blocked transitions arrive and what happens without protocol 16 | [Push events and polling fallback](#push-events-and-polling-fallback) |
-| Where the away daemon runs and how it stops | [Away-mode supervisor support](#away-mode-supervisor-support) |
 | Stopping or deleting Herdr sessions during verification | [Destructive lab safety](#destructive-lab-safety) |
 | Known limits and the test suite | [Active limits](#active-limits) and [Regression entry points](#regression-entry-points) |
 
@@ -54,8 +53,6 @@ Select Herdr in any of these ways:
 - Local `config/backend` containing `herdr`.
 - `FM_BACKEND=herdr` for one launch.
 - An explicit request to Firstmate.
-
-[`remote-secondmates.md`](remote-secondmates.md#launch-or-recover) owns remote second-mate backend selection, placement, and readiness.
 
 Herdr is also auto-detected when the primary runs natively under `HERDR_ENV=1` and is not inside tmux.
 A tmux pane nested inside Herdr resolves to tmux because the innermost multiplexer wins.
@@ -990,39 +987,6 @@ There is still one watcher process; the event reader is a bounded child of that 
 
 `tests/fm-backend-herdr-eventwait-smoke.test.sh`, `tests/fm-transition-lib.test.sh`, and `tests/fm-supervision-events.test.sh` cover capability, subscribe-then-reconcile ordering, dedupe, exemptions, and polling fallback.
 
-## Away-mode supervisor support
-
-[Away-mode supervisor configuration](configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target) owns supported backends and detection.
-For Herdr, target existence, native state, capture, composer state, and verified submit all route through the shared backend dispatcher and the explicit named-session CLI owner.
-The pane-independent max-defer alert is configured in [`wedge-alarm.md`](wedge-alarm.md).
-
-### Where the daemon runs
-
-- Harnesses with native tracked background execution can run the daemon in their terminal.
-- Pi and pi-signed no longer launch the away daemon; their ordinary supervision session continues under the posture record.
-- A non-Pi home that runs the supervision host also skips the daemon for `/afk`; see [supervision-host.md](supervision-host.md).
-- For another harness without native tracked background execution, `bin/fm-afk-launch.sh` runs the daemon in a Herdr workspace, as described next.
-
-In that last case, `bin/fm-afk-launch.sh`:
-
-1. Creates a dedicated unfocused Herdr workspace.
-2. Runs the daemon there with an explicit supervisor target and backend.
-3. Records the exact daemon pane.
-4. Closes only that pane on stop.
-
-It never splits the captain's active tab and never uses shell `&`.
-Recovery reconciles only the recorded exact id.
-
-### Stopping the daemon
-
-On stop:
-
-1. The daemon receives termination while `state/.afk` still exists, so its final flush can run.
-2. The recorded terminal is closed.
-3. The AFK flag is removed last.
-
-A fresh entry clears stale transient escalation caches, while durable queue and task records remain authoritative.
-
 ## Destructive lab safety
 
 Never use ambient `herdr server stop` for Firstmate verification.
@@ -1050,7 +1014,6 @@ Tests use thin compatibility wrappers in `tests/herdr-test-safety.sh` and never 
 - Mutable labels can collide; they are never placement or destructive authority.
 - A Firstmate outside Herdr cannot resolve a launcher workspace, so a colliding home label refuses new spawns until the collision is cleared.
 - Ghost and placeholder recognition uses ANSI de-emphasis when available; an unstyled glyph row carrying trailing non-idle text fails safely to `unknown`.
-- Supervisor transport support is separate from task-spawn support; see [away-mode supervisor configuration](configuration.md#away-mode-supervisor-backend-fm_supervisor_backend--fm_supervisor_target).
 
 ## Regression entry points
 

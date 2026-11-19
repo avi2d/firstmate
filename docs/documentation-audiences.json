@@ -25,9 +25,7 @@
   ],
   "readmeSetupTargets": [
     "docs/configuration.md",
-    "docs/wedge-alarm.md",
-    "docs/herdr-backend.md",
-    "docs/remote-secondmates.md"
+    "docs/herdr-backend.md"
   ],
   "requiredOwnerPointers": [
     {
@@ -68,10 +66,6 @@
     },
     {
       "source": "docs/watcher-continuity.md",
-      "target": "docs/verification/supervision.md"
-    },
-    {
-      "source": "docs/wedge-alarm.md",
       "target": "docs/verification/supervision.md"
     },
     {
@@ -117,19 +111,7 @@
   ],
   "surfaces": [
     {
-      "path": ".agents/skills/afk/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/ahoy/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/ask-user-authority/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/bearings/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -261,15 +243,7 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/quiet/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
       "path": ".agents/skills/quota-array-dispatch/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/secondmate-provisioning/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -485,10 +459,6 @@
       "audience": "operator-example"
     },
     {
-      "path": "docs/examples/wedge-alarm",
-      "audience": "operator-example"
-    },
-    {
       "path": "docs/fm-test-isolation-proof.md",
       "audience": "maintainer-verification"
     },
@@ -546,14 +516,6 @@
     },
     {
       "path": "docs/plans/2026-10-12-2032-feat-pi-stream-silence-plan.md",
-      "audience": "maintainer-architecture"
-    },
-    {
-      "path": "docs/remote-secondmates.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/secondmate-parent-channel.md",
       "audience": "maintainer-architecture"
     },
     {
@@ -701,10 +663,6 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/verification/secondmate-parent-channel.md",
-      "audience": "maintainer-verification"
-    },
-    {
       "path": "docs/verification/stow-memory.md",
       "audience": "maintainer-verification"
     },
@@ -718,10 +676,6 @@
     },
     {
       "path": "docs/watcher-continuity.md",
-      "audience": "operator-current"
-    },
-    {
-      "path": "docs/wedge-alarm.md",
       "audience": "operator-current"
     },
     {
@@ -743,10 +697,6 @@
     {
       "path": "tests/captures/kimi-code-2.3.0/README.md",
       "audience": "maintainer-verification"
-    },
-    {
-      "path": ".agents/skills/away-quiet-supervision/SKILL.md",
-      "audience": "agent-runtime"
     },
     {
       "path": ".agents/skills/operational-home-layout/SKILL.md",

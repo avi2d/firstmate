@@ -79,17 +79,15 @@ T3 Code cannot host a fresh replacement agent in a thread, so `relaunch` refuses
 
 1. **Resolve the profile.**
    An explicit `--harness`, `--model`, or `--effort` wins.
-   Without an explicit harness, a `kind=secondmate` task re-resolves its [configured runtime pin for that mate](configuration.md#choose-the-secondmate-harness) before the checkpoint.
-   A ship or scout keeps the harness already recorded for it, because that harness comes from firstmate's dispatch-profile judgment at intake and must not be silently re-read from configuration.
+      A ship or scout keeps the harness already recorded for it, because that harness comes from firstmate's dispatch-profile judgment at intake and must not be silently re-read from configuration.
    A recorded raw-command basename that differs from its resolved adapter cannot reproduce the command actually running, so relaunch refuses before the checkpoint unless the caller passes an explicit `--harness` to choose the replacement runtime deliberately.
    A harness change resets model and effort unless they are named too, because a model chosen for one adapter does not transfer to another.
-   A Claude or Pi replacement must also pass the home's [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account), or a secondmate's own [per-secondmate account pin](configuration.md#per-secondmate-account-pins) when one is set, so a pin that no longer resolves or is signed out refuses before the old agent stops.
+   A Claude or Pi replacement must also pass the home's [worker account pin](configuration.md#worker-account-pin-configclaude-account-configpi-account), so a pin that no longer resolves or is signed out refuses before the old agent stops.
    A recorded [Claude account](configuration.md#claude-accounts-configclaude-accounts) follows a relaunch that keeps the same harness and model or lands on a Pi `claude-bridge/<id>` model, under the same pre-stop sign-in check, and is dropped for any other profile.
-   A secondmate's [declared account](configuration.md#choose-the-secondmate-harness) wins over the recorded one, and an explicit `--claude-account <name>` sets or replaces the account for the replacement over both.
+   An explicit `--claude-account <name>` sets or replaces the account for the replacement.
    `--claude-account default` relaunches with no account.
    A ship or scout replacement on a Pi `claude-bridge/<id>` model with no account refuses before the old agent stops once `config/claude-accounts` declares one, exactly as a fresh spawn does.
-   An omp secondmate replacement likewise passes its [per-secondmate omp profile](configuration.md#per-secondmate-omp-profile) file check before the old agent stops.
-   Ship and scout replacements also pass the [worker tool exclusion checks](configuration.md#worker-tool-exclusions-configcrew-exclude-tools) at this step.
+      Ship and scout replacements also pass the [worker tool exclusion checks](configuration.md#worker-tool-exclusions-configcrew-exclude-tools) at this step.
 2. **Safe checkpoint.**
    The recorded worktree must exist and be a worktree root; its head and dirty state are recorded.
    A worktree that another live task's record also names is refused, naming both tasks, because that copy may now hold the other task's work.
@@ -132,8 +130,7 @@ An unreachable endpoint can still hold the live agent a rebind would duplicate, 
   So in that state `exit` - which otherwise reads as a read-only inspection - leaves an idle herdr server behind.
 - **Rex can prove it.** Rex never reuses a session, window, or block id, so a structured not-found for the recorded block from the server the task was created on proves the block is gone.
   The record carries that server's endpoint (`rex_server=`), and the recheck refuses unless the server this process reaches reports the same endpoint; it normally lets the CLI start a stopped personal server before checking the block.
-  [Remote second-mate readiness](remote-secondmates.md#repair-with---fix) owns the exception that prevents this autostart for remote control.
-  [Rex's server-stop limits](rex-backend.md#active-limits) distinguish a restored shell from a missing block.
+    [Rex's server-stop limits](rex-backend.md#active-limits) distinguish a restored shell from a missing block.
   A block that is still there is classified from its process view, so `dead` is adopted and `alive` refuses ([`docs/rex-backend.md`](rex-backend.md) "Cleanup and the absence proof").
   Rex's passive reads never start a server, so a stopped Rex server reads `unreadable` rather than `missing`; a Rex `unreadable` therefore goes through this recheck too, and still refuses unless the recheck settles it.
 - **tmux cannot.** `list-windows -a` describes only the tmux server the *current process* addresses (its `TMUX_TMPDIR`/socket), and a task record carries no socket identity for its endpoint.
@@ -195,14 +192,9 @@ The worktree and the task's records are unaffected either way.
 - Targeting is exact.
   Only a bare task id with a `state/<id>.meta` record in this home is accepted, and that record must pass the shared endpoint-identity validation.
   A legacy `fm-<id>` window label, an explicit `session:window` endpoint, and a record whose `endpoint_task_id` names another task are all refused.
-- A remotely placed secondmate is refused by name.
-  Its agent runs on another host, so none of the postconditions this plane verifies could be read for it here; local endpoint validation would refuse the record regardless, because `window=remote:<id>` can never match a local backend's required shape.
-  Drive that lifecycle on its own host and reconcile it through the secondmate recovery path.
-  For `relaunch`, drive the host through [`bin/fm-remote-secondmate-relaunch.sh`](../bin/fm-remote-secondmate-relaunch.sh), which runs `bin/fm-on.sh <id> fm-remote-secondmate-control.sh relaunch ...` and then republishes this home's route record from the identity the host confirmed; the host-local leg runs this same plane against a record that is ordinary and local there, so every checkpoint, journal, rollback, and postcondition below applies unchanged ([`docs/remote-secondmates.md`](remote-secondmates.md)); `interrupt` and `exit` have no such route.
 - An unverified harness is refused rather than guessed at.
 - An implicit relaunch from a prefixed raw-command basename is refused before the agent or durable state is touched because its original launch command cannot be reconstructed.
 - An adapter that is not verified for this task's kind is refused **before** the running agent is stopped, not after.
-  Muse is a crewmate and scout adapter only, so relaunching a secondmate onto it refuses while its agent is still up rather than leaving that secondmate with no agent when the launch owner refuses.
 - A backend that cannot deliver the harness's interrupt key, or the composer clear that key needs, is refused rather than sent a different key.
   Orca's terminal API exposes only an interrupt and an Enter, so it can deliver neither Escape nor Ctrl+U.
   T3 Code has no composer, so Escape and Ctrl+C are both a turn interrupt and Ctrl+U is refused.

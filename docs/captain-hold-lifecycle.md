@@ -391,33 +391,11 @@ Existing undated holds without a hold-set stamp fall back to the task's `since` 
 That aging is a projection safety net only.
 The durable deferral remains re-holding with `--until`.
 
-The fleet snapshot's secondmate-home summary classifies an actionable captain hold as `captain_decision`.
-It preserves every captain hold in the bounded queued inventory of the owning home.
-
-### Bearings placement
-
-`bin/fm-bearings-snapshot.sh` places each captain hold by its `hold_bucket` and inspects no prose of its own.
-
-| `hold_bucket` | Where the hold appears |
-| --- | --- |
-| `live` | A default Captain's Call entry. |
-| `blocked`, `dated`, or `aged` | Leaves the default Captain's Call, renders as a Charted Next gate stating why - the blocking work, the `until <date>`, or the floored age - and contributes to the concrete `omitted[]` disclosure. |
-
-`--all-decisions` reveals every captain hold available within the remote-summary bound and drops its gate.
-An available hold is therefore never in both Captain's Call and Charted Next.
-An actively worked held task may also appear in Underway, which reports running work independently of those decision buckets.
-
-Decision presentation uses the full-text field documented in [`bin/fm-bearings-snapshot.sh`](../bin/fm-bearings-snapshot.sh), preserving the recorded question and options while compact summaries remain overview-only.
-Older secondmate summaries without that field fall back to the title and reason text they retained.
-
 ### Accepted limits
 
-Three accepted limits remain deliberate:
+One accepted limit remains:
 
-- A remote or secondmate hold retains the producer home's age and aging decision from the summary's capture time and threshold rather than being recomputed by the parent.
 - A rare concurrent answer-close and re-hold race can leave the newly re-held task without its age basis.
-- Cross-home summaries remain bounded by `FM_SNAPSHOT_SECONDMATE_DECISIONS` and `FM_SNAPSHOT_SECONDMATE_QUEUED`.
-  A remote deferred hold beyond those bounds is not exported, so it can be neither gated nor revealed.
 
 Re-holding through the wrapper with `--until` remains the durable fix rather than relying on the projection safety net.
 
