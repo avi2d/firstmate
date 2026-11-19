@@ -1,69 +1,4 @@
 #!/usr/bin/env bash
-# fm-usage-warner.sh - opt-in local threshold warner for Claude usage windows.
-#
-# Usage:
-#   fm-usage-warner.sh [check]
-#   fm-usage-warner.sh arm
-#   fm-usage-warner.sh disarm
-#   fm-usage-warner.sh --help
-#
-# A THRESHOLD WARNER, NOT A USAGE VIEWER. quota-axi is the one Claude-quota
-# reader this fleet depends on (bin/fm-quota-axi-lib.sh); this script never
-# re-implements that read, and never renders a live percentage report. All it
-# adds is: run that existing read, and speak once when a configured window
-# reaches a configured percentage of itself consumed. docs/usage-warner.md
-# owns the behaviour reference and its rationale; docs/configuration.md
-# ("Local Claude usage warner") owns the config/usage-warner threshold
-# schema. This header owns the mechanics below.
-#
-# `check` is the one read with two callers - the watcher, on its normal
-# FM_CHECK_INTERVAL cadence once armed, and a human or another script running
-# `fm-usage-warner.sh check` directly. Both hit this exact function, so this is
-# one program with two callers, not two programs. No daemon, and no schedule of
-# its own: the periodic half rides the watcher's existing check-shim cadence.
-#
-# Opt-in is load-bearing and enforced here: `check` returns silently before any
-# read when config/usage-warner yields no valid directive, and `arm` refuses
-# rather than registering a check that could never speak. An unconfigured home
-# therefore gains no behaviour change, no new failure mode, and no new hard
-# dependency.
-#
-# The read: quota-axi --provider claude --json --full --no-credential-refresh,
-# bounded by fm_run_timed. `--no-credential-refresh` keeps every call strictly
-# read-only; this script never passes `--allow-keychain-prompt` or any other
-# credential-refreshing flag, and never installs, refreshes, or writes a
-# credential. The snapshot is validated with fm_quota_json_valid and the
-# provider row is selected with FM_QUOTA_ROW_JQ's quota_row, the same join the
-# dispatch consumers use, so this never invents a second selection rule.
-# Per-window percentages come from that row's `windows[]` entries, which carry
-# quota-axi's own window ids; each entry is filtered on the types this script
-# needs, because fm_quota_json_valid constrains quotaSemantics rather than
-# windows[]. A read that yields no usable window is reported, never assumed ok.
-#
-# Notifications are posted with `osascript display notification` under this
-# script's own title - the same OS-level call bin/fm-supervise-daemon.sh's
-# wedge_alarm_via_osascript makes, without sourcing or otherwise coupling to
-# that daemon's away-mode-specific config and rate limiting. Notification
-# Center is macOS-only, so `arm` refuses on any other platform rather than
-# registering a check that can never speak.
-#
-# Edge-triggered with a de-dupe record (state/.usage-warner): a window that
-# crosses a threshold notifies once, stays quiet while it remains at or above
-# it, and re-arms the moment it next reads back below. A window missing from
-# an otherwise good read is not a below reading, so its entry is kept. The
-# record keys each entry on the "<window-id>:<percent>" directive, so tiered
-# thresholds on one window each warn on their own crossing. A v1 record keyed
-# on the bare window id is still read: its entry stands for every threshold
-# of that window, so an upgrade never re-warns a window that was already
-# reported. The record also
-# remembers the last reported check line so a standing read failure is reported
-# once until it changes - the same contract bin/fm-mail-check.sh and
-# bin/fm-tool-update-check.sh already use, and whose arm/disarm/shim-write
-# shape this script follows rather than inventing a third one.
-#
-# A configured window id the account does not return is silently never
-# compared: this is a local convenience feature, not a critical monitor, so a
-# stale or unavailable id is not treated as a misconfiguration to flag.
 set -u
 export LC_ALL=C
 
@@ -378,11 +313,7 @@ shim_content() {
     "exec $(printf '%q' "$SCRIPT_DIR/fm-usage-warner.sh") check"
 }
 
-# Write the shim the way this repo writes its other trusted check shims
-# (bin/fm-mail-check.sh, bin/fm-tool-update-check.sh): guards run before
-# anything is written, so a symlink at the shim path is refused instead of
-# followed, and the bytes arrive by rename so the watcher never reads a
-# half-written shim and rejects it as unauthenticated.
+# The watcher must never read a partially written shim.
 SHIM_WRITE_TMP=
 
 shim_write() {

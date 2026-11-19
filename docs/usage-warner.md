@@ -30,7 +30,13 @@ When the two overlap, they are serialized on `state/.usage-warner.lock`, and a c
 A window that crosses a configured threshold notifies once, stays quiet while it remains at or above that threshold, and re-arms the moment it next reads back below threshold (an account-level window's own reset does exactly this).
 Each directive is tracked on its own, so tiered thresholds on one window such as `five_hour:80` and `five_hour:95` each warn on their own crossing.
 Multiple windows crossing in the same read are batched into one notification rather than one per window.
-A standing read failure (`quota-axi` missing, `jq` missing, a malformed response, or a read that does not finish inside its bound) is reported once until it changes, the same contract `bin/fm-mail-check.sh` and `bin/fm-tool-update-check.sh` already use for their own standing checks.
+A window missing from an otherwise valid read does not clear its threshold record.
+The record keys each entry by window ID and percentage.
+A version 1 record keyed by window ID remains valid for every threshold on that window, so an upgrade does not repeat a warning.
+The quota read is timed and validates the snapshot and each window's required field types.
+A read with no usable window is reported as a failure.
+A standing read failure is reported once until it changes, as in `bin/fm-tool-update-check.sh`.
+The failure may be a missing `quota-axi` or `jq`, a malformed response, or a read that exceeds its bound.
 The read bound is 10 seconds, or `FM_CHECK_TIMEOUT` minus 3 seconds when that is lower, so the watcher never kills the check first; when that leaves under 1 second the read is skipped and reported as not measured.
 
 ## Notification path
@@ -52,7 +58,9 @@ Neither replaces the other, and arming both is reasonable: this one warns per wi
 
 ## Arming
 
-Arm once per home with `bin/fm-usage-warner.sh arm` and remove it with `bin/fm-usage-warner.sh disarm`; what each writes or removes, and when `arm` refuses, is owned by [`configuration.md`](configuration.md#local-claude-usage-warner-configusage-warner).
+Arm once per home with `bin/fm-usage-warner.sh arm` and remove it with `bin/fm-usage-warner.sh disarm`.
+The shim writer refuses a symlink at its destination and renames a completed file into place.
+[`configuration.md`](configuration.md#local-claude-usage-warner-configusage-warner) describes what each command writes or removes and when `arm` refuses.
 
 ## What this never does
 
