@@ -6040,6 +6040,25 @@ test_status_archive_opt_in() {
   pass "status archival is opt-in and preserves the complete log"
 }
 
+test_task_result_rejects_local_readiness_as_landing() {
+  local verdict case_dir row head
+  for verdict in accepted missing; do
+    case_dir=$(make_case "local-result-$verdict")
+    write_meta "$case_dir" local-only ship
+    printf 'done: ready in branch\n' > "$case_dir/state/task-x1.status"
+    if [ "$verdict" = accepted ]; then
+      wt_commit_file "$case_dir" delivery.txt actual
+      head=$(git -C "$case_dir/wt" rev-parse HEAD)
+      printf 'local_done_head=%s\n' "$head" >> "$case_dir/state/task-x1.meta"
+      git -C "$case_dir/project" merge --ff-only "$head" >/dev/null
+    fi
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || fail "local cleanup refused: $(cat "$case_dir/stderr")"
+    row=$(FM_HOME="$case_dir" "$ROOT/bin/fm-task-record.sh" --nm-db "$case_dir/absent.sqlite")
+    assert_contains "$row" "$(printf 'task-x1\tship\tmissing\tlocal-only\tmissing\t%s' "$verdict")" \
+      "a local-only delivery is accepted only when the recorded head reached the default branch"
+  done
+}
+
 test_record_export_config_absent_never_reads_the_exporter() {
   local case_dir rc=0
   case_dir=$(make_case record-export-off)
@@ -6604,6 +6623,7 @@ test_hidden_untracked_work_refuses_before_return
 test_content_fallback_git_capability_boundary
 test_work_written_at_reap_boundary_is_preserved
 test_status_archive_opt_in
+test_task_result_rejects_local_readiness_as_landing
 test_record_export_config_absent_never_reads_the_exporter
 test_record_export_unopted_symlinked_config_does_not_block_teardown
 test_record_export_archives_before_teardown_or_preserves_sources_on_failure

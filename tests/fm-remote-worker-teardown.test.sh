@@ -38,6 +38,7 @@ case "$(tr '\000' '\n' < "$tmp" | sed -n '2p')" in
   teardown)
     case "$FM_TEST_HOP_MODE" in
       ok) printf 'teardown=done rc=0\n' ;;
+      retried) printf 'teardown=absent\ntask-result fm-remote:other dropped\ntask-result fm-remote:p1 accepted\n' ;;
       refused) printf 'REFUSED: unlanded work on host\n'; exit 1 ;;
       lost) exit 255 ;;
     esac ;;
@@ -70,6 +71,7 @@ seed
 out=$(FM_TEST_HOP_MODE=refused FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-teardown.sh" w1 2>&1) && fail "teardown passed a host refusal: $out"
 printf '%s\n' "$out" | grep -F 'unlanded work on host' >/dev/null || fail "the host refusal reason was hidden: $out"
 [ -f "$HOME_DIR/state/w1.meta" ] || fail "a host refusal removed the task record"
+[ ! -e "$HOME_DIR/state/status-archive/w1/result" ] || fail "a host refusal recorded a terminal result"
 pass "a host refusal relays its reason and preserves the task record"
 
 seed
@@ -85,12 +87,27 @@ awk '/^## Done/{d=1} d && /w1 - Remote widget/ {f=1} END {exit !f}' "$HOME_DIR/d
 assert_grep 'pull/7' "$HOME_DIR/data/backlog.md" "the Done item lost its PR link"
 [ ! -e "$HOME_DIR/state/remote-feeds/lab/w1.cursor" ] && [ ! -e "$HOME_DIR/state/remote-feeds/lab/w1.3.ingested" ] || fail "cleanup left the task's feed cursor"
 [ -e "$HOME_DIR/state/remote-feeds/lab/w1.2.3.ingested" ] || fail "cleanup removed another task's feed receipt"
+out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-task-record.sh" --nm-db "$HOME_DIR/absent.sqlite")
+assert_contains "$out" "$(printf 'w1\tship\tmissing\tdirect-PR\tmissing\tmissing')" \
+  "a confirmed remote cleanup with just a PR link must not count as accepted"
 pass "a confirmed remote cleanup closes the item with its PR link"
+
+seed
+out=$(FM_TEST_HOP_MODE=retried FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-teardown.sh" w1 2>&1) || fail "remote retry refused: $out"
+out=$(FM_HOME="$HOME_DIR" bash "$ROOT/bin/fm-task-record.sh" --result accepted --nm-db "$HOME_DIR/absent.sqlite")
+assert_contains "$out" "$(printf 'w1\tship\tmissing\tdirect-PR\tmissing\taccepted')" \
+  "a retry must retain the confirmed remote outcome for the recorded endpoint only"
+pass "a remote retry records the result for the recorded endpoint"
+
 EXEC_HOME="$TMP_ROOT/exec-home"
 mkdir -p "$EXEC_HOME/state"
 : > "$EXEC_HOME/.fm-exec-home"
 out=$(FM_HOME="$EXEC_HOME" bash "$ROOT/bin/fm-remote-worker-control.sh" teardown w1 2>&1) || fail "a host rerun after a lost reply refused: $out"
 [ "$out" = 'teardown=absent' ] || fail "a host rerun did not report the record already gone: $out"
+mkdir -p "$EXEC_HOME/state/status-archive/w1"
+printf 'endpoint=fm-remote:p1\nresult=dropped\n' > "$EXEC_HOME/state/status-archive/w1/result"
+out=$(FM_HOME="$EXEC_HOME" bash "$ROOT/bin/fm-remote-worker-control.sh" teardown w1 2>&1) || fail "archived teardown could not be read: $out"
+assert_contains "$out" 'task-result fm-remote:p1 dropped' "an absent endpoint must not lose its archived result"
 out=$(FM_HOME="$EXEC_HOME" bash "$ROOT/bin/fm-remote-worker-control.sh" teardown w1 --keep 2>&1) && fail "host teardown accepted an unknown option"
 pass "a host rerun after a lost reply converges on an absent record"
 seed
