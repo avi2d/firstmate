@@ -3047,7 +3047,7 @@ test_live_presentation_holder_is_deadlined_without_weakening_ack() {
   fi
   grep "$(printf '\tsignal\t')" "$first_out" >/dev/null \
     || { kill "$presentation_holder" 2>/dev/null || true; fail "bounded presentation dropped the durable wake row"; }
-  if grep -F 'task.status: needs-decision [key=fixture]' "$first_out" >/dev/null; then
+  if grep -E '^  task\.status[ ,a-z]*: needs-decision \[key=fixture\]' "$first_out" >/dev/null; then
     kill "$presentation_holder" 2>/dev/null || true
     fail "contended presentation emitted status content without its cursor lock"
   fi
@@ -3056,7 +3056,7 @@ test_live_presentation_holder_is_deadlined_without_weakening_ack() {
   wait "$presentation_holder" 2>/dev/null || true
   FM_STATE_OVERRIDE="$state" FM_STATUS_PRESENTATION_LOCK_TIMEOUT=1 \
     "$DRAIN" > "$second_out" 2> "$second_err" || fail "presentation retry failed"
-  grep -F 'task.status: needs-decision [key=fixture]: presentation remains retriable' "$second_out" >/dev/null \
+  grep -F '  task.status latest: needs-decision [key=fixture]: presentation remains retriable' "$second_out" >/dev/null \
     || fail "the next presentation pass did not surface the skipped status"
 
   FM_STATE_OVERRIDE="$state" bash -c '
@@ -3163,7 +3163,7 @@ test_owned_growth_still_annotates_turn_ended() {
   append_wake "$state" signal scout.turn-ended "signal: $state/scout.turn-ended" \
     || fail "turn-ended wake append failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "drain failed"
-  sed -E 's/ \[at=[0-9]+\]//' "$out" | grep -F 'scout.status: resolved [key=budget]: answered: approved' >/dev/null \
+  sed -E 's/ \[at=[0-9]+\]//' "$out" | grep -E '^  scout\.status[ ,a-z]*: resolved \[key=budget\]: answered: approved' >/dev/null \
     || fail "owned growth hid this home's own close from the turn-ended annotation: $(cat "$out")"
   pass "owned growth suppresses the wake without hiding the turn-ended annotation"
 }
@@ -3186,7 +3186,7 @@ test_historical_annotation_skips_announced_status() {
   append_wake "$state" signal scout.turn-ended "signal: $state/scout.turn-ended" \
     || fail "turn-ended wake append failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "drain failed"
-  if grep -F 'scout.status: working: long scout still going' "$out" >/dev/null; then
+  if grep -E '^  scout\.status[ ,a-z]*: working: long scout still going' "$out" >/dev/null; then
     fail "a fully announced status line was replayed as a historical annotation"
   fi
   grep -F 'scout.turn-ended' "$out" >/dev/null \
@@ -3212,7 +3212,7 @@ test_historical_annotation_skips_announced_status() {
   append_wake "$state" signal scout.status "signal: $state/scout.status" \
     || fail "direct status wake append failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" || fail "third drain failed"
-  grep -F 'scout.status: done: scout finished' "$out" >/dev/null \
+  grep -F '  scout.status latest: done: scout finished' "$out" >/dev/null \
     || fail "a direct status row lost its annotation"
   pass "historical annotations replay nothing already announced and keep everything new"
 }
