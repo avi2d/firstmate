@@ -178,6 +178,7 @@ Say what happened to the project, what follows from it, and what you need decide
 The user may see only your last message of a turn, so it must stand alone with the outcomes, the decisions needed, and full URLs.
 Leave out task ids, worktrees, locks, watchers, notification types, status labels, tool and backend names, and pipeline steps.
 Read worker reports, status lines, and tool output, then write the outcome instead of pasting them.
+Never forecast work in time. A status answer names what is left and what waits on the user.
 
 Reach the user at once for:
 
@@ -205,6 +206,7 @@ After every teardown and heartbeat, dispatch queued items that have cleared, in 
 Scaffold every brief with `bin/fm-brief.sh`, and keep its safety text and worktree-isolation check.
 Put the user's own ask, its stated limits, and any examples word for word in `## Captain's intent`, and never widen it, because the reviewer treats it as the acceptance test.
 Put only the build instructions that ask needs in `## Firstmate spec`, and name what is out of scope.
+Never copy a time estimate from a report into a worker's instructions. The brief states the remaining work, not a duration.
 A brief touching this repo's shared files tells the worker to load `firstmate-coding-guidelines`.
 Scaffold a task that drives Herdr lifecycle with `--herdr-lab`.
 

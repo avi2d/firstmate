@@ -720,6 +720,21 @@ IFS= read -r -d '' SHARED_NO_CD_RULE <<'EOF' || true
 EOF
 SHARED_NO_CD_RULE=${SHARED_NO_CD_RULE%$'\n'}
 
+if [ "$REMOTE" -eq 1 ]; then
+  MACHINE_LINE='the remote host named by this project'"'"'s registry host route; the firstmate home'"'"'s local machine is not the machine you test on.'
+else
+  MACHINE_LINE='the local machine of the firstmate home that launched you.'
+fi
+IFS= read -r -d '' MACHINE_PROOF_RULES <<'EOF' || true
+- Live behavior is proven on the machine it runs on: a change to a machine's own behavior (a test runner, a shell, an OS-specific path) is proven on that machine before merge, because a run elsewhere does not count.
+- To preview a site, serve it on a local port and inspect it there; never depend on a login-gated deployment.
+- CI on your PR is proof in the real place, and a draft PR runs it too.
+- Unfinished work is not a blocker: report what is left and keep working the rest.
+EOF
+MACHINE_PROOF_BLOCK="# Machine and proof
+- Machine: $MACHINE_LINE
+$MACHINE_PROOF_RULES"
+
 if [ -n "$BASE_BRANCH" ]; then
   SETUP_BASE="You are in a disposable git worktree of $REPO, at a detached HEAD on a clean copy of its base branch.
 Base branch: $BASE_BRANCH"
@@ -798,11 +813,14 @@ $CREWMATE_PAUSE_INSTRUCTIONS
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
 
+$MACHINE_PROOF_BLOCK
+
 $WAIT_BLOCK$LOCAL_TESTS_BLOCK$INBOX_SECTION
 
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
+Cover every part of the Captain's intent and Firstmate spec before you report done; a part you could not reach is named in the report as not done, never dropped silently.
 End the report with a \`## References\` heading listing the sources your findings rely on.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
@@ -884,6 +902,8 @@ $ASK_USER_BLOCK
    Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved [at=<epoch>]: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
 $SHARED_INFRA_RULE
 $SHARED_NO_CD_RULE
+
+$MACHINE_PROOF_BLOCK
 
 $WAIT_BLOCK$LOCAL_TESTS_BLOCK$INBOX_SECTION
 
