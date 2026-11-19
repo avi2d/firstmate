@@ -173,8 +173,6 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-env-lib.sh"
 # shellcheck source=bin/fm-tangle-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tangle-lib.sh"
-# shellcheck source=bin/fm-cursor-lib.sh disable=SC1091
-. "$SCRIPT_DIR/fm-cursor-lib.sh"
 # shellcheck source=bin/fm-startup-memory-budget-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-startup-memory-budget-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
@@ -303,8 +301,7 @@ fleet_sync() {
 
 install_cmd() {
   case "$1" in
-    tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
-    hc) echo "bin/fm-install-hc.sh <dir> && add <dir> to PATH  # or see docs/hc-backend.md" ;;
+    tmux|node|git|gh|curl|jq) echo "brew install $1  # or the platform's package manager" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
@@ -329,10 +326,6 @@ upgrade_cmd() {
 manual_install_url() {
   case "$1" in
     herdr) echo "https://herdr.dev" ;;
-    paseo) echo "https://paseo.sh" ;;
-    rex) echo "https://www.superlogical.com/rex" ;;
-    tern) echo "https://stencil.so/tern" ;;
-    cursor-agent) echo "https://cursor.com/cli" ;;
     *) return 1 ;;
   esac
 }
@@ -348,8 +341,7 @@ missing_tool_diagnostic() {
 
 # Required-tool detection follows the RESOLVED backend, not a one-size default:
 # a universal toolchain every home needs plus the backend-specific delta owned by
-# fm_backend_required_tools (bin/fm-backend.sh). So a herdr/zellij/cmux/tern home is
-# never told tmux is missing, and only orca drops treehouse. A backend value with
+# fm_backend_required_tools (bin/fm-backend.sh). A backend value with
 # no verified dependency set is reported before the universal checks continue.
 COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi tasks-axi quota-axi"
 BACKEND=$(fm_backend_name)
@@ -446,7 +438,7 @@ crew_dispatch_validate() {
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else
-    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp","devin","commandcode","polytoken","cortex","kiro","hermes"]'
+    verified_harnesses='["pi","pi-signed"]'
   fi
   err=$(jq -r --argjson typed "$typed_active" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" --arg account_re "$FM_CLAUDE_ACCOUNT_NAME_RE" '
     def verified($h): $verified_harnesses | index($h);
@@ -455,15 +447,7 @@ crew_dispatch_validate() {
       if $e == null then true
       elif ($e | type) != "string" then false
       elif $e == "ultra" then (($h == "pi" or $h == "pi-signed") and (($m | type) == "string") and ($m | startswith("codex-native/")) and ($m | length) > 13)
-      elif $h == "claude" then (["low","medium","high","xhigh","max"] | index($e))
-      elif $h == "codex" then ((["low","medium","high","xhigh"] | index($e)) != null or ($e == "max" and $m == "gpt-5.6-luna"))
-      elif $h == "grok" then (["low","medium","high"] | index($e))
-      elif $h == "agy" then (["low","medium","high"] | index($e))
-      elif $h == "kiro" then (["low","medium","high","xhigh","max"] | index($e))
-      elif $h == "pi" or $h == "pi-signed" or $h == "omp" then (["low","medium","high","xhigh","max"] | index($e))
-      elif $h == "muse" then (["low","medium","high","xhigh","max"] | index($e))
-      elif $h == "rovo" then (["low","medium","high","max"] | index($e))
-      elif $h == "opencode" or $h == "kimi" or $h == "cursor" then false
+      elif $h == "pi" or $h == "pi-signed" then (["low","medium","high","xhigh","max"] | index($e))
       else true
       end;
     def profiles($value):
@@ -685,22 +669,20 @@ backlog_record_reconcile() {
       fm_lock_release "$meta_lock"
       return 2
     fi
-    if [ "$(fm_meta_get "$meta" cleanup_recovery)" != orca ]; then
-      row=
-      if fm_backlog_row_probe "$DATA" "$id"; then
-        row=$FM_BACKLOG_ROW_STATE
-      elif [ "$FM_BACKLOG_ROW_RESULT" != not_found ]; then
-        echo "BACKLOG_RECONCILE: $id: worker record exists but its backlog item could not be read: $FM_BACKLOG_ROW_ERROR"
-      fi
-      # Heal only the unambiguous case: a queued row for a record this home
-      # already owns. A held row is the captain's to move, and a closed row is a
-      # contradiction this sweep must not resolve by resurrecting the item.
-      if [ "$row" = "queued no no" ]; then
-        if fm_backlog_start "$DATA" "$id"; then
-          echo "BOOTSTRAP_INFO: marked $id in flight to match the worker this home already owns"
-        else
-          echo "BACKLOG_RECONCILE: $id: worker record exists but its backlog item could not be moved to In flight: $FM_BACKLOG_TRANSITION_ERROR"
-        fi
+    row=
+    if fm_backlog_row_probe "$DATA" "$id"; then
+      row=$FM_BACKLOG_ROW_STATE
+    elif [ "$FM_BACKLOG_ROW_RESULT" != not_found ]; then
+      echo "BACKLOG_RECONCILE: $id: worker record exists but its backlog item could not be read: $FM_BACKLOG_ROW_ERROR"
+    fi
+    # Heal only the unambiguous case: a queued row for a record this home
+    # already owns. A held row is the captain's to move, and a closed row is a
+    # contradiction this sweep must not resolve by resurrecting the item.
+    if [ "$row" = "queued no no" ]; then
+      if fm_backlog_start "$DATA" "$id"; then
+        echo "BOOTSTRAP_INFO: marked $id in flight to match the worker this home already owns"
+      else
+        echo "BACKLOG_RECONCILE: $id: worker record exists but its backlog item could not be moved to In flight: $FM_BACKLOG_TRANSITION_ERROR"
       fi
     fi
     fm_lock_release "$meta_lock"
@@ -767,10 +749,8 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
           echo "error: bootstrap refused unsafe worker record ($FM_BACKLOG_TRANSITION_ERROR)" >&2
           exit 1
         fi
-        if [ "$(fm_meta_get "$BOOTSTRAP_BACKLOG_META" cleanup_recovery)" != orca ]; then
-          BOOTSTRAP_HAS_TASKS=1
-          break
-        fi
+        BOOTSTRAP_HAS_TASKS=1
+        break
       done
     fi
   fi
@@ -807,9 +787,6 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
-  # The treehouse lease-support upgrade check is only relevant when the resolved
-  # backend actually requires treehouse (every backend except orca, which owns its
-  # own worktrees); an orca home must not be told to upgrade a provider it never uses.
   if fm_backend_list_contains "$TOOLS" treehouse \
     && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
     echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease support; upgrade: $(upgrade_cmd treehouse))"
@@ -850,14 +827,6 @@ detect_local_config() {
   [ -f "$CONFIG/crew-harness" ] && crew=$(tr -d '[:space:]' < "$CONFIG/crew-harness" || true)
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != "default" ]; then
     echo "BOOTSTRAP_INFO: crew harness override active: $crew"
-  fi
-  # A configured cursor crew harness needs a cursor executable present, and
-  # cursor ships under EITHER installed name. Resolution runs through the
-  # verified owner rather than a bare `command -v`, so a home that merely has
-  # some unrelated executable named `agent` on PATH is still reported missing
-  # instead of failing at the first spawn.
-  if [ "$crew" = cursor ] && ! fm_cursor_resolve_binary >/dev/null 2>&1; then
-    echo "MISSING_MANUAL: cursor-agent (instructions: $(manual_install_url cursor-agent))"
   fi
   crew_dispatch_validate
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \

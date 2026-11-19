@@ -212,13 +212,12 @@
 #      `resolved` never become current state or detail.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
-#      than trusting a stale status log. On tmux, herdr, and rex, which own a
+#      than trusting a stale status log. On herdr, which owns a
 #      recovery-grade classifier, only its positive death evidence reads as gone
 #      (the endpoint is authoritatively absent, or its pane holds no agent); an
 #      endpoint that merely failed to answer reports unknown · none as
 #      unreachable, and an alive endpoint whose scrollback read failed is still
-#      classified by step 4. Backends with no classifier keep reading a failed
-#      capture as gone. The fallback's own comment owns the per-verdict rules.
+#      classified by step 4. The fallback's own comment owns the per-verdict rules.
 #
 # Read-only and side-effect free. Always exits 0 on a successful read regardless
 # of state; exit 2 only on a usage error (no id).
@@ -229,8 +228,6 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$SCRIPT_DIR/fm-tmux-lib.sh"
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-classify-lib.sh
@@ -374,34 +371,18 @@ fi
 # pane_readable is consulted ONLY in the no-run fallback below. The run-step path
 # stays authoritative regardless of pane liveness - judge by the run-step, not the
 # shell - so a finished crew whose endpoint has closed still reports its run-step
-# state (e.g. done) instead of being masked as unknown. Backend-aware
-# (fm_backend_of_meta defaults absent backend= to tmux, the P1 contract): a
-# herdr task is read through fm_backend_capture while tmux uses the shared
-# endpoint-existence predicate.
+# state (e.g. done) instead of being masked as unknown.
 TASK_BACKEND=$(fm_backend_of_meta "$META")
 BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
 pane_readable() {  # <target>
-  case "$TASK_BACKEND" in
-    tmux) fm_backend_target_exists tmux "$1" ;;
-    *) fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
-  esac
+  fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1
 }
-# crew_busy_verdict: the crew's semantic busy state from the one contract
-# owner (bin/fm-busy-lib.sh), as "<busy|idle|unknown> <source>". A converted
-# adapter answers from its own lifecycle record; Grok answers from its
-# isolated rendered-tail fallback; a herdr crew's native `busy` is accepted
-# when no record exists, but its native `idle` is NOT, because agent.get
-# reports generation state (idle while a crew blocks on its own long-running
-# foreground tool call) rather than turn state. The tail is captured
-# unconditionally (not just for Grok) so this authoritative read also sees
-# fm_busy_lib's launch-prompt backstop: without it, a launch parked on a
-# recognized interactive prompt would report `working` here while the
-# watcher's own poll (which always captures a tail) already classifies it
-# unknown - the exact split issue #1792 describes for a different cause.
-# A t3code crew's native busy AND idle are both accepted: the T3 server
-# reports its own session status and there is no shell in front of the agent
-# to misread.
+# crew_busy_verdict: the crew's semantic busy state from bin/fm-busy-lib.sh, as
+# "<busy|idle|unknown> <source>". A herdr crew's native busy is accepted when no
+# record exists, but its native idle is not, because agent.get reports
+# generation state rather than turn state. The tail is captured unconditionally
+# so the launch-prompt backstop agrees with the watcher's own poll.
 crew_busy_verdict() {  # <target>
   local tail40
   tail40=$(fm_backend_capture "$TASK_BACKEND" "$1" 40 "$EXPECTED_LABEL" 2>/dev/null) || tail40=''
@@ -843,7 +824,7 @@ nm_run_activity_is_recent() {
 # except `ci` failed/cancelled and an optional skipped rebase (any other
 # non-completed step disqualifies), plus nm_ci_checks_state=green (a genuinely red
 # check, or an unreadable ci log, cannot prove delivery). This is the
-# orphaned-CI-monitor gap (2026-09-05 jr-voice): a run held for a captain
+# orphaned-CI-monitor gap: a run held for a user
 # merge decision polls until the shared daemon restarts under it and marks
 # the run failed, although GitHub's own check state - the actual shippability
 # authority - is green and every substantive step completed.
@@ -1522,55 +1503,32 @@ fi
 # The run-step path above already handled any crew with a run, regardless of pane
 # liveness, so a finished-but-pane-closed crew never reaches here. Down here there
 # is no run to consult, so only positive evidence that the target is gone may
-# read as death - a backend that failed to answer is unknown, never death, for
-# the classifier-backed backends (tmux, herdr, rex, and t3code) - and every death-class
-# verdict reports unknown rather than trusting a possibly-stale status log as
-# the current state.
+# read as death - a backend that failed to answer is unknown, never death - and
+# every death-class verdict reports unknown rather than trusting a
+# possibly-stale status log as the current state.
 [ -n "$BACKEND_TARGET" ] || emit unknown none "no backend target recorded"
 if ! pane_readable "$BACKEND_TARGET"; then
   # A failed probe is not itself evidence the pane is gone: the herdr CLI can
-  # error or stall under load, and tmux can fail to be executed at all (a
-  # trimmed PATH) or answer non-definitively, while the pane is alive - a busy
-  # box would otherwise score dozens of live claims dead. These backends own a
-  # recovery-grade classifier (fm_backend_agent_state), which separates the
-  # outcomes:
-  #   missing - the endpoint is authoritatively absent: herdr's pane get
-  #             answered pane_not_found; rex's process read answered a
-  #             structured not-found; tmux's successful window inventory
-  #             omitted the exact recorded window, or tmux gave one of its
-  #             definitive no-session/no-server/no-socket responses (which
-  #             fm_backend_tmux_agent_state owns as death, since fm-bootstrap
-  #             and fm-session-start depend on it to license a respawn after a
-  #             genuine server death - a socket-connection failure is NOT
-  #             covered by the unknown-never-death rule above).
-  #   dead    - the endpoint exists but confidently has no agent (herdr's agent
-  #             get answered agent_not_found, or its registration lingers over a
-  #             pane whose processes are nothing but shells - issue #4115;
-  #             tmux's readable foreground process group is nothing but
-  #             shells), still positive death evidence.
-  #   alive   - the endpoint and its agent answered and only the heavy
-  #             scrollback read failed, so the live state is classified by the
-  #             normal flow below instead of being discarded.
-  #   anything else - the cheap probes themselves failed to answer or
-  #             contradicted themselves, which is unknown, never death.
-  # t3code answers from the server's own session status through the same
-  # contract. Backends with no classifier (orca, zellij, cmux, and paseo all
-  # report unverified, and tern's classifier is not promoted to recovery grade)
-  # keep their historical capture-failure-means-gone reading.
+  # error or stall under load while the pane is alive. fm_backend_agent_state
+  # separates the outcomes:
+  #   missing - pane get answered pane_not_found.
+  #   dead    - agent get answered agent_not_found, or the pane holds only shells.
+  #   alive   - only the heavy scrollback read failed; classify normally below.
+  #   anything else - the cheap probes failed or contradicted themselves: unknown.
   case "$TASK_BACKEND" in
-    tmux|herdr|rex|t3code) AGENT_STATE=$(fm_backend_agent_state "$TASK_BACKEND" "$BACKEND_TARGET") ;;
+    herdr) AGENT_STATE=$(fm_backend_agent_state "$TASK_BACKEND" "$BACKEND_TARGET") ;;
     *) AGENT_STATE=none ;;
   esac
   case "$TASK_BACKEND:$AGENT_STATE" in
-    tmux:alive|herdr:alive|rex:alive|t3code:alive)
+    herdr:alive)
       ;;
-    tmux:missing|herdr:missing|rex:missing|t3code:missing)
+    herdr:missing)
       emit unknown none "backend target gone: $BACKEND_TARGET"
       ;;
-    tmux:dead|herdr:dead|rex:dead|t3code:dead)
+    herdr:dead)
       emit unknown none "backend target gone: $BACKEND_TARGET (agent gone, pane shell remains)"
       ;;
-    tmux:*|herdr:*|rex:*|t3code:*)
+    herdr:*)
       emit unknown none "backend unreachable ($TASK_BACKEND endpoint state: $AGENT_STATE)"
       ;;
     *)

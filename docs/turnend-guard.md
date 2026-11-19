@@ -148,7 +148,7 @@ A lock is genuinely unheld only in one of these cases:
 
 Any lock with a recorded pid remains down when its pid, home, watcher path, or process identity fails the strict watcher health check.
 
-That ownership proof is `fm_extension_owns_supervision` in `bin/fm-wake-lib.sh`.
+That ownership proof is `fm_pi_extension_owns_supervision` in `bin/fm-wake-lib.sh`.
 It accepts either the Pi pair (`fm_pi_extension_owns_supervision`) or the omp pair (`fm_omp_extension_owns_supervision`).
 The proof requires all of these:
 
