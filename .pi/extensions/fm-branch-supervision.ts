@@ -173,16 +173,13 @@ const PROVIDER_ERROR_LATCH_THRESHOLD = 2;
 const PROVIDER_REPROBE_BASE_MS = 5 * 60 * 1000;
 const PROVIDER_REPROBE_MAX_MS = 60 * 60 * 1000;
 const PROCESSING_INSTRUCTION =
-  "This is a supervision processing request delivered automatically by the supervision branch. " +
+  "Supervision processing request, delivered automatically by the supervision branch. " +
   "It was not typed by the captain. " +
-  "The outcomes below are stored durably, and each was recorded earlier, possibly before a restart or a switch of primary, so the captain may already have seen it and it may already have been handled; each fleet event is already handled, so do not re-drain, re-run, or acknowledge the wake. " +
-  "Each outcome says what was true when it was recorded and how long ago, so check the task's current state first. " +
-  "An abbreviated line is incomplete: read the full outcome before acting on, relaying, or acknowledging it, using that line's lookup --seqs command. " +
-  "First sort the outcomes by that current state into still open and already settled, such as a decision since answered, a PR since merged, or a task since finished. " +
-  "Your reply to the captain covers only the still-open outcomes: give the captain a visible response where one is due, answer or escalate a decision, or act on a blocker or failure. " +
-  "Write that reply as if the settled outcomes had never been listed: leave them out entirely, without naming them, summarizing them, or saying they are settled, because checking them is all the processing they need. " +
-  "When every outcome below is processed, call fm_branch_processed with through={N} exactly once. " +
-  "Until that call the outcomes stay open and are presented again; an answer that does not make that call never counts as processing.";
+  "Each outcome below was recorded earlier, possibly before a restart or a switch of primary, so it may already have been handled; its fleet event is already handled, so do not re-drain, re-run, or acknowledge the wake. " +
+  "Before acting, check the task's current state and sort the outcomes by it into still open and already settled; read an abbreviated line in full with its lookup --seqs command. " +
+  "Your reply to the captain covers only the still-open outcomes: give a visible response where one is due, answer or escalate a decision, or act on a blocker or failure, writing as if the settled outcomes had never been listed. " +
+  "When every outcome is processed, call fm_branch_processed with through={N} exactly once. " +
+  "Until that call they stay open and are presented again; an answer without that call never counts as processing.";
 type MirrorItem = { tag: "captain" | "main"; text: string };
 type MirrorCursor = { file: string; index: number };
 type Verdict = "routine" | "captain";

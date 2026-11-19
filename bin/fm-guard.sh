@@ -56,6 +56,8 @@ WATCH="$SCRIPT_DIR/fm-watch.sh"
 GRACE=${FM_GUARD_GRACE:-300}
 queue_pending=false
 queue_branch_held=false
+# Set by fm-wake-drain.sh, which has just presented the queue it would warn about.
+QUEUE_PRESENTED=${FM_GUARD_QUEUE_PRESENTED:-0}
 READ_ONLY=${FM_GUARD_READ_ONLY:-0}
 case "$READ_ONLY" in 1|true|TRUE|yes|YES) READ_ONLY=1 ;; *) READ_ONLY=0 ;; esac
 CONTINUE_LINE=${FM_GUARD_CONTINUE_LINE:-This is a supervision warning only; the guarded operation WILL still run.}
@@ -200,7 +202,7 @@ fi
 # fm-wake-lib.sh owns that per-actor classification. A non-empty queue with
 # nothing for main is the branch-held case: keep the raw pending signal visible
 # there as its own advisory rather than dropping it.
-if [ -s "$FM_WAKE_QUEUE" ]; then
+if [ -s "$FM_WAKE_QUEUE" ] && [ "$QUEUE_PRESENTED" != 1 ]; then
   if [ "$(fm_wake_actor_pending_count "$GUARD_ACTOR")" -gt 0 ]; then
     queue_pending=true
   elif [ "$GUARD_ACTOR" != branch ] && [ "$(fm_wake_actor_pending_count branch)" -gt 0 ]; then

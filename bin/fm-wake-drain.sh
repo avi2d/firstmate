@@ -248,7 +248,7 @@ esac
 # Persistent-watcher models still require the live identity-matched watcher.
 # Never let a guard hiccup change the drain's exit status.
 assert_watcher_liveness() {
-  "$SCRIPT_DIR/fm-guard.sh" || true
+  FM_GUARD_QUEUE_PRESENTED=1 "$SCRIPT_DIR/fm-guard.sh" || true
 }
 
 # Mark presentation-stage inactive terminal outcomes only after the handling
@@ -509,17 +509,12 @@ $open
 EOF
 
   [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
-  printf 'OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):\n' || return 1
+  printf 'OPEN DECISIONS (folded from every status log, not just the latest line):\n' || return 1
   printf '%s' "$output" || return 1
   if [ "$omitted" -gt 0 ]; then
     printf 'OPEN DECISIONS: %d more omitted (byte cap)\n' "$omitted" || return 1
   fi
-  # Answerer-closes hint, printed at exactly the moment an answer gets written:
-  # the send that answers a listed decision also closes it, so closure never
-  # depends on the busy worker writing a matching resolved line (contract:
-  # bin/fm-send.sh header).
-  printf "OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>'\n" || return 1
-  printf 'OPEN DECISIONS: <key> is the [key=...] printed before the verb; a token inside a note is prose, not a key.\n' || return 1
+  printf "OPEN DECISIONS: close one by answering it: bin/fm-send.sh <task> --resolve-key <key> '<answer>', where <key> is the [key=...] printed before the verb\n" || return 1
 }
 
 # Print the RECORD DIVERGENCE section: every captain call whose two records

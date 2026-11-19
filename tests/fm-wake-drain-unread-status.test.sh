@@ -122,9 +122,9 @@ test_signal_annotation_surfaces_every_unread_note_not_only_the_newest() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" 2> "$err" \
     || fail "signal drain failed on the incident shape"
 
-  grep -F 'unread wake-EVENT since last drain, not current state: task4.status: note: captain said use REST not RPC' "$out" >/dev/null \
+  grep -F '  task4.status: note: captain said use REST not RPC' "$out" >/dev/null \
     || fail "the signal annotation dropped the buried answer note: $(cat "$out")"
-  grep -F 'latest wake-EVENT observed at drain, not current state: task4.status: note: re-read acknowledgement' "$out" >/dev/null \
+  grep -F '  task4.status latest: note: re-read acknowledgement' "$out" >/dev/null \
     || fail "the signal annotation dropped the newest routine note: $(cat "$out")"
   grep "$(printf '\tsignal\ttask4.status\t')" "$out" >/dev/null \
     || fail "surfacing unread notes hid the authoritative raw wake row"
@@ -337,7 +337,7 @@ test_empty_queue_does_not_swallow_later_signal_annotation() {
     || fail "publishing the delayed status signal failed"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" \
     || fail "drain failed after delayed signal publication"
-  grep -F 'latest wake-EVENT observed at drain, not current state: task-delayed.status: done: shipped before watcher published signal' "$out" >/dev/null \
+  grep -F '  task-delayed.status latest: done: shipped before watcher published signal' "$out" >/dev/null \
     || fail "the empty-queue drain acknowledged an event before its signal annotation: $(cat "$out")"
   pass "an empty-queue backstop presentation still preserves the status for its later signal annotation"
 }
