@@ -3599,7 +3599,6 @@ while :; do
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
     rejected_checks=
-    contribution_check_output=
     # Record each PR a task reported but nobody recorded, so its merge poll
     # below runs in this same sweep (bin/fm-pr-check.sh owns the scan).
     pr_register_reason=
@@ -3644,25 +3643,6 @@ while :; do
         continue
       fi
       if [ -n "$out" ]; then
-        if [ "$(basename "$c")" = contributions.check.sh ]; then
-          contribution_check_output=
-          contribution_check_diagnostics=
-          while IFS= read -r contribution_check_line; do
-            case "$contribution_check_line" in
-              'contribution-wake: check: contributions '*)
-                contribution_check_output="${contribution_check_output}${contribution_check_line#contribution-wake: }"$'\n'
-                ;;
-              *) contribution_check_diagnostics="${contribution_check_diagnostics}${contribution_check_line}"$'\n' ;;
-            esac
-          done <<EOF
-$out
-EOF
-          if [ -n "$contribution_check_diagnostics" ]; then
-            out=${contribution_check_diagnostics%$'\n'}
-          elif [ -n "$contribution_check_output" ]; then
-            continue
-          fi
-        fi
         # One line, as the queued row stores it: wake consumers keep only
         # prefixed lines, so a later output line would otherwise be dropped.
         reason="check: $c: $(printf '%s' "$out" | fm_wake_clean_field)"
@@ -3731,9 +3711,6 @@ EOF
     }
     touch "$STATE/.last-check"
     [ -z "$pr_register_reason" ] || wake "$pr_register_reason"
-    if [ -n "$contribution_check_output" ]; then
-      wake "$contribution_check_output"
-    fi
   fi
 
   # On the first changed signal, linger one grace period and re-scan before
