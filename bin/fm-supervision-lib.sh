@@ -27,15 +27,13 @@ fm_sup_stat_mtime() {
 #   FM_SUP_SOURCES        count of registered process-to-event sources
 #   FM_SUP_CHECKS         count of registered custom checks: a state/<id>.check.sh
 #                         with the state/<id>.check-trust binding that
-#                         bin/fm-check-register.sh writes. Task PR polls carry no
-#                         such binding and are torn down with their task, and the
-#                         relay shim keeps its own trust path, so neither counts
-#                         here. Presence of the binding is the whole test: whether
+#                         bin/fm-check-register.sh writes. Task PR polls have no binding.
+#                         Presence of the binding is the whole test: whether
 #                         those bytes are still the registered ones is the check
 #                         sweep's call at execution time, and a home whose check
 #                         no longer validates needs the watcher precisely so the
 #                         sweep can report the rejection instead of going quiet.
-#   FM_SUP_NEEDED         true/false - in-flight work, an X-mode relay poll, a
+#   FM_SUP_NEEDED         true/false - in-flight work, a
 #                         registered event source (a source is a wait on an
 #                         external process, not a task, so it has no metadata),
 #                         or a registered custom check
