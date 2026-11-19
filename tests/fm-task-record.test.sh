@@ -64,4 +64,29 @@ assert_contains "$summary" "$(printf 'working_s\t30\t50')" \
 assert_contains "$summary" "$(printf 'elapsed_s\t61\t81')" \
   "elapsed percentiles must include waits but not follow-up"
 
+archive_result() {
+  local id=$1 result=$2 archive="$FM_STATE_OVERRIDE/status-archive/$1"
+  mkdir -p "$archive"
+  printf 'spawn_gen=old-incarnation\nkind=ship\nmode=direct-PR\nresult=%s\n' "$result" > "$archive/result"
+}
+
+archive_result four accepted
+archive_result one missing
+archive_result only-result dropped
+archive_result reused accepted
+printf 'spawn_gen=new-incarnation\nkind=ship\nmode=direct-PR\n' > "$FM_STATE_OVERRIDE/reused.meta"
+printf 'working: a new task\n' > "$FM_STATE_OVERRIDE/reused.status"
+printf 'done: ready\n' > "$FM_STATE_OVERRIDE/status-archive/reused/1.1.status"
+out=$("$tool" --nm-db "$db" --mode direct-PR)
+assert_contains "$out" "$(printf 'four\tship\tdemo\tdirect-PR\tmissing\taccepted\t40')" \
+  "the legacy status inference must not hide a recorded acceptance"
+assert_contains "$out" "$(printf 'one\tship\tdemo\tdirect-PR\tmissing\tmissing\t10')" \
+  "the legacy backlog must not override an explicit missing result"
+assert_contains "$out" "$(printf 'only-result\tship\tmissing\tdirect-PR\tmissing\tdropped')" \
+  "a result must not disappear when there is no status or backlog"
+case "$out" in *"$(printf 'reused\t')"*) fail "a live task must not inherit a prior cleanup result" ;; esac
+accepted=$("$tool" --nm-db "$db" --aggregate --mode direct-PR --result accepted)
+assert_contains "$accepted" "Cases: 1 (1 accepted, 0 failed, 0 dropped, 0 missing result)" \
+  "the accepted timing sample must not include failed, dropped, or missing results"
+
 echo "fm-task-record: ok"
