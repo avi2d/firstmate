@@ -744,9 +744,6 @@ outcome: failed
 EOF
 }
 
-# The 2026-09-05 jr-voice orphaned-CI-monitor shape: every substantive step
-# completed, only ci failed (after the shared daemon restarted under its
-# merge poll), and GitHub read the PR green and mergeable.
 run_failed_ci_orphan() {  # <branch>
   cat <<EOF
 run:

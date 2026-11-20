@@ -13,8 +13,7 @@ This is the first mate's working interpretation rather than settled repository p
 worker reports through the first mate and never addresses the captain directly."
 That line protects who is answerable for work. Read alongside the sentence it
 shares a paragraph with, it governs workers reporting outward, not the surfaces
-the captain reaches inward through, so a front end the captain chooses to speak
-or type into is not by itself a breach of it.
+the captain uses to contact Firstmate.
 
 Do not flag a captain-facing front end as violating that line while **all** of
 these hold:
@@ -33,5 +32,4 @@ The known tension is not a defect either, and is already on the record: such a
 front end may hold read access to the captain's records, so the captain does
 sometimes get a substantive answer from something that is not the first mate.
 Whether `VISION.md` should be reconciled to describe that is the captain's call
-and is not settled by any single pull request. Raising it as new is what this rule
-is here to stop; `bin/fm-voice-relay.py` is the surface it was decided on.
+and is not settled by any single pull request.

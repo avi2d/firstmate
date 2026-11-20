@@ -518,8 +518,6 @@ assert_contains "$blank_out" "invalid request id" "an empty request id is reject
 assert_equals "0" "$(count_notes "$home")" "refusals must not write a note"
 pass "empty bodies and unsafe request ids are refused"
 
-# The voice handover passes a raw transcript as the first argument, so a body
-# that opens with a double dash is text, not an option.
 home=$(make_home dash-body)
 transcript="--- handover: ship the console backend --now"
 dash_out=$(run_inbox "$home" note "$transcript") \

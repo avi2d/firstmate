@@ -482,8 +482,8 @@ test_matrix_muse_truecolor_glyph_survives_signal_loss() {
   # luminance, the ghost strip erases it, and the verdict must survive on the
   # plain-row signal alone.
   local screen plain out
-  screen=$'── Voice input (⌥ + v to start) ─────\n'"${ESC}[0m${ESC}[38;2;90;160;255m⟩${ESC}[0m"
-  plain=$'── Voice input (⌥ + v to start) ─────\n⟩'
+  screen=$'── Input hint ─────\n'"${ESC}[0m${ESC}[38;2;90;160;255m⟩${ESC}[0m"
+  plain=$'── Input hint ─────\n⟩'
   assert_screen "muse idle on tmux" empty "$CAPS_TMUX" "$screen" 1
   assert_screen "muse idle on herdr" empty "$CAPS_STYLED" "$screen"
   assert_screen "muse idle on zellij" empty "$CAPS_STYLED_NOID" "$screen"
