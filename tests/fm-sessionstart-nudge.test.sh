@@ -14,9 +14,9 @@ set -u
 # portable regression pass locally while failing on a harness-free CI runner.
 if [ "${FM_SESSIONSTART_TEST_HARNESS:-0}" != 1 ]; then
   HARNESS_FIXTURE=$(mktemp -d "${TMPDIR:-/tmp}/fm-sessionstart-harness.XXXXXX") || exit 1
-  ln -s /bin/bash "$HARNESS_FIXTURE/codex" || exit 1
+  ln -s /bin/bash "$HARNESS_FIXTURE/pi" || exit 1
   # shellcheck disable=SC2016 # Expand in the fixture shell, not this parent.
-  FM_SESSIONSTART_TEST_HARNESS=1 "$HARNESS_FIXTURE/codex" \
+  FM_SESSIONSTART_TEST_HARNESS=1 "$HARNESS_FIXTURE/pi" \
     -c '"$@"; rc=$?; :; exit "$rc"' _ "$0" "$@"
   HARNESS_STATUS=$?
   rm -rf "$HARNESS_FIXTURE"
@@ -103,18 +103,6 @@ test_unmarked_linked_worktree_is_silent() {
   pass "fm-sessionstart-nudge: an unmarked linked task worktree is silent"
 }
 
-test_linked_secondmate_primary_nudges() {
-  local base="$TMP_ROOT/secondmate-base" root="$TMP_ROOT/secondmate-home" out status=0
-  fm_git_worktree "$base" "$root" fm/sessionstart-secondmate
-  mkdir -p "$root/bin" "$root/state"
-  : > "$root/AGENTS.md"
-  printf 'sessionstart-sm\n' > "$root/.fm-secondmate-home"
-  out=$(run_nudge "$root") || status=$?
-  expect_code 0 "$status" "linked secondmate nudge"
-  [ "$out" = "$NUDGE_LINE" ] || fail "linked secondmate printed unexpected output: $out"
-  pass "fm-sessionstart-nudge: a marked linked secondmate home is a primary"
-}
-
 test_missing_state_is_silent() {
   local root="$TMP_ROOT/missing-state"
   make_primary "$root"
@@ -131,7 +119,7 @@ test_owned_lock_is_silent() {
   pass "fm-sessionstart-nudge: a lock holder in process ancestry is already run"
 }
 
-# A firstmate running inside a PID namespace - a container, or `codex sandbox` -
+# A firstmate running inside a PID namespace - a container -
 # holds its home lock from a harness that IS pid 1, so this hook must recognize
 # that owner. The old walk rejected a lock pid of 1 outright and stopped before
 # comparing pid 1, so the hook nudged a session that had already run.
@@ -165,52 +153,6 @@ test_namespace_pid1_lock_holder_is_silent() {
   pass "fm-sessionstart-nudge: a lock holder that is pid 1 of its own namespace is already run"
 }
 
-test_opencode_plugin_delivers_exact_nudge_once() {
-  local root="$TMP_ROOT/opencode-primary" out status=0
-  make_primary "$root"
-  cp "$ROOT/bin/fm-sessionstart-nudge.sh" "$ROOT/bin/fm-primary-scope-lib.sh" \
-    "$ROOT/bin/fm-gate-refuse-lib.sh" "$ROOT/bin/fm-operational-input.sh" "$root/bin/"
-  chmod +x "$root/bin/fm-sessionstart-nudge.sh"
-  out=$(PLUGIN="$ROOT/.opencode/plugins/fm-primary-sessionstart-nudge.js" \
-    WORKTREE="$root" EXPECTED="$NUDGE_LINE" node --input-type=module 2>&1 <<'EOF'
-import { pathToFileURL } from "node:url";
-
-const prompts = [];
-const client = {
-  session: {
-    promptAsync: async (request) => {
-      prompts.push(request.body.parts[0].text);
-    },
-  },
-};
-const mod = await import(pathToFileURL(process.env.PLUGIN).href);
-const hooks = await mod.FmPrimarySessionstartNudge({
-  client,
-  directory: process.env.WORKTREE,
-  worktree: process.env.WORKTREE,
-});
-const event = {
-  type: "session.created",
-  properties: { sessionID: "session-nudge-test", info: { id: "session-nudge-test" } },
-};
-await hooks.event({ event });
-await hooks.event({ event });
-if (prompts.length !== 1) throw new Error(`expected one prompt, got ${prompts.length}`);
-if (prompts[0] !== process.env.EXPECTED) throw new Error(`unexpected prompt: ${prompts[0]}`);
-EOF
-  ) || status=$?
-  expect_code 0 "$status" "OpenCode exact nudge delivery"
-  [ -z "$out" ] || fail "OpenCode exact nudge delivery printed output: $out"
-  pass "OpenCode session.created delivers the exact wrapper nudge once per session"
-}
-
-# --- run tier ----------------------------------------------------------------
-#
-# make_run_primary builds a primary the run wrapper accepts and the REAL
-# fm-session-start.sh can execute: a git repo on main so the tangle check
-# behaves, plus the home directories the digest reads. The deliberately bare
-# PATH keeps every bootstrap probe fast and hermetic - it reports missing tools
-# instead of reaching the host's real gh/tmux/tasks-axi.
 RUN_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 
 make_run_primary() {
@@ -224,20 +166,10 @@ make_run_primary() {
 run_hook() {  # <root> [args...]
   local root=$1
   shift
-  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+  env PI_CODING_AGENT=true FM_PI_HARNESS=pi \
     FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
 }
 
-run_hook_pi() {  # <root> [args...]
-  local root=$1
-  shift
-  env -u CLAUDECODE -u GROK_AGENT PI_CODING_AGENT=true FM_PI_HARNESS=pi \
-    FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" "$@"
-}
-
-# Every run-tier assertion keys off the digest banner, which fm-session-start.sh
-# prints before the lock result, so routing is proven whether or not the lock
-# was won in the test environment.
 FULL_BANNER="SESSION START - "
 REEMIT_BANNER="SESSION START (CONTEXT RE-EMIT) - "
 
@@ -278,15 +210,15 @@ test_run_rebuild_forwards_source_to_drifted_instruction_refresh() {
   local root="$TMP_ROOT/run-instruction-refresh" baseline compact_out clear_out resume_out
   make_run_primary "$root"
   printf '%s\n' 'RUN_TIER_AGENTS=original' > "$root/AGENTS.md"
-  run_hook_pi "$root" --source startup </dev/null >/dev/null
+  run_hook "$root" --source startup </dev/null >/dev/null
   assert_present "$root/state/.session-start-agents-baseline" \
     "run-tier startup did not record an instruction baseline"
   baseline=$(cat "$root/state/.session-start-agents-baseline")
 
   printf '%s\n' 'RUN_TIER_AGENTS=updated' > "$root/AGENTS.md"
-  compact_out=$(run_hook_pi "$root" --source compact </dev/null)
-  clear_out=$(run_hook_pi "$root" --source clear </dev/null)
-  resume_out=$(run_hook_pi "$root" --source resume </dev/null)
+  compact_out=$(run_hook "$root" --source compact </dev/null)
+  clear_out=$(run_hook "$root" --source clear </dev/null)
+  resume_out=$(run_hook "$root" --source resume </dev/null)
 
   assert_contains "$compact_out" "RUN_TIER_AGENTS=updated" \
     "the compact run wrapper did not forward its source to instruction refresh"
@@ -305,7 +237,7 @@ test_run_compact_without_completion_refreshes_before_finishing_startup() {
   make_run_primary "$root"
   printf '%s\n' 'INCOMPLETE_START_AGENTS=current' > "$root/AGENTS.md"
 
-  out=$(run_hook_pi "$root" --source compact </dev/null) || status=$?
+  out=$(run_hook "$root" --source compact </dev/null) || status=$?
   expect_code 0 "$status" "run wrapper compact without completion proof"
   assert_contains "$out" "$FULL_BANNER$root" \
     "compact skipped full startup when no completed startup could be proven"
@@ -995,7 +927,7 @@ test_pi_large_sessionstart_digest_is_delivered_loudly() {
     "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$fixture/.pi/extensions/lib/"
   cp "$ROOT/bin/fm-sessionstart-run.sh" "$ROOT/bin/fm-sessionstart-nudge.sh" \
     "$ROOT/bin/fm-primary-scope-lib.sh" "$ROOT/bin/fm-gate-refuse-lib.sh" \
-    "$ROOT/bin/fm-hook-host-lib.sh" \
+    "$ROOT/bin/fm-session-lock-lib.sh" \
     "$ROOT/bin/fm-operational-input.sh" "$fixture/bin/"
   cat > "$fixture/bin/fm-session-start.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1046,27 +978,6 @@ test_run_resume_delegates_to_the_nudge() {
   pass "run wrapper: resume delegates to the nudge instead of re-running the digest"
 }
 
-test_run_reads_source_from_the_hook_payload() {
-  local root="$TMP_ROOT/run-payload" out status=0
-  make_run_primary "$root"
-  run_hook "$root" --source startup </dev/null >/dev/null
-  out=$(printf '{"session_id":"s1","hook_event_name":"SessionStart","source":"compact"}' |
-    run_hook "$root") || status=$?
-  expect_code 0 "$status" "run wrapper payload compact"
-  assert_contains "$out" "$REEMIT_BANNER$root" "a compact hook payload was not routed to a re-emit"
-
-  # A fresh root, because the compact case above legitimately took the lock and
-  # an owned lock is exactly when the nudge is supposed to stay silent.
-  root="$TMP_ROOT/run-payload-resume"
-  make_run_primary "$root"
-  status=0
-  out=$(printf '{"source":"resume","cwd":"/nowhere"}' | run_hook "$root") || status=$?
-  expect_code 0 "$status" "run wrapper payload resume"
-  assert_contains "$out" "FIRSTMATE_OP" "a resume hook payload did not delegate to the nudge"
-  assert_not_contains "$out" "SESSION START" "a resume hook payload still ran the digest"
-  pass "run wrapper: the hook payload's source field drives routing with no explicit argument"
-}
-
 test_run_unknown_source_takes_the_helm() {
   local root="$TMP_ROOT/run-unknown" out status=0
   make_run_primary "$root"
@@ -1074,11 +985,7 @@ test_run_unknown_source_takes_the_helm() {
   expect_code 0 "$status" "run wrapper unknown source"
   assert_contains "$out" "$FULL_BANNER$root" "an unrecognized source did not fall through to the full digest"
 
-  status=0
-  out=$(printf '{"hook_event_name":"SessionStart"}' | run_hook "$root") || status=$?
-  expect_code 0 "$status" "run wrapper sourceless payload"
-  assert_contains "$out" "$FULL_BANNER$root" "a payload with no source did not fall through to the full digest"
-  pass "run wrapper: an unrecognized or absent source takes the helm rather than skipping it"
+  pass "run wrapper: an unrecognized source runs the full digest instead of skipping startup"
 }
 
 test_run_gate_and_scope_are_silent() {
@@ -1167,11 +1074,9 @@ test_genuine_primary_nudges
 test_gate_env_is_silent
 test_gate_common_dir_is_silent
 test_unmarked_linked_worktree_is_silent
-test_linked_secondmate_primary_nudges
 test_missing_state_is_silent
 test_owned_lock_is_silent
 test_namespace_pid1_lock_holder_is_silent
-test_opencode_plugin_delivers_exact_nudge_once
 test_run_startup_runs_the_full_digest
 test_run_clear_and_compact_reemit
 test_run_rebuild_forwards_source_to_drifted_instruction_refresh
@@ -1179,7 +1084,6 @@ test_run_compact_without_completion_refreshes_before_finishing_startup
 test_run_clear_without_completion_finishes_startup
 test_run_clear_rejects_previous_owner_completion
 test_run_resume_delegates_to_the_nudge
-test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
 test_run_creates_missing_state_on_a_fresh_primary

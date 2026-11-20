@@ -309,7 +309,6 @@ family_for_basename() {
     fm-calm-claude-mod.test.sh|\
     fm-harness-adapter-references.test.sh|fm-project-mode.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
-    fm-subagent-pretool-check.test.sh|\
     fm-supervision-instructions.test.sh|fm-task-delivery.test.sh|\
     fm-timeout-lib.test.sh|\
     fm-trace-context-lib.test.sh|\
@@ -836,7 +835,6 @@ tests/fm-startup-growth-check.test.sh 5806
 tests/fm-startup-memory-budget.test.sh 14595
 tests/fm-startup-network.test.sh 72106
 tests/fm-stat-shadowing.test.sh 75
-tests/fm-subagent-pretool-check.test.sh 1417
 tests/fm-supervision-events.test.sh 673
 tests/fm-tangle-guard.test.sh 8501
 tests/fm-task-delivery.test.sh 101905

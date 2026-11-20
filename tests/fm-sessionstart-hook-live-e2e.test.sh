@@ -1,43 +1,4 @@
 #!/usr/bin/env bash
-# Opt-in live guard for the Claude, Codex exec, and Pi RUN-tier session-open adapters.
-# Cursor's source-free RUN-tier transport is covered with its stop-hook park by
-# tests/fm-cursor-primary-live-e2e.test.sh.
-#
-# Three facts in this area come from the vendor, not from Firstmate, so a stub
-# can only confirm the assumption already written into the stub:
-#
-#   (a) the harness tells the hook WHICH session open this is, well enough that
-#       a context-preserving reopen is never mistaken for a context reset,
-#   (b) hook stdout actually reaches model context on a context-RESET open
-#       (clear/compact), not only on a cold startup, and
-#   (c) a worker the hook detaches SURVIVES the hook returning. Session start
-#       moved every external-network call into such a worker
-#       (bin/fm-startup-network.sh), so a harness that reaps the hook's process
-#       tree would silently stop running the sweeps entirely. Whether it does is
-#       a vendor behavior no portable test can see.
-#
-# docs/sessionstart-nudge.md owns the routing facts (a) and (b) feed, and
-# tests/fm-sessionstart-nudge.test.sh pins that routing portably with real
-# processes and no harness. This guard covers only what CI cannot see.
-#
-# It swaps a RECORDER in for bin/fm-sessionstart-run.sh inside a throwaway lab
-# checkout, so nothing here touches a real home, lock, or fleet. The recorder
-# logs the source the harness supplied and prints a source-stamped token; the
-# model is then asked to quote that token back, which is the only way to prove
-# the stdout genuinely landed in context rather than merely being produced.
-# The token index advances on every open, so a stale earlier token can never
-# satisfy a later assertion and no case can go quietly vacuous.
-#
-# Run it after every harness upgrade and before trusting refreshed evidence in
-# docs/verification/supervision.md:
-#
-#   FM_SESSIONSTART_HOOK_LIVE_E2E=1 tests/fm-sessionstart-hook-live-e2e.test.sh
-#
-# That mode costs real model turns on every installed adapter in this suite.
-# The Pi `/new` provider-prerequisite regression has a separate offline mode
-# using a deterministic local provider and no user credentials:
-#
-#   FM_PI_SESSIONSTART_RACE_LIVE_E2E=1 tests/fm-sessionstart-hook-live-e2e.test.sh
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -60,8 +21,6 @@ note() { printf '# %s\n' "$1"; }
 # a maintainer may be committing from while this guard runs.
 LAB="${TMPDIR:-/tmp}/fm-sessionstart-hook-live-e2e.$$"
 SOCKET="fm-ss-hook-$$"
-CHECKED=0
-ABSENT=
 
 cleanup() {
   tmux -L "$SOCKET" kill-server >/dev/null 2>&1 || true
@@ -108,8 +67,7 @@ make_lab() {  # <harness> -> echoes lab dir
   git -C "$lab" add -A >/dev/null 2>&1 || true
   git -C "$lab" commit -q -m init >/dev/null 2>&1 || true
 
-  for stub in fm-turnend-guard.sh fm-claude-stop-autoarm.sh fm-arm-pretool-check.sh \
-    fm-cd-pretool-check.sh fm-subagent-pretool-check.sh; do
+  for stub in fm-turnend-guard.sh fm-arm-pretool-check.sh fm-cd-pretool-check.sh; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "$lab/bin/$stub"
     chmod +x "$lab/bin/$stub"
   done
@@ -122,6 +80,7 @@ make_lab() {  # <harness> -> echoes lab dir
   ln -sf "$ROOT/bin/fm-startup-network.sh" "$lab/bin/fm-startup-network.sh"
   ln -sf "$ROOT/bin/fm-timeout-lib.sh" "$lab/bin/fm-timeout-lib.sh"
   ln -sf "$ROOT/bin/fm-wake-lib.sh" "$lab/bin/fm-wake-lib.sh"
+  ln -sf "$ROOT/bin/fm-path-lib.sh" "$lab/bin/fm-path-lib.sh"
   ln -sf "$ROOT/bin/fm-session-lock-lib.sh" "$lab/bin/fm-session-lock-lib.sh"
   cat > "$lab/bin/fm-bootstrap.sh" <<'SH'
 #!/usr/bin/env bash
@@ -147,15 +106,6 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
-if [ -z "$source" ]; then
-  source=$(cat 2>/dev/null | awk '
-    BEGIN { RS = "\"" }
-    seen == 2 { print; exit }
-    seen == 1 && $0 ~ /^[[:space:]]*:[[:space:]]*$/ { seen = 2; next }
-    seen == 1 { seen = 0 }
-    $0 == "source" { seen = 1 }
-  ')
-fi
 [ -n "$source" ] || source=none
 printf '%s\n' "$source" >> "$record"
 # Exactly what bin/fm-session-start.sh does after taking the lock.
@@ -167,18 +117,12 @@ exit 0
 SH
   chmod +x "$lab/bin/fm-sessionstart-run.sh"
 
-  case "$harness" in
-    claude) mkdir -p "$lab/.claude"; cp "$ROOT/.claude/settings.json" "$lab/.claude/settings.json" ;;
-    codex) mkdir -p "$lab/.codex"; cp "$ROOT/.codex/hooks.json" "$lab/.codex/hooks.json" ;;
-    pi)
-      mkdir -p "$lab/.pi/extensions/lib"
-      cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$lab/.pi/extensions/"
-      cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" \
-        "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$lab/.pi/extensions/lib/"
-      cp "$ROOT/bin/fm-operational-input.sh" "$lab/bin/"
-      printf '%s\n' '{"compaction":{"keepRecentTokens":200}}' > "$lab/.pi/settings.json"
-      ;;
-  esac
+  mkdir -p "$lab/.pi/extensions/lib"
+  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$lab/.pi/extensions/"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" \
+    "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$lab/.pi/extensions/lib/"
+  cp "$ROOT/bin/fm-operational-input.sh" "$lab/bin/"
+  printf '%s\n' '{"compaction":{"keepRecentTokens":200}}' > "$lab/.pi/settings.json"
   printf '%s\n' "$lab"
 }
 
@@ -584,45 +528,12 @@ if [ "${FM_PI_SESSIONSTART_RACE_LIVE_E2E:-0}" = 1 ]; then
   fi
 fi
 
-# --- per-harness drivers ------------------------------------------------------
-
-for harness in claude codex pi; do
-  if ! command -v "$harness" >/dev/null 2>&1; then
-    ABSENT="$ABSENT $harness"
-    note "$harness: not installed on this host, so its run-tier evidence was NOT refreshed"
-    continue
-  fi
-  version=$("$harness" --version 2>/dev/null | head -n 1)
-  [ -n "$version" ] || version=unknown
-  lab=$(make_lab "$harness")
-
-  case "$harness" in
-    claude)
-      probe_process_opens claude "$version" "$lab" resume \
-        claude -p --permission-mode bypassPermissions \
-        -- claude --continue -p --permission-mode bypassPermissions
-      probe_context_reset claude "$version" "$lab" /clear \
-        claude --permission-mode bypassPermissions
-      ;;
-    codex)
-      probe_process_opens codex "$version" "$lab" resume \
-        codex exec --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check \
-        -- codex exec resume --last --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
-      note "codex $version: codex exec run-tier evidence refreshed; the interactive TUI remains uncovered because tracked project hooks provide no session-open or re-emit channel there"
-      ;;
-    pi)
-      probe_process_opens pi "$version" "$lab" resume \
-        pi -p -e "$lab/.pi/extensions/fm-primary-turnend-guard.ts" --no-context-files --no-tools \
-        -- pi -p -c -e "$lab/.pi/extensions/fm-primary-turnend-guard.ts" --no-context-files --no-tools
-      probe_context_reset pi "$version" "$lab" /new \
-        pi -e "$lab/.pi/extensions/fm-primary-turnend-guard.ts" --no-context-files
-      ;;
-  esac
-  CHECKED=$((CHECKED + 1))
-done
-
-[ "$CHECKED" -gt 0 ] \
-  || fail "no run-tier harness was installed, so this guard verified nothing; install claude, codex, or pi before trusting its evidence"
-[ -z "$ABSENT" ] \
-  || note "run-tier evidence was refreshed for $CHECKED harness(es); still missing:$ABSENT"
-echo "# fm-sessionstart-hook-live-e2e.test.sh: all live assertions passed"
+command -v pi >/dev/null 2>&1 || fail "Pi is required for the live session-start test"
+version=$(pi --version 2>/dev/null | head -n 1)
+lab=$(make_lab pi)
+probe_process_opens pi "${version:-unknown}" "$lab" resume \
+  pi -p -e "$lab/.pi/extensions/fm-primary-turnend-guard.ts" --no-context-files --no-tools \
+  -- pi -p -c -e "$lab/.pi/extensions/fm-primary-turnend-guard.ts" --no-context-files --no-tools
+probe_context_reset pi "${version:-unknown}" "$lab" /new \
+  pi -e "$lab/.pi/extensions/fm-primary-turnend-guard.ts" --no-context-files
+echo "# fm-sessionstart-hook-live-e2e.test.sh: all live Pi assertions passed"
