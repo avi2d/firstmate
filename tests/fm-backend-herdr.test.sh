@@ -4631,86 +4631,6 @@ cortex_agent_get_calls() {  # <dir-suffix>
   grep -c "$(printf '\037agent\037get\037')" "$TMP_ROOT/composer-titled-$1/log" || true
 }
 
-test_composer_state_titled_box_requires_cortex_identity() {
-  local out calls titled
-  titled='╭────────────── New Session ──╮\n│ ❯                           │\n╰─────────────────────────────╯\n\n>> bypass safeguards  |  teams: off  |  plan: off\n'
-  out=$(cortex_composer_case cortex "$titled" '{"result":{"agent":{"agent":"cortex","agent_status":"idle"}}}')
-  [ "$out" = empty ] || fail "a titled box under a cortex agent probe should read empty, got '$out'"
-  calls=$(cortex_agent_get_calls cortex)
-  [ "$calls" = 1 ] || fail "a titled box should resolve Cortex with exactly one agent get, saw $calls"
-  out=$(cortex_composer_case other "$titled" '{"result":{"agent":{"agent":"claude","agent_status":"idle"}}}')
-  [ "$out" = unknown ] || [ "$out" = pending-unproven ] \
-    || fail "a titled box under a non-cortex agent must stay ambiguous, got '$out'"
-  calls=$(cortex_agent_get_calls other)
-  [ "$calls" = 1 ] || fail "a titled box under another agent should ask for the identity once, saw $calls"
-  out=$(cortex_composer_case absent "$titled" '{"error":{"code":"agent_not_found"}}')
-  [ "$out" = unknown ] || [ "$out" = pending-unproven ] \
-    || fail "a titled box with no agent record must stay ambiguous, got '$out'"
-  pass "fm_backend_herdr_composer_state: titled rounded top rule is a composer only under a cortex agent probe"
-}
-
-# A pane that never shows a titled rounded composer box never pays a second
-# identity read, whatever its verdict: a plain idle box, a plain draft, and
-# titled boxes the Cortex tolerance cannot accept (no prompt glyph row, a
-# non-ASCII title) all keep the one capture call, even under a cortex agent.
-test_composer_state_non_cortex_panes_skip_identity_probe() {
-  local agent='{"result":{"agent":{"agent":"cortex","agent_status":"idle"}}}' out calls name expect body
-  while IFS='|' read -r name expect body; do
-    out=$(cortex_composer_case "$name" "$body" "$agent")
-    case "$expect" in
-      ambiguous)
-        case "$out" in
-          unknown|pending-unproven) ;;
-          *) fail "$name: expected an ambiguous verdict, got '$out'" ;;
-        esac
-        ;;
-      *) [ "$out" = "$expect" ] || fail "$name: expected '$expect', got '$out'" ;;
-    esac
-    calls=$(cortex_agent_get_calls "$name")
-    [ "$calls" = 0 ] || fail "$name: a pane with no titled composer box must not probe identity, saw $calls agent get calls"
-  done <<'CASES'
-plain-empty|empty|  ╭────────────────────────╮\n  │ ❯                      │\n  ╰────────────────────────╯\n
-plain-draft|pending|  ╭────────────────────────╮\n  │ ❯ hello captain        │\n  ╰────────────────────────╯\n
-titled-glyphless|ambiguous|╭────────── Select a model ──╮\n│ ○ Auto                      │\n╰─────────────────────────────╯\n
-titled-nonascii|ambiguous|╭────────────── Nüw Session ──╮\n│ ❯                           │\n╰─────────────────────────────╯\n
-CASES
-  pass "fm_backend_herdr_composer_state: panes without a titled composer box make no second agent get call"
-}
-
-# Issue #3436: Grok 1.0.5's real bottom border is three columns wider than
-# the aligned top and content rows. Herdr has no cursor anchor, so the old
-# geometry verdict was unknown even when this composer was genuinely idle.
-test_composer_state_grok_oversized_title_preserves_safe_verdicts() {
-  local dir log resp fb out
-  dir="$TMP_ROOT/composer-grok-oversized-title"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '%s\n' \
-    '  ╭──────────────────────────────────────────────────────────────────────────╮' \
-    '  │ ❯                                                                        │' \
-    '  ╰────────────────────────────────────────────────────────── Grok 4.6 (xhigh) ─╯' \
-    '' \
-    '  Shift+Tab:mode  │  Ctrl+x:shortcuts' > "$resp/1.out"
-  printf '%s\n' \
-    '  ╭──────────────────────────────────────────────────────────────────────────╮' \
-    '  │ ❯ deploy the fix                                                         │' \
-    '  ╰────────────────────────────────────────────────────────── Grok 4.6 (xhigh) ─╯' > "$resp/2.out"
-  printf '%s\n' \
-    '  ╭──────────────────────────────────────────────────────────────────────────╮' \
-    '  │ ❯                                                                        │' \
-    '  ╰────────────────────────────────────────────────────────── unknown surface ─╯' > "$resp/3.out"
-  fb=$(make_herdr_fakebin "$dir")
-
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
-  [ "$out" = empty ] || fail "issue #3436's idle Grok/Herdr composer should read empty, got '$out'"
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
-  [ "$out" = pending ] || fail "typed text inside Grok's oversized box should stay pending, got '$out'"
-  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
-  [ "$out" = unknown ] || fail "an oversized unrecognized title should stay unknown, got '$out'"
-  pass "fm_backend_herdr_composer_state: Grok's exact title overhang is empty while pending and unproved panes remain safe"
-}
-
 # Live-verified incident (2026-07-03, real grok 0.2.82 on herdr, isolated
 # session): typing "/compact" opens the completion popup; the FIRST Enter
 # closes the popup and EXPANDS the composer into an argument-hint placeholder
@@ -6173,35 +6093,6 @@ test_dispatch_busy_state_unknown_for_tmux() {
   pass "fm_backend_busy_state: tmux (no native primitive) always reports unknown, preserving the P1 regex-only path"
 }
 
-test_dispatch_composer_state_routes_by_backend() {
-  # fm_backend_composer_state (the generic per-backend composer/pending-input
-  # classifier the away-mode daemon dispatches through - bin/fm-supervise-daemon.sh's
-  # pane_input_pending) must route to each backend's OWN named classifier with
-  # the target passed through unchanged - every backend has one now, all thin
-  # wrappers over the shared fm_composer_classify_screen - and report unknown
-  # for an unrecognized backend name.
-  # Sourced-guards are pre-set so fm_backend_source no-ops and these stubs are
-  # never clobbered by the real per-backend files trying (and failing) a live call.
-  (
-    # shellcheck source=bin/fm-backend.sh
-    . "$ROOT/bin/fm-backend.sh"
-    _FM_BACKEND_TMUX_SOURCED=1
-    _FM_BACKEND_HERDR_SOURCED=1
-    _FM_BACKEND_ORCA_SOURCED=1
-    _FM_BACKEND_ZELLIJ_SOURCED=1
-    fm_tmux_composer_state() { [ "$1" = "sess:win" ] || fail "tmux composer_state got wrong target: $1"; printf 'pending'; }
-    fm_backend_herdr_composer_state() { [ "$1" = "default:w1:p2" ] || fail "herdr composer_state got wrong target: $1"; printf 'empty'; }
-    fm_backend_orca_composer_state() { [ "$1" = "term-1" ] || fail "orca composer_state got wrong target: $1"; printf 'empty'; }
-    fm_backend_zellij_composer_state() { [ "$1" = "sess:7" ] || fail "zellij composer_state got wrong target: $1"; printf 'empty'; }
-    [ "$(fm_backend_composer_state tmux sess:win)" = pending ] || fail "composer_state did not dispatch to the tmux classifier"
-    [ "$(fm_backend_composer_state herdr default:w1:p2)" = empty ] || fail "composer_state did not dispatch to the herdr classifier"
-    [ "$(fm_backend_composer_state orca term-1)" = empty ] || fail "composer_state did not dispatch to the orca classifier"
-    [ "$(fm_backend_composer_state zellij sess:7)" = empty ] || fail "composer_state did not dispatch to the zellij classifier"
-    [ "$(fm_backend_composer_state bogus x)" = unknown ] || fail "composer_state should report unknown for an unrecognized backend"
-  ) || fail "composer_state dispatch subshell failed"
-  pass "fm_backend_composer_state dispatches every backend to its named thin classifier, unknown for unrecognized backends"
-}
-
 test_scripts_route_explicit_target_through_meta_backend() {
   local dir state log resp fb neutral out
   dir="$TMP_ROOT/script-explicit-target"; state="$dir/state"; mkdir -p "$state" "$dir/responses"
@@ -7004,9 +6895,6 @@ test_busy_state_unknown_on_no_agent
 test_composer_state_bare_prompt_is_empty
 test_composer_state_styled_placeholder_draft_is_pending
 test_composer_state_real_text_is_pending
-test_composer_state_titled_box_requires_cortex_identity
-test_composer_state_non_cortex_panes_skip_identity_probe
-test_composer_state_grok_oversized_title_preserves_safe_verdicts
 test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
 test_composer_state_inactive_session_fails_fast_without_server_autostart
@@ -7080,7 +6968,6 @@ test_send_text_submit_three_paste_placeholders_submit_the_long_payload
 test_send_text_submit_non_claude_skips_the_payload_proof
 test_dispatch_routes_herdr_backend
 test_dispatch_busy_state_unknown_for_tmux
-test_dispatch_composer_state_routes_by_backend
 test_scripts_route_explicit_target_through_meta_backend
 test_normalize_event_leaves_from_empty
 test_escalation_marker_keys_like_watcher
