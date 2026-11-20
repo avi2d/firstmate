@@ -2969,6 +2969,17 @@ fm_backend_herdr_projection_cleanup_exact() {  # <session> <task-pane> <seeded-p
   return "$task_closed"
 }
 
+fm_backend_herdr_workspace_label_by_id() {  # <session> <workspace-id>
+  local list
+  list=$(fm_backend_herdr_cli "$1" workspace list 2>/dev/null) || return 1
+  printf '%s' "$list" | jq -er --arg id "$2" '
+    [.result.workspaces[]? | select(.workspace_id == $id)]
+    | select(length == 1)
+    | .[0].label
+    | select(type == "string" and length > 0)
+  ' 2>/dev/null
+}
+
 # fm_backend_herdr_projection_live_binding_matches: verify one exact projected
 # workspace, its single task tab/pane, its unique token label, and its current
 # position inside the exact parent workspace's contiguous child block. An empty
@@ -3045,9 +3056,9 @@ fm_backend_herdr_projection_reclaim_rollback() {  # <session> <new-pane>
 # Return 0 means exact reclaim, 2 means non-mutating or exactly rolled-back
 # refusal with flat fallback permitted, and 1 means a live/unknown or
 # post-mutation uncertainty that must refuse the launch.
-fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <home> <meta-workspace> <meta-tab> <meta-pane> <parent-label> <task-label> <cwd>
+fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <home> <meta-workspace> <meta-tab> <meta-pane> <task-label> <cwd>
   local session=$1 journal=$2 id=$3 home=$4 meta_workspace=$5 meta_tab=$6 meta_pane=$7
-  local parent_label=$8 task_label=$9 cwd=${10} canonical_home state focus_before active_tab out new_tab new_pane info close_status
+  local task_label=$8 cwd=$9 parent_label canonical_home state focus_before active_tab out new_tab new_pane info close_status
   FM_BACKEND_HERDR_PROJECTION_TAB_ID=""
   FM_BACKEND_HERDR_PROJECTION_PANE_ID=""
   fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 1
@@ -3055,6 +3066,7 @@ fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <h
     echo "warning: herdr presentation journal for $id has no exact restart binding; spawning flat" >&2
     return 2
   fi
+  parent_label=$FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL
   canonical_home=$(fm_backend_herdr_projection_home_identity "$home") || {
     echo "warning: herdr presentation home for $id could not be resolved exactly; spawning flat" >&2
     return 2
@@ -3064,9 +3076,8 @@ fm_backend_herdr_projection_reclaim_task() {  # <session> <journal> <task-id> <h
      || [ "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID" != "$meta_workspace" ] \
      || [ "$FM_BACKEND_HERDR_JOURNAL_TAB_ID" != "$meta_tab" ] \
      || [ "$FM_BACKEND_HERDR_JOURNAL_PANE_ID" != "$meta_pane" ] \
-     || [ "$FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL" != "$parent_label" ] \
      || [ "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" != "$task_label" ]; then
-    echo "warning: herdr presentation binding for $id does not match its exact home, endpoint, or parent; spawning flat" >&2
+    echo "warning: herdr presentation binding for $id does not match its exact home or endpoint; spawning flat" >&2
     return 2
   fi
   if ! fm_backend_herdr_projection_live_binding_matches \

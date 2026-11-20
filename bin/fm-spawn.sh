@@ -933,6 +933,8 @@ if [ -e "$STATE" ] || [ -L "$STATE" ]; then
 fi
 # shellcheck source=bin/fm-remote-registry-lib.sh
 . "$SCRIPT_DIR/fm-remote-registry-lib.sh"
+# shellcheck source=bin/fm-ff-lib.sh
+. "$SCRIPT_DIR/fm-ff-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
@@ -2079,7 +2081,7 @@ spawn_herdr_rebind_journal_retire() {  # <session>
 # the ordinary flat layout must be used instead. A hard failure exits.
 # Expects HERDR_LABEL_HOME, HERDR_PARENT_LABEL and HERDR_PRESENTATION_JOURNAL.
 spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
-  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace projection_id projection_label home_id order_key
+  local session=$1 cwd=$2 launcher_pane=$3 project_path=${4:-} launcher_status parent_workspace parent_label projection_id projection_label home_id order_key
   if ! fm_backend_herdr_server_ensure "$session"; then
     echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
     return 0
@@ -2122,6 +2124,15 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
     exit 1
     ;;
   esac
+  # The launcher's workspace keeps whatever label its owner gave it, so the
+  # home label would refuse the binding under any other name.
+  parent_label=$HERDR_PARENT_LABEL
+  if [ -n "$parent_workspace" ] &&
+    ! parent_label=$(fm_backend_herdr_workspace_label_by_id "$session" "$parent_workspace"); then
+    echo "warning: herdr presentation parent workspace $parent_workspace has no unique readable label; using the ordinary flat layout without projection" >&2
+    spawn_herdr_presentation_order_lock_release
+    return 0
+  fi
   projection_id=$(fm_backend_herdr_projection_journal_create "$STATE" "$ID") || exit 1
   projection_label=$(fm_backend_herdr_projection_workspace_label "$ID" "$projection_id")
   if ! FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_create_task \
@@ -2150,17 +2161,17 @@ spawn_herdr_project_task() {  # <session> <cwd> <launcher-pane> [project-path]
   [ -z "$project_path" ] || [ ! -e "$CONFIG/herdr-project-groups" ] || order_key=$(FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_CONFIG_OVERRIDE=$CONFIG \
     "$SCRIPT_DIR/fm-herdr-groups.sh" order-key "$ID" "$project_path" 2>/dev/null) || order_key=
   [ -z "$parent_workspace" ] || fm_backend_herdr_projection_order_best_effort \
-    "$HERDR_SES" "$HERDR_WORKSPACE_ID" "$HERDR_PARENT_LABEL" "$parent_workspace" "$order_key"
+    "$HERDR_SES" "$HERDR_WORKSPACE_ID" "$parent_label" "$parent_workspace" "$order_key"
   home_id=$(fm_backend_herdr_projection_home_identity "$HERDR_LABEL_HOME" 2>/dev/null || true)
   if [ -n "$home_id" ] &&
     fm_backend_herdr_projection_live_binding_matches \
       "$HERDR_SES" "$projection_id" "$HERDR_WORKSPACE_ID" \
       "$HERDR_TAB_ID" "$HERDR_PANE_ID" "$parent_workspace" \
-      "$HERDR_PARENT_LABEL" "$projection_label" "$W" &&
+      "$parent_label" "$projection_label" "$W" &&
     fm_backend_herdr_projection_journal_bind \
       "$HERDR_PRESENTATION_JOURNAL" "$ID" "$home_id" "$HERDR_SES" \
       "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID" \
-      "$parent_workspace" "$HERDR_PARENT_LABEL" "$projection_label" "$W"; then
+      "$parent_workspace" "$parent_label" "$projection_label" "$W"; then
     return 0
   fi
   echo "warning: herdr presentation could not publish an exact restart binding; this task will use flat fallback after a restart" >&2
@@ -4962,7 +4973,7 @@ else
           FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_projection_reclaim_task \
             "$HERDR_SES" "$HERDR_PRESENTATION_JOURNAL" "$ID" "$HERDR_LABEL_HOME" \
             "$HERDR_RECOVERY_WORKSPACE_ID" "$HERDR_RECOVERY_TAB_ID" "$HERDR_RECOVERY_PANE_ID" \
-            "$HERDR_PARENT_LABEL" "$W" "$PROJ_ABS"
+            "$W" "$PROJ_ABS"
           HERDR_RECLAIM_STATUS=$?
           set -e
           case "$HERDR_RECLAIM_STATUS" in

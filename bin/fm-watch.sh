@@ -271,9 +271,6 @@ WATCH_HOME_EXISTED=0
 . "$SCRIPT_DIR/fm-check-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
-# Parent-owned secondmate missed-report guards: durable pending-reply
-# expectations created by fm-send on marked secondmate requests. The tick is
-# cheap when no records exist and never scrapes secondmate conversation.
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-pane-hash-lib.sh
@@ -289,12 +286,10 @@ WATCH_HOME_EXISTED=0
 # can be exercised without running the watcher.
 # shellcheck source=bin/fm-remote-worker-poll-lib.sh
 . "$SCRIPT_DIR/fm-remote-worker-poll-lib.sh"
-# Persistent-secondmate endpoint liveness: the shared probe/relaunch library is
-# the same one bin/fm-bootstrap.sh's session-start sweep drives, so ordinary
-# supervision recovers a positively dead or missing mate through the identical
-# guarded path. The watcher contributes only the cadence, the relaunch bound,
-# and wake emission (secondmate_liveness_tick below).
-# shellcheck source=/dev/null # Analyzed separately as a canonical lint root.
+# The stale check names a blocking dialog in this shell, while every pane read
+# loads its backend adapter in a child process.
+# shellcheck source=bin/fm-composer-lib.sh
+. "$SCRIPT_DIR/fm-composer-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
