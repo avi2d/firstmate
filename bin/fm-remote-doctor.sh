@@ -19,7 +19,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(CDPATH='' cd "$SCRIPT_DIR/.." && pwd -P)}"
 # shape (five tools plus the at-least-one harness) for explicit and resolved
 # selections alike.
 REQUIRED_TOOLS=()
-HARNESS_TOOLS=(claude codex opencode pi pi-signed grok kimi omp)
+HARNESS_TOOLS=(pi pi-signed)
 OPTIONAL_TOOLS=(tmux no-mistakes gh)
 LAUNCH_AGENT_LABEL=dev.firstmate.herdr.fm-remote
 # The dedicated remote-secondmate session. The user's interactive Herdr work

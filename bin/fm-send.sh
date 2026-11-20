@@ -12,9 +12,7 @@
 # secondmate request delivers only marker and correlation bytes and leaves the
 # parent waiting on a reply to nothing.
 # Special keys instead of text: fm-send.sh <target> --key Enter
-# Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
-# Orca supports Enter and C-c only; T3 Code maps Escape and C-c to a native
-# turn interrupt and treats Enter as a no-op.
+# Herdr supports Escape, Enter, and C-c.
 #
 # Two data planes:
 #
@@ -23,8 +21,7 @@
 # the task's steering inbox (newlines are legal) - state/<id>.inbox/ for a
 # local task, or the remote home's host-local inbox reached through fm-on.sh
 # for a remote secondmate - and the endpoint receives only one short constant
-# self-describing doorbell, best-effort. Pane backends type its line plus Enter;
-# T3 Code starts one native turn. The durable record IS
+# self-describing doorbell, best-effort. The durable record is
 # the delivery, so the record's fate alone governs the exit: 0 = the steer is
 # durably sent (recorded); nonzero = nothing was confirmed delivered and a
 # resend is appropriate (unresolvable target, an endpoint that cannot be
@@ -57,27 +54,9 @@
 # the watcher re-rings an ordinary record later; no composer verdict is
 # delivery proof on this plane, and a failed ring never fails the send.
 #
-# TYPED - the LOCAL text submitted directly instead of through the inbox. On a
-# pane backend, a harness-native invocation (a leading "/", or a leading "$" to
-# a codex target) must reach the harness's own parser. An explicit backend
-# target names an endpoint, not a task, so it stays on this plane even when
-# local metadata happens to match it (the same boundary that keeps it unmarked
-# and outside --resolve-key). Pane backends type the literal text ONCE, then
-# retry Enter without retyping; T3 Code starts one native turn. Typed-plane exit
-# contract: 0 = submit confirmed; 3 = the text reached the live endpoint and
-# submission was attempted, but the read-back stayed unconfirmed, or an API
-# backend's outcome is unproven: a lost reply or an error that can follow a
-# commit (verify the endpoint
-# before any resend, and never submit blindly; docs/t3code-backend.md owns
-# T3 Code's request-id retention and retry policy; a marked request's
-# pending-reply expectation stays armed because this outcome is not a proven
-# failure); any other nonzero = the send failed and nothing may be assumed
-# delivered. Submission dispatches through the target's recorded backend; the
-# tmux adapter shares its composer/submit core with the away-mode daemon via
-# bin/fm-tmux-lib.sh. Tune with FM_SEND_RETRIES (default 3; agy typed targets
-# default to 20 for agy's late busy render) / FM_SEND_SLEEP (0.4). Slash
-# commands, and codex `$...` skill invocations resolved through harness meta,
-# get a longer pre-Enter settle so completion popups do not swallow Enter.
+# TYPED - Local slash commands and text sent to an explicit endpoint.
+# Text is typed once before Enter. Exit 3 means submission was not confirmed;
+# verify the live endpoint before resending.
 # A remote secondmate target has no typed text plane at all:
 # every remote text steer rides the inbox (a marked secondmate request already
 # reaches the harness as marker-prefixed chat rather than a parser command, so
@@ -269,8 +248,6 @@ fi
 
 # Pending replies load the backend, marker, classifier, and timeout helpers.
 # Reuse those imports before loading the control and inbox helpers.
-# shellcheck source=bin/fm-control-lib.sh
-. "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -284,57 +261,6 @@ fm_send_id_from_meta() { # <meta-file>
   local base
   base=${1##*/}
   printf '%s' "${base%.meta}"
-}
-
-# fm_send_clear_after_interrupt: muse RESTORES the interrupted prompt back into
-# the composer when Escape cancels a turn, as real bright text (verified: fg
-# 38;2;204;211;219, luminance ~210, muse 0.1.0-R708.1), not de-emphasised ghost
-# text. Classifying that as pending input is correct - the text really is
-# unsubmitted - but leaving it there means the NEXT steer types onto the end of
-# it and submits both as one garbled message. Ctrl-U clears the composer
-# (verified), so the interrupt is not complete until it has been sent. A failed
-# clear is loud rather than silent, because the alternative is a corrupted steer.
-# WHICH adapters need that clear, and which key clears them, comes from the one
-# control-plane capability table (bin/fm-control-lib.sh) rather than a second
-# copy here - the same table bin/fm-control.sh's interrupt verb reads.
-fm_send_clear_after_interrupt() { # <key>
-  local key=$1 family clear
-  [ "$key" = Escape ] || return 0
-  family=$(fm_control_harness_family "$TARGET_HARNESS") || return 0
-  clear=$(fm_control_interrupt_clear_key "$family") || return 0
-  [ -n "$clear" ] || return 0
-  [ "$TARGET_BACKEND" != remote ] || return 0
-  if ! fm_backend_send_key "$TARGET_BACKEND" "$T" "$clear" "$EXPECTED_LABEL"; then
-    echo "error: Escape reached $T, but the $TARGET_HARNESS composer could not be cleared; it still holds the restored prompt. Clear it before sending the next message." >&2
-    return 1
-  fi
-}
-
-fm_send_normalize_key() { # <key>
-  case "$1" in
-  Escape | escape | Esc | esc) printf '%s' Escape ;;
-  *) printf '%s' "$1" ;;
-  esac
-}
-
-fm_send_record_interrupt() { # <key>
-  local key=$1 id gen
-  [ "$key" = Escape ] || return 0
-  case "$TARGET_HARNESS" in claude*) : ;; *) return 0 ;; esac
-  [ -n "$TARGET_META" ] || return 0
-  id=$(fm_send_id_from_meta "$TARGET_META")
-  [ -f "$STATE/$id.busy-gen" ] || return 0
-  gen=$(fm_meta_get "$TARGET_META" busy_gen)
-  if [ -n "$gen" ]; then
-    "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE" "$id" idle \
-      --gen "$gen" --source fm-interrupt --event interrupt
-  else
-    "$FM_ROOT/bin/fm-busy-event.sh" apply "$STATE" "$id" idle \
-      --current-gen --source fm-interrupt --event interrupt
-  fi || {
-    echo "error: key '$key' reached $T, but the Claude interrupt state could not be recorded for $id" >&2
-    return 1
-  }
 }
 
 fm_send_meta_for_key_value() { # <state-dir> <key> <value>
@@ -355,38 +281,11 @@ fm_send_count_colons() { # <string>
   printf '%s' $((${#s} - ${#no_colons}))
 }
 
-# When an explicit outside-home target has no recorded harness, detect kiro
-# from the live pane's foreground process group so the kiro-only composer
-# rules apply (fm_composer_kiro_scope). The live e2e guard owns why this
-# reads the foreground group through fm-harness.sh ancestry rather than
-# #{pane_current_command}: a toolbox wrapper can rename the tmux field
-# while comm still reads kiro-cli. Any other (or unreadable) process leaves
-# TARGET_HARNESS empty, which is the pre-kiro default and keeps the
-# non-kiro typed path - including the unknown-harness `$` settle - unchanged.
-fm_send_detect_kiro_from_live_target() {
-  local pid verdict
-  [ -n "$TARGET_HARNESS" ] && return 0
-  [ "$TARGET_BACKEND" = tmux ] || return 0
-  [ -n "$RESOLVED_TARGET" ] || return 0
-  fm_backend_source tmux || return 0
-  while IFS= read -r pid; do
-    [ -n "$pid" ] || continue
-    case "$pid" in *[!0-9]*) continue ;; esac
-    verdict=$("$SCRIPT_DIR/fm-harness.sh" ancestry "$pid" 2>/dev/null || true)
-    [ "$verdict" = "comm kiro" ] || continue
-    TARGET_HARNESS=kiro
-    return 0
-  done <<EOF
-$(fm_backend_tmux_foreground_pids "$RESOLVED_TARGET" 2>/dev/null || true)
-EOF
-}
-
 fm_send_resolve_target() { # <raw-target>
-  local raw=$1 meta pane_meta target backend assumed colons id session hint
+  local raw=$1 meta pane_meta target backend colons id session hint
 
   RESOLVED_TARGET=""
   TARGET_BACKEND=""
-  TARGET_HARNESS=""
   EXPECTED_LABEL=""
   TARGET_META=""
   TARGET_SELECTOR=""
@@ -404,7 +303,6 @@ fm_send_resolve_target() { # <raw-target>
       RESOLVED_TARGET="remote:$id"
       TARGET_BACKEND=remote
       TARGET_META=$meta
-      TARGET_HARNESS=$(fm_meta_get "$meta" harness)
       EXPECTED_LABEL="fm-$id"
       TARGET_SELECTOR=1
       TARGET_REMOTE_ID=$id
@@ -431,7 +329,6 @@ fm_send_resolve_target() { # <raw-target>
     RESOLVED_TARGET=$target
     TARGET_BACKEND=$backend
     TARGET_META=$meta
-    TARGET_HARNESS=$(fm_meta_get "$meta" harness)
     EXPECTED_LABEL=$(fm_backend_expected_label_of_selector "$raw" "$STATE")
     TARGET_SELECTOR=1
     return 0
@@ -469,7 +366,6 @@ fm_send_resolve_target() { # <raw-target>
     RESOLVED_TARGET=$target
     TARGET_BACKEND=$(fm_backend_of_meta "$meta")
     TARGET_META=$meta
-    TARGET_HARNESS=$(fm_meta_get "$meta" harness)
     RESOLUTION_TRIED="explicit target '$raw' matched $meta; backend=$TARGET_BACKEND"
     return 0
   fi
@@ -477,18 +373,13 @@ fm_send_resolve_target() { # <raw-target>
   case "$raw" in
   *:*)
     colons=$(fm_send_count_colons "$raw")
-    if [ "$colons" -ge 2 ]; then
-      assumed=herdr
-    else
-      assumed=tmux
-    fi
-    if ! fm_backend_target_exists "$assumed" "$raw"; then
-      echo "error: explicit target '$raw' is not a live $assumed endpoint (tried meta=$STATE/$raw.meta; metadata window/terminal lookup; backend=$assumed). Use fm-<id> for a recorded task/lane, or pass a target whose backend endpoint can be verified." >&2
+    if [ "$colons" -lt 2 ] || ! fm_backend_target_exists herdr "$raw"; then
+      echo "error: explicit target '$raw' is not a live Herdr endpoint (tried meta=$STATE/$raw.meta; metadata window lookup; backend=herdr). Use fm-<id> for a recorded task, or pass a target whose endpoint can be verified." >&2
       return 1
     fi
     RESOLVED_TARGET=$raw
-    TARGET_BACKEND=$assumed
-    RESOLUTION_TRIED="meta=$STATE/$raw.meta; metadata window/terminal lookup; backend=$assumed; endpoint=verified"
+    TARGET_BACKEND=herdr
+    RESOLUTION_TRIED="meta=$STATE/$raw.meta; metadata window lookup; backend=herdr; endpoint=verified"
     return 0
     ;;
   esac
@@ -500,12 +391,6 @@ fm_send_resolve_target() { # <raw-target>
 RAW_TARGET=$1
 fm_send_resolve_target "$RAW_TARGET" || exit 1
 T=$RESOLVED_TARGET
-fm_send_detect_kiro_from_live_target
-# The recorded harness, or kiro detected from a meta-less explicit target's
-# live pane, scopes the kiro-only composer rules for every composer read this
-# send makes (fm_composer_kiro_scope in bin/fm-composer-lib.sh).
-# shellcheck disable=SC2034
-FM_COMPOSER_HARNESS=$TARGET_HARNESS
 shift
 
 # Supervision lease guard: a steer is overlap territory between the two Pi
@@ -839,20 +724,6 @@ fm_send_feed_resolved_holds() { # <answer-text>
   fi
 }
 
-# Resolve the target's harness from its meta (recorded by fm-spawn), used to
-# scope the codex `$<skill>` popup-settle below and the kiro composer rules
-# above. A task selector carries meta. An explicit backend-target escape hatch
-# has none, so its harness stays unknown and is treated as non-codex (the safe
-# default that keeps the `$` fast path) unless the live pane's foreground
-# process group is kiro (fm_send_detect_kiro_from_live_target).
-# The target's BACKEND comes from selector meta, from matching an explicit target
-# back to recorded meta, or from strict explicit-target shape validation.
-# Do not add a separate passive liveness preflight here. Active send paths own
-# backend readiness: herdr, for example, must route through its session-aware
-# target_ready path before sending, while zellij verifies pane labels in its
-# send implementation. A failed backend send is still surfaced below as a hard
-# error with the attempted resolution attached.
-
 if [ "${1:-}" = "--key" ]; then
   case "$*" in
   *--resolve-key*)
@@ -861,7 +732,6 @@ if [ "${1:-}" = "--key" ]; then
     ;;
   esac
   key=$2
-  semantic_key=$(fm_send_normalize_key "$key")
   if [ "$TARGET_BACKEND" = remote ]; then
     FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
     case "$FM_SEND_REMOTE_BUDGET" in
@@ -879,8 +749,6 @@ if [ "${1:-}" = "--key" ]; then
     echo "error: key '$key' not sent to $T ($TARGET_BACKEND send failed; tried $RESOLUTION_TRIED)" >&2
     exit 1
   fi
-  fm_send_clear_after_interrupt "$semantic_key" || exit 1
-  fm_send_record_interrupt "$semantic_key" || exit 1
 else
   MESSAGE=$*
   if [ -z "${MESSAGE//[[:space:]]/}" ]; then
@@ -903,8 +771,7 @@ else
       INBOX_PLANE=1
     else
       case "$RESOLVE_ANSWER_TEXT" in
-      /*) [ "$TARGET_HARNESS" != cloud-claude ] || INBOX_PLANE=1 ;;
-      \$*) [ "$TARGET_HARNESS" = codex ] || INBOX_PLANE=1 ;;
+      /*) : ;;
       *) INBOX_PLANE=1 ;;
       esac
     fi
@@ -1045,36 +912,11 @@ else
     esac
     exit 0
   fi
-  # Slash commands open a completion popup in some TUIs (verified on codex);
-  # submitting too fast selects nothing, so give the popup time to settle before
-  # the (retried) Enter. Codex opens the same kind of popup for a `$<skill>`
-  # invocation, so a `$...` message to a codex target gets the same settle. That
-  # `$` case is scoped to codex on purpose: unlike `/`, a leading `$` commonly
-  # starts ordinary text ("$5/month", "$HOME"), so a universal `$` rule would
-  # needlessly slow plain text to claude/opencode/pi. The target backend's
-  # verified submit retry still backs the settle up either way.
-  case "$*" in
-  /*) settle=1.2 ;;
-  \$*)
-    if [ "$TARGET_HARNESS" = codex ]; then settle=1.2; else settle=0.3; fi
-    ;;
-  *) settle=0.3 ;;
+  case "$MESSAGE" in
+    /*) settle=1.2 ;;
+    *) settle=0.3 ;;
   esac
-  # Per-harness submit-confirm budget. agy's bare `>` composer verdict is
-  # `unknown`, so a landed submit is acknowledged only by the idle-to-busy
-  # transition poll, and agy renders its verified busy footer well after the
-  # shared budget expires: ~1.5s after Enter for a short steer, ~4-5s for a
-  # realistic longer brief (live-measured, agy 1.2.1), against the shared
-  # default's 3 x 0.4s. With the shared default a typed steer to an agy
-  # endpoint was reported exit-1 non-delivery for a message that landed and
-  # ran, inviting a duplicate resend. agy typed targets get a longer default
-  # budget (~8s at the default cadence, twice the worst measured render); an
-  # explicit FM_SEND_RETRIES still wins, and every other harness keeps the
-  # shared 3-retry default untouched.
-  case "$TARGET_HARNESS" in
-    agy) retries=${FM_SEND_RETRIES:-20} ;;
-    *) retries=${FM_SEND_RETRIES:-3} ;;
-  esac
+  retries=${FM_SEND_RETRIES:-3}
   sleep_s=${FM_SEND_SLEEP:-0.4}
   # Type once, submit, verify. Only exact empty confirms delivery; every other
   # verdict preserves the loud refusal boundary. Only LOCAL targets reach this

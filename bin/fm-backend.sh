@@ -108,12 +108,10 @@ fm_meta_get() {  # <meta-file> <key>
   printf '%s' "$value"
 }
 
-# fm_backend_of_meta: the backend recorded in <meta-file>, defaulting to
-# `tmux` when the field is absent - the P1 compatibility contract.
 fm_backend_of_meta() {  # <meta-file>
   local v
   v=$(fm_meta_get "$1" backend)
-  printf '%s' "${v:-tmux}"
+  printf '%s' "${v:-unknown}"
 }
 
 fm_backend_target_of_meta() {
@@ -230,7 +228,6 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   fi
   backend_count=$(grep -c '^backend=' "$meta" 2>/dev/null || true)
   case "$backend_count" in
-    0) backend=tmux ;;
     1) backend=$(fm_backend_meta_exact_value "$meta" backend) || backend= ;;
     *) backend= ;;
   esac
@@ -485,15 +482,6 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
 # not do its job and the endpoint may still be live: the caller owns that
 # refusal and must not delete the durable records that are the only thing
 # naming the endpoint (bin/fm-teardown.sh's retain-and-stop path).
-# How much each adapter can prove differs, and no arm ever guesses: tmux
-# resolves a failed close against the window's exact recorded identity, Rex
-# proves the closed block gone through a structured not-found, tern
-# re-reads its inventory and refuses while the block is still present or the
-# inventory cannot be read, Orca reports a close its missing CLI never
-# attempted, and the remaining arms still report 0 for a close command that
-# failed after being accepted.
-# docs/verification/runtime-backends.md "Endpoint close" is the per-backend
-# record.
 fm_backend_kill() {  # <backend> <target>
   local backend=$1
   shift

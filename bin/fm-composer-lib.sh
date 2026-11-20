@@ -1,192 +1,6 @@
 #!/usr/bin/env bash
-# bin/fm-composer-lib.sh - the ONE fleet-wide owner of composer classification:
-# every shape a verified harness draws, every glyph, every container proof, and
-# the empty|pending|pending-unproven|unknown verdict, shared by every
-# session-provider adapter (tmux via bin/fm-tmux-lib.sh, and
-# bin/backends/{herdr,orca,cmux,zellij,tern}.sh) and by fm-spawn.sh's kimi
-# launch-readiness check.
-#
-# WHY THIS EXISTS (tasks fm-composer-shellglyph-safety and
-# fm-composer-thin-adapter-refactor-r1): the adapters each carried their own
-# copy of composer shape knowledge, and every copy drifted. The audited result
-# (data/fm-composer-consolidation-audit-s1) was a 5-adapter x 6-harness matrix
-# in which no adapter was right about more than five harnesses, no two adapters
-# were wrong in the same places, and one harness was unreadable everywhere.
-# The consolidation rule that prevents a recurrence: an adapter CAPTURES a
-# screen and DESCRIBES its capabilities; it never classifies. A new harness
-# shape is taught to fm_composer_classify_screen below, once, and every backend
-# that can capture a screen learns it in the same commit.
-#
-# THE CAPABILITY MODEL: adapters differ in what their capture primitive can
-# see, and those differences enter here as DATA (the <caps> argument), never as
-# adapter code. Capability differences change how CONFIDENTLY a shape can be
-# judged; they never change what the shapes ARE:
-#   styled=1    the capture preserves ANSI styling, so ghost/placeholder text
-#               is detectable and can be stripped (tmux -e, herdr --format
-#               ansi, zellij dump-screen --ansi). With styled=0 (cmux, orca, tern)
-#               ghost text is unreadable, so a bare glyph row or left-bar row
-#               carrying trailing non-idle text degrades to `unknown` rather
-#               than `pending`: the text may be the harness's own idle
-#               suggestion, and a false `pending` blocks every safe caller.
-#   cursor=1    a cursor row is supplied (tmux #{cursor_y} only). The cursor
-#               anchors shape selection: the shape containing the cursor is the
-#               composer. Without it, the bottom-most shape wins.
-#   identity=1  a native agent identity/state probe exists (herdr `agent get`;
-#               the tmux pi foreground-process probe). Identity is what makes
-#               Pi's blank separated composer provable; with identity=0 that
-#               shape stays `unknown`.
-#   cortex=1    the caller proved the pane's foreground process is Cortex Code
-#               (tmux exact process name, herdr native agent probe). Opt-in:
-#               only then is a TITLED rounded top rule tolerated as a
-#               composer; without it a titled box stays ambiguous.
-#   cortex=ask  the caller can probe identity lazily (it declares identity=1)
-#               and has no foreground-process proof of its own: the verdict
-#               is `need-identity` when the bottom-most composer shape is a
-#               titled rounded box with an agent prompt glyph, the only
-#               shape Cortex's identity could change. A probe answering
-#               `cortex` then proves it, as cortex=1 does. Other callers
-#               never see this sentinel for a titled box.
-#   rows=<n>    the capture's bounded row count (informational).
-#
-# THE STRICT BLANK-ROW RULE (captain decision blank-row-injection-posture,
-# 2026-08-09): a blank or otherwise unidentified input row with no positive
-# container proof is `unknown` and callers defer. This replaced tmux's
-# permissive "blank cursor row = empty = safe to inject" rule fleet-wide: a
-# blank row under the cursor can be a modal dialog, a dead shell between
-# transcript rules, or a mid-redraw pane, and the away-mode injector types
-# escalations into whatever it calls empty. Positive container proof means one
-# of the shapes in the catalogue below.
-#
-# THE SHAPE CATALOGUE (all verified against real harnesses; byte-level
-# captures in data/fm-composer-consolidation-audit-s1/report.md and
-# docs/verification/runtime-backends.md):
-#   bordered   - a complete boxed composer: a top border, side-bordered content
-#                rows of the same family, and a bottom border (grok, kimi,
-#                older claude). The bottom border may carry a TITLE (grok
-#                writes its model name there). A title embedded in the family's
-#                rule is tolerated at the aligned width, including Grok 1.0.44's
-#                rounded typed model/effort title with ` · always-approve`; Grok 1.0.5's
-#                typed title also permits its proven three-column overhang.
-#   bare       - an agent prompt glyph row with no border at all (claude `❯`,
-#                codex `›`, muse `⟩`, cursor `→`). The agent glyph is itself the container
-#                proof; a bare SHELL glyph (`>` `$` `%` `#`) never is.
-#                A bare composer's WRAP region (typed input continuing on the
-#                rows beneath the glyph row) is bounded by blank rows, by
-#                structural edges, and by the FURNITURE rows a harness draws
-#                directly below its composer - omp's status row and
-#                braille-only animation rows (declared once below, next to
-#                the idle placeholders) - none of which is ever typed input.
-#   left-bar   - opencode: rows prefixed by a heavy left bar `┃` with no
-#                closing border, holding the idle hint, blank rows, and a
-#                mode/model footer line.
-#   separated  - pi: content rows between two solid horizontal `─` rules, no
-#                glyph and no side border. Provable only with a live agent
-#                identity reporting an idle/done pi (herdr `agent
-#                get`; the tmux foreground-process probe), because a blank
-#                region between two transcript rules is otherwise exactly the
-#                strict rule's unidentifiable blank row.
-#                A separated pair that closes over a bare AGENT-GLYPH row is a
-#                different, self-proving thing: real claude 2.x draws exactly
-#                that (`─` rule, `❯`+NBSP, `─` rule), so the glyph inside the
-#                pair carries the shape and no identity is needed.
-#
-# THE COMPOSER FOOTER ZONE (task firstmate-doorbell-vals-pending-p1): a
-# harness draws its own furniture BELOW the composer - a user statusLine, a
-# permission-mode hint - and the cursorless "bottom-most shape wins" rule
-# looks exactly there. `→` (U+2192) is Cursor's prompt glyph but ordinary text
-# everywhere else, so a statusLine opening with `→` was selected as a bare
-# composer, swallowed the hint row under it as wrapped input, and answered
-# `pending` on a visibly empty pane; `fm_task_inbox_ring` defers on exactly
-# that verdict, so every steer to a claude worker on herdr was skipped
-# (measured live 2026-09-20, claude 2.1.236 on herdr 0.8.0, three of five
-# panes). The rule is owned once, by the cursorless selection boundary: an
-# ENVELOPE that CLOSED over an agent prompt glyph is a proven composer
-# container, so a BARE candidate among the contiguous non-blank rows below its
-# closing row is that composer's own footer furniture and not a composer. The
-# proven envelope is selected instead; when its proving glyph row is itself
-# borderless, that row is the bare candidate it stood for, and the envelope's
-# staleness probe resumes past the zone.
-#
-# THE ASYMMETRY that bounds it: `empty` is the one verdict that authorizes
-# fm-send to type into a pane, so this rule may move a verdict only toward
-# REFUSING, never toward `empty`. A false refusal costs one undelivered
-# message; a false `empty` overwrites a visible draft or types into a working
-# agent. So the zone counts only when EVERY row in it is demonstrably furniture
-# (_fm_composer_row_is_composer_furniture): one unclaimed activity row
-# (`Working on request...`) makes the whole run activity and the envelope above
-# it stale, and a row leading with the SAME glyph the envelope was proven by
-# (`❯ my typed draft`) is a live composer that keeps winning. The one exception
-# is the selected row of Claude 2.1.291's slash-command popup, which carries
-# that glyph too (_fm_composer_bare_is_popup_selection). Where a shape
-# cannot demonstrate which it is, the refusal is the answer. The zone is
-# bounded further by a blank row, and an envelope that closed over no glyph row
-# (codex's `permissions: YOLO mode` startup banner) proves nothing and demotes
-# nothing.
-#
-# COVERAGE: this is exercised for the bordered box and the pi separator pair,
-# the two shapes claude 2.x renders. The opencode left bar is wired in for the
-# same treatment but is UNEXERCISED - every left-bar row this repo records
-# leads with plain text, and opencode's own prompt character is `>`, a SHELL
-# glyph deliberately outside the agent set, so no opencode shape recorded here
-# can prove a left-bar envelope and open a zone under it.
-#
-# THE SAFETY RULE for glyphs: a bare shell prompt glyph (`>` `$` `%` `#`) -
-# what a pane shows once its agent has exited to a plain login shell - is a
-# genuine empty agent composer ONLY inside a bordered container. On a bare row
-# it is a dead-shell prompt and classifies `unknown` (never a safe injection
-# target). A `$` followed immediately by a digit is Pi's cost footer, not this
-# prompt (`FM_COMPOSER_PI_STATUS_RE_DEFAULT`).
-# The AGENT glyphs `❯` (claude), `›` (codex), `⟩` (U+27E9, muse),
-# `→` (U+2192, cursor), and `❭` (U+276D, devin) are a genuine empty agent
-# composer either way.
-# Both glyph sets are declared
-# exactly once below; every decision reaches them through the declarations.
-#
-# GHOST/PLACEHOLDER TEXT (task afk-herdr-false-pending): a harness fills an
-# otherwise-empty composer with de-emphasized ghost text - claude's rotating
-# prompt suggestion, codex's idle suggestion, grok's placeholder, or cursor's
-# idle placeholder - which a
-# plain capture cannot tell apart from text a human typed. codex-cli 0.154.0
-# draws its `Ask Codex to do anything` placeholder as SGR-2 dim text after the
-# bare `›` glyph, which fm_composer_strip_ghost removes.
-# fm_composer_strip_ghost is the ONE ANSI-aware extractor of "real typed
-# content": it drops every de-emphasized run - dim/faint (SGR 2) AND a
-# dark/muted TRUECOLOR foreground - and keeps only normal-intensity,
-# normally-coloured text.
-# Ghost stripping is a STYLE test, so it cannot see furniture a harness draws
-# at normal intensity: codex-cli 0.154.0 animates a braille "starfield" around
-# its idle composer in greys on both sides of the ghost luminance ceiling, so
-# the brighter cells survive the strip and used to read as typed input. Those
-# cells are recognised by SHAPE instead (fm_composer_strip_braille, declared
-# next to the idle placeholders below), and only
-# where a bare composer's furniture can sit: behind the glyph row's content
-# and on the rows that bound its wrap region.
-#
-# UNICODE WHITESPACE (issue #1988; open PRs #1995/#2047 target the same
-# defect and #1995's naming is adopted here so the implementations converge):
-# a harness may separate its prompt glyph from composer content with a
-# non-ASCII space. Real claude 2.x draws its EMPTY composer as exactly `❯`
-# followed by U+00A0 NO-BREAK SPACE. POSIX `[[:space:]]` includes U+00A0 only
-# under some locales, so every trim used to be locale-dependent: the same live
-# pane read `empty` under a UTF-8 shell and `pending` under LC_ALL=C (a
-# daemon, launchd, or ssh context), deferring every away-mode escalation.
-# fm_composer_normalize_trim_var is the one fix: it maps every code point
-# Unicode gives the property White_Space=Yes outside ASCII onto a plain ASCII
-# space before any trim or comparison, byte-exactly, so the verdict cannot
-# depend on the ambient locale. Glyph strips use literal byte-exact pattern
-# removal for the same reason: `${v#?}` removes one BYTE under LC_ALL=C and
-# one CHARACTER under UTF-8, which used to leave partial multibyte residue.
-#
-# Re-sourcing is a cheap idempotent redefinition, so this file needs no
-# include guard (matching bin/fm-tmux-lib.sh).
+# A bare shell prompt cannot prove an empty agent composer.
 
-# fm_composer_strip_ansi: drop every CSI escape sequence, leaving plain text.
-# Used for STRUCTURAL row/shape detection, where ghost text must be KEPT so the
-# composer box border or bare prompt glyph is still visible; content extraction
-# uses fm_composer_strip_ghost instead. Reads the styled text on stdin and prints
-# plain text (stdin-only, matching fm_composer_strip_ghost). The character class
-# includes ':' so an ITU colon-form SGR (38:2::r:g:b) is stripped whole, not left
-# with a dangling tail.
 fm_composer_strip_ansi() {
   local esc; esc=$(printf '\033')
   LC_ALL=C sed "s/${esc}\\[[0-9;:?]*[[:alpha:]]//g"
@@ -245,87 +59,8 @@ fm_composer_normalize_trim_var() {  # <varname>
   printf -v "$__fmnt_name" '%s' "$__fmnt_text"
 }
 
-# fm_composer_kiro_scope: 0 when the caller has named the pane's harness as kiro
-# through FM_COMPOSER_HARNESS, the one input that turns on the kiro-only composer
-# rules (the near-gray ghost ceiling in fm_composer_strip_ghost and the hinted
-# idle row, FM_COMPOSER_HINTED_IDLE_RE_DEFAULT). A caller that knows its target's
-# recorded harness sets it for its reads (bin/fm-send.sh, bin/fm-control.sh, the
-# watcher's and process-event re-rings); an unset or other value leaves every
-# read exactly as it was before kiro existed.
-fm_composer_kiro_scope() {
-  [ "${FM_COMPOSER_HARNESS:-}" = kiro ]
-}
-
-# fm_composer_strip_ghost: the ONE fleet-wide ANSI-aware extractor of "real typed
-# content" from a captured, styled composer row. Reads the styled line on stdin
-# (from `tmux capture-pane -e`, `herdr pane read --format ansi`, or
-# `zellij action dump-screen --ansi`) and prints the
-# plain, non-ghost text on stdout, dropping:
-#   - dim/faint runs (SGR 2): how claude and codex render ghost/suggestion text.
-#     A reset (SGR 0) or normal-intensity (SGR 22) ends a dim run.
-#   - dark/muted TRUECOLOR foreground runs (SGR 38;2;r;g;b or the colon form
-#     38:2::r:g:b) whose perceived luminance (0.299R + 0.587G + 0.114B) is below
-#     FM_COMPOSER_GHOST_LUMA_MAX (default 128): how grok renders its placeholder
-#     and hint text. A reset (SGR 0), a default-foreground (SGR 39), any base
-#     foreground colour (30-37 / 90-97), or a lighter 38;2 foreground ends the
-#     dark-foreground run. This assumes a DARK terminal theme, the firstmate
-#     fleet reality, where real typed input is bright and only de-emphasised UI
-#     is dark; the SGR-2 signal above stays theme-independent. A 256-colour
-#     foreground (38;5;n) is NOT luminance-tested - it is palette-dependent and
-#     no fleet harness except kiro (below) uses it for ghost text, so it is kept
-#     (real text wins: under-stripping merely defers, which the max-defer alarm
-#     surfaces, while over-stripping would inject over real input).
-# Raising FM_COMPOSER_GHOST_LUMA_MAX is not free: muse draws its `⟩` prompt glyph
-# in truecolor 38;2;90;160;255, luminance ~149.9 (verified, muse 0.1.0-R708.1),
-# the tightest margin over the 128 default in the fleet. Above ~150 that glyph is
-# stripped as ghost text, which is why the bare-glyph fallback below must also
-# recognise every agent glyph from the UNSTRIPPED plain row.
-# Command Code draws its idle placeholder in truecolor 38;2;138;148;168,
-# luminance ~147.3, while its typed text is the default foreground (verified
-# live, Command Code 1.74.1 with COLORTERM=truecolor, which its launch pins; a
-# 256-colour terminal gets the untested 38;5;145 instead). Raising the fleet-wide
-# ceiling to reach it would over-strip other harnesses, so only a screen that the
-# backend's identity probe attributes to Command Code is read with a fixed
-# ceiling of 160 in its place (fm_composer_classify_screen).
-#
-# KIRO ONLY: when the caller names the pane's harness as kiro
-# (FM_COMPOSER_HARNESS=kiro, see fm_composer_kiro_scope), a NEAR-ACHROMATIC run
-# gets a higher ceiling, because kiro draws its idle placeholder in a grey above
-# the 128 default. Every other harness, and a read with no harness named, keeps
-# exactly the rules above: the wider ceiling read Claude's grey slash-command
-# input (38;2;112;112;112, which the herdr payload proof reads with
-# FM_COMPOSER_GHOST_LUMA_MAX=0) as a placeholder, so it is not a fleet default.
-#   FM_COMPOSER_GHOST_GRAY_LUMA_MAX (default 180) applies when
-#   FM_COMPOSER_GHOST_GRAY_SPREAD_MAX (default 12) covers the run's channel
-#   spread (max channel minus min channel); every other run keeps the 128 default.
-# The gray ceiling only ever RAISES the applicable ceiling. A near-gray run takes
-# the higher of the two, so an operator who raises FM_COMPOSER_GHOST_LUMA_MAX
-# above 180 still gets that wider strip on gray text as the knob documents.
-#   kiro ghost      38;2;158;158;158  luminance 158.0  spread   0  -> stripped
-#   grey real text  38;2;206;207;210  luminance 207.0  spread   4  -> kept
-#   muse real glyph 38;2;90;160;255   luminance 149.9  spread 165  -> kept
-# The same scope also luminance-tests a 256-colour foreground, because kiro
-# draws the same grey in whichever encoding the terminal advertises:
-# 38;2;158;158;158 on a truecolor pane and 38;5;247 - the identical grey, xterm
-# level 158 - on a pane with no COLORTERM. Only the 232-255 greyscale ramp
-# (level 8 + (n-232)*10) is tested, because it is the one index range whose RGB
-# is fixed by definition rather than by a terminal theme. The 6x6x6 cube's
-# r==g==b diagonal is arithmetically grey too and stays untested: kiro has not
-# been measured drawing ghost text there, and widening the predicate is how the
-# palette-dependence problem the 38;5 carve-out exists for gets in. A chromatic
-# index is kept untested rather than converted, and indices 0-15 stay untested
-# because every terminal theme remaps them. The base 30-37 / 90-97 foregrounds
-# still just end a dark run.
-# The dim/faint and dark-foreground states are tracked together as "de-emphasis";
-# codes are processed left to right within a sequence, so "ESC[0;2m" reads as dim.
-# LC_ALL=C makes awk walk bytes, so multibyte glyphs (e.g. ❯) and de-emphasised
-# runs alike pass through or drop intact without locale-dependent classes.
 fm_composer_strip_ghost() {
-  local grayscope=0
-  fm_composer_kiro_scope && grayscope=1
-  LC_ALL=C awk -v lumamax="${FM_COMPOSER_GHOST_LUMA_MAX:-128}" -v grayscope="$grayscope" \
-    -v graylumamax="${FM_COMPOSER_GHOST_GRAY_LUMA_MAX:-180}" \
-    -v grayspreadmax="${FM_COMPOSER_GHOST_GRAY_SPREAD_MAX:-12}" '
+  LC_ALL=C awk -v lumamax="${FM_COMPOSER_GHOST_LUMA_MAX:-128}" '
     function sgr_code(v, b) {
       b = v
       sub(/:.*/, "", b)
@@ -342,59 +77,19 @@ fm_composer_strip_ghost() {
       if (code == "2") return p + 4
       return p + 1
     }
-    # ceiling_for: the luminance ceiling that applies to one truecolor run.
-    # Outside the kiro scope (grayscope 0) that is always lumamax. Inside it, a
-    # NEAR-ACHROMATIC run (max channel minus min channel within grayspreadmax)
-    # takes the HIGHER of graylumamax and lumamax, so the gray ceiling only ever
-    # raises the applicable ceiling and never reduces an operator-set one.
-    # Anything more saturated keeps lumamax.
-    function ceiling_for(r, g, b,   hi, lo) {
-      if (!grayscope) return lumamax
-      hi = r; if (g > hi) hi = g; if (b > hi) hi = b
-      lo = r; if (g < lo) lo = g; if (b < lo) lo = b
-      if ((hi - lo) > grayspreadmax) return lumamax
-      return (graylumamax > lumamax) ? graylumamax : lumamax
-    }
-    # palette_gray_level: the channel level of a 256-colour index in the 232-255
-    # greyscale ramp, and -1 for EVERY other index and for every index outside
-    # the kiro scope. A ramp entry has r == g == b, so its level IS its luminance.
-    #
-    # The ramp alone is deliberate, not an oversight. It is the only index range
-    # whose RGB is fixed by definition rather than by a theme, so it needs no
-    # palette guessing. The 6x6x6 cube diagonal is arithmetically grey too, but
-    # it is NOT tested here: nothing has measured a harness drawing ghost text
-    # there, and widening this predicate is how the palette-dependence problem
-    # the 38;5 carve-out warns about gets in. The test asserting an index outside
-    # 232-255 is untouched exists to hold that line.
-    function palette_gray_level(n) {
-      if (!grayscope) return -1
-      if (n >= 232 && n <= 255) return 8 + (n - 232) * 10
-      return -1
-    }
-    function gray_is_dark(lv) {
-      return (lv >= 0 && lv < ceiling_for(lv, lv, lv)) ? 1 : 0
-    }
-    # fg38_is_dark: 1 when the SGR 38 foreground starting at param p is a
-    # TRUECOLOR (38;2 / 38:2), or in the kiro scope a PALETTE GREY (38;5 / 38:5),
-    # whose luminance is below the ceiling that applies to it; 0 otherwise (any
-    # other palette index, a bright colour, or a malformed run).
+    # An indexed color has no fixed luminance across terminal themes.
     function fg38_is_dark(a, p, k,   spec, nf, f, r, g, b) {
       spec = a[p]
       if (index(spec, ":") > 0) {           # colon form: whole colour in a[p]
         nf = split(spec, f, ":")
-        if (f[2] == "5" && nf >= 3) return gray_is_dark(palette_gray_level(f[nf] + 0))
         if (f[2] != "2" || nf < 5) return 0
         r = f[nf - 2] + 0; g = f[nf - 1] + 0; b = f[nf] + 0
-        return ((299*r + 587*g + 114*b) / 1000 < ceiling_for(r, g, b)) ? 1 : 0
+        return ((299*r + 587*g + 114*b) / 1000 < lumamax) ? 1 : 0
       }
       if (p + 1 > k) return 0
-      if (a[p + 1] == "5") {
-        if (p + 2 > k) return 0
-        return gray_is_dark(palette_gray_level(a[p + 2] + 0))
-      }
       if (a[p + 1] != "2" || p + 4 > k) return 0
       r = a[p + 2] + 0; g = a[p + 3] + 0; b = a[p + 4] + 0
-      return ((299*r + 587*g + 114*b) / 1000 < ceiling_for(r, g, b)) ? 1 : 0
+      return ((299*r + 587*g + 114*b) / 1000 < lumamax) ? 1 : 0
     }
     {
       line = $0; out = ""; dim = 0; darkfg = 0; n = length(line); i = 1
@@ -440,165 +135,13 @@ fm_composer_strip_ghost() {
 }
 
 
-# --- Delivery-only rendered busy footers (backend-agnostic) -------------------
-#
-# These live here, in the ONE shared composer/delivery owner, rather than in any
-# single backend adapter, because every backend needs them for the SAME job:
-# proving a submitted Enter actually landed. Keeping them in bin/fm-tmux-lib.sh
-# made cursor's signature reachable only from tmux, even though herdr, zellij,
-# cmux, orca, and tern run the same harnesses and face the same acknowledgement
-# problem.
-#
-# This is a DELIVERY guard, deliberately NOT a worker-state source. The semantic
-# busy contract - what firstmate records and supervises on - is owned by
-# bin/fm-busy-lib.sh, which forbids classifying a harness from rendered text.
-# Matching a footer to confirm a keystroke landed is a different question from
-# asking what a worker is doing, and the two must not be conflated.
-# Delivery-only rendered busy footers per harness. claude/codex: "esc to
-# interrupt"; opencode: "esc interrupt"; pi: "Working..." or a spinner glyph and
-# "Working" set into the editor's top border ("── ⠙ Working ──", verified pi
-# 1.2.0); omp: "Working…"; grok: "Ctrl+c:cancel"; agy: "esc to cancel";
-# devin: "esc twice to interrupt" and its "❭ Guide Devin while it works" working composer;
-# cortex: "(esc to interrupt)" on its spinner row and "Type to queue message..." in its working composer;
-# commandcode: "esc to interrupt" beside a bullet-framed elapsed cell.
-# kiro: "Kiro is working".
-# Claude's current spinner has a rotating glyph and word, but every active-turn
-# line has an ellipsis followed by a parenthesized elapsed duration. Keep this
-# signature separate from the shared default because that shape is not generic
-# enough to classify arbitrary harness output safely.
-# Kimi's anchored moon-phase spinner is separate because bare moon glyphs in
-# ordinary output must not classify another harness as busy. Leading whitespace is
-# OPTIONAL; whitespace on both sides of the separator is REQUIRED because every
-# captured spinner row had it. A zero-whitespace form has NEVER been observed and
-# is deliberately not matched. The line end is intentionally unanchored because
-# rotating tip text follows and is not required to be present. The idle status
-# bar's lowercase `thinking` label and independently rotating tip text are not
-# busy signals on their own.
-# The full moon-phase set remains locale- and emoji-font-sensitive because Kimi
-# exposes no stable ASCII busy token.
-# The harness-less default is the UNION of the per-harness tokens below, used
-# when a caller has no recorded harness for the pane (the submit cores read the
-# baseline and the post-Enter transition this way). cursor's `ctrl+c to stop` is
-# part of that union for the same reason the others are: without it a cursor
-# submit could never be acknowledged, because cursor parks its terminal cursor
-# outside its composer and the composer verdict is therefore always `unknown`.
-# agy's `esc to cancel` is part of the union for the same reason: an explicit
-# tmux agy endpoint reaches the submit core with no recorded harness, and its
-# bare `>` composer verdict is `unknown`, so the busy footer is the only
-# turn-started acknowledgement that path can read. kiro's `Kiro is working` is
-# in the union for two reasons of its own: the footer renders ON the composer
-# row, so a mid-turn composer read is `pending` and only a busy read lets
-# fm_composer_queued_enter_verdict convert that to `empty`; and the submit core
-# takes its pre-typing baseline with no harness, so without the literal an
-# already-busy kiro pane reads `idle` and wrongly arms the idle-to-busy
-# confirmation.
-FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|─ [^[:space:]]+ Working ─|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel|esc twice to interrupt|^[[:space:]]*❭ Guide Devin while it works$|^[[:space:]]*›[[:space:]]+Kiro is working'
-FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
-# Devin 3000.11.1: the working composer and interrupt hint are independent
-# delivery signals. Neither is used as semantic worker-state evidence.
-FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT='esc twice to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
-# Cortex Code 1.1.104: the spinner row ends `(esc to interrupt)` and the working
-# composer reads `Type to queue message...`, with a `Type to queue next message`
-# footer. Independent delivery signals, never semantic worker-state evidence.
-FM_DELIVERY_CORTEX_BUSY_REGEX_DEFAULT='\(esc to interrupt\)|Type to queue message\.\.\.|Type to queue next message'
-# Command Code 1.74.1 renders one status row while a turn runs, for example
-# ` ○ Contemplificating…  esc to interrupt • 2s • ↓ 41`: the `esc to interrupt`
-# token and the bullet-framed elapsed cell are independent delivery signals, and
-# the idle footer carries neither. Delivery guard only; recorded worker state
-# comes from the commandcode-mod writer in bin/fm-busy-lib.sh.
-FM_DELIVERY_COMMANDCODE_BUSY_REGEX_DEFAULT='esc to interrupt|•[[:space:]]+[0-9]+[smh]([[:space:]]+[0-9]+[smh])*[[:space:]]+•'
-FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
-FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
-FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.|─ [^[:space:]]+ Working ─'
-# omp (Oh My Pi) renders its TUI busy line as `Working…` with U+2026 HORIZONTAL
-# ELLIPSIS, not Pi's three ASCII dots (verified byte-level on omp 18.1.2,
-# re-verified live on 18.1.11 through the Herdr backend). Only the TUI form is
-# accepted: every supervised omp pane is the TUI, and the three-dot spelling its
-# headless -p mode writes to stderr never reaches a pane. The status row's
-# leading braille spinner plus elapsed cell (`⠧ 11s`) is the second, independent
-# busy signal, so no single vendor string is load-bearing; its idle form is a
-# static identity glyph with no elapsed time.
-# The spinner is an alternation of omp 18.1.11's unicode-preset frames (its
-# `status` set ⣾⣽⣻⢿⡿⣟⣯⣷ and `activity` set ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, read from the
-# build that rendered the live `⠧`), declared once for the busy regex and the
-# status-row furniture rule below. It is deliberately NOT a bracket range over
-# the braille block: GNU grep rejects a range between multibyte endpoints
-# ("Invalid collation character"), so `[⠁-⣿]` compiled on macOS and failed
-# every omp busy and furniture read on Linux CI.
-FM_OMP_SPINNER_FRAMES_RE='(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⣾|⣽|⣻|⢿|⡿|⣟|⣯|⣷)'
-FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT='Working…|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]'
-FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT='Ctrl\+c:cancel'
-# cursor-agent's busy footer. The TOKEN is matched, not the spinner verb: the
-# same version rendered both `Working` and `Running` beside its braille spinner
-# in two consecutive turns, while `ctrl+c to stop` was present for the whole
-# turn and absent the instant it ended (verified live, 2026.08.11-e8db854).
-# This is a DELIVERY guard only - it acknowledges a submit and gates away-mode
-# injection. Cursor's recorded worker state comes from its transcript fold in
-# bin/fm-busy-lib.sh, never from this row.
-FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT='ctrl\+c to stop'
-# agy (Antigravity CLI) renders a pinned status row while a turn runs: the
-# `esc to cancel` token on the left and the model cell on the right (verified
-# live, agy 1.2.0; the idle row shows `? for shortcuts` instead). The
-# `Generating...` spinner word beside it is a free-floating output line and is
-# deliberately not matched, so echoed worker output cannot fake an
-# acknowledgement. Delivery guard only; recorded worker state comes from the
-# agy-regex fold in bin/fm-busy-lib.sh.
-FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT='esc[[:space:]]+to[[:space:]]+cancel'
-# polytoken renders a live elapsed row above its composer separators while a
-# turn runs - ` Running for 11.12s`, with a leading space and an unanchored
-# tail of border furniture (verified live, 0.8.19; the turn-end rows are
-# `Completed in <t>`, `Errored after <t>`, and `Canceled after <t>`, all
-# deliberately distinct from the busy token). Delivery guard only; recorded
-# worker state comes from the polytoken-hook fold in bin/fm-busy-lib.sh, and
-# echoed worker output naming the token can fake only this acknowledgement,
-# never a busy-state verdict.
-# It is deliberately not part of the harness-less union above, so a pane with
-# no recorded harness never reads it as busy.
-FM_DELIVERY_POLYTOKEN_BUSY_REGEX_DEFAULT='^[[:space:]]*Running for [0-9]+([.][0-9]+)?s'
-# kiro (Kiro CLI) renders its composer footer as `› Kiro is working · Type to
-# steer · Ctrl+S to queue` while a turn runs, and an idle footer of
-# `Trust All Tools active ... /quit to exit` or the `ask a question or describe
-# a task` placeholder otherwise (verified live, kiro-cli 2.21.4). The
-# harness-named `Kiro is working` literal is matched rather than the bare
-# `esc to cancel` token kiro also renders in its tool-call region and shares with
-# agy, so echoed worker output cannot fake an acknowledgement. Delivery guard
-# only; recorded worker state comes from the kiro-hook record in
-# bin/fm-busy-lib.sh, which never consults this footer. The match is anchored to
-# the footer row (`›` glyph first), so prose that merely names the phrase, such
-# as a grep of these docs in another harness's pane, is never read as busy.
-FM_DELIVERY_KIRO_BUSY_REGEX_DEFAULT='^[[:space:]]*›[[:space:]]+Kiro is working'
-FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT='^[[:space:]]*(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘)[[:space:]]+·[[:space:]]+'
-
-fm_busy_lines_match() {  # [harness]
+fm_busy_lines_match() {
   local harness=${1:-} lines regex
   IFS= read -r -d '' lines || true
-  if [ -n "${FM_BUSY_REGEX:-}" ]; then
-    regex=$FM_BUSY_REGEX
-  else
-    case "$harness" in
-      claude) regex=$FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT ;;
-      devin) regex=$FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT ;;
-      cortex) regex=$FM_DELIVERY_CORTEX_BUSY_REGEX_DEFAULT ;;
-      hermes) regex='^[[:space:]]*─.*·[[:space:]]*[0-9]+([.][0-9]+)?s[[:space:]]*│|^[[:space:]]*([a-z0-9][a-z0-9_-]*[[:space:]]+)?❯[[:space:]]+Ctrl[+]C to interrupt…' ;;
-      commandcode) regex=$FM_DELIVERY_COMMANDCODE_BUSY_REGEX_DEFAULT ;;
-      codex) regex=$FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT ;;
-      opencode) regex=$FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT ;;
-      pi|pi-signed) regex=$FM_DELIVERY_PI_BUSY_REGEX_DEFAULT ;;
-      omp) regex=$FM_DELIVERY_OMP_BUSY_REGEX_DEFAULT ;;
-      grok) regex=$FM_DELIVERY_GROK_BUSY_REGEX_DEFAULT ;;
-      agy) regex=$FM_DELIVERY_AGY_BUSY_REGEX_DEFAULT ;;
-      polytoken) regex=$FM_DELIVERY_POLYTOKEN_BUSY_REGEX_DEFAULT ;;
-      kiro) regex=$FM_DELIVERY_KIRO_BUSY_REGEX_DEFAULT ;;
-      kimi) regex=$FM_DELIVERY_KIMI_BUSY_REGEX_DEFAULT ;;
-      cursor) regex=$FM_DELIVERY_CURSOR_BUSY_REGEX_DEFAULT ;;
-      '') regex=$FM_DELIVERY_BUSY_REGEX_DEFAULT ;;
-      *)
-        # A supplied harness must never borrow another harness's signature.
-        # Register its verified signature explicitly before classifying it busy.
-        regex=
-        ;;
-    esac
-  fi
+  case "$harness" in
+    ''|pi|pi-signed) regex=${FM_BUSY_REGEX:-'Working\.\.\.|─ [^[:space:]]+ Working ─'} ;;
+    *) regex=${FM_BUSY_REGEX:-} ;;
+  esac
   [ -n "$regex" ] && printf '%s' "$lines" | grep -qiE "$regex"
 }
 
@@ -641,7 +184,6 @@ FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^P
 # which no stripper can remove. Typed text, even the placeholder words, renders
 # with no `↵` (verified live, kiro-cli 2.28.0), so this match reads `empty` even
 # on a styled capture where an FM_COMPOSER_IDLE_RE collision reads `pending`.
-FM_COMPOSER_HINTED_IDLE_RE_DEFAULT='^ask a question or describe a task ↵$'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
@@ -680,7 +222,7 @@ FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
 # frames then an elapsed cell, or when it carries the context-usage cell after
 # a middle dot. It is consulted only as the boundary BELOW a bare composer,
 # never on the composer row itself.
-FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+K'
+FM_COMPOSER_STATUS_FURNITURE_RE='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"(⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⣾|⣽|⣻|⢿|⡿|⣟|⣯|⣷)"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+K'
 # Pi's footer stats row opens at column 0 with the session cost when every
 # token counter is zero (`$0.000 (sub) 5.4%/272k (auto)` on pi 0.85.1).
 # That leading `$` is a cost cell, not a dead-shell prompt, only when a digit
@@ -744,7 +286,6 @@ FM_COMPOSER_PI_MAX_LINES=${FM_COMPOSER_PI_MAX_LINES:-8}
 # (see docs/verification/runtime-backends.md). Not re-verified against a live
 # Grok install since; may need to change if a future Grok release renders a
 # different overhang or scales it with title/model-name length.
-FM_COMPOSER_GROK_TITLE_OVERHANG=3
 
 # 0 when <content> is exactly one glyph drawn from <glyph-list>.
 _fm_composer_is_prompt_glyph() {  # <content> <glyph-list>
@@ -883,10 +424,6 @@ fm_composer_classify_content() {  # <bordered> <content> [idle_re] [idle_case] [
   fi
   fm_composer_normalize_trim_var content
   [ -n "$content" ] || { printf 'empty'; return 0; }
-  if [ -n "$idle_re" ] && fm_composer_kiro_scope \
-     && fm_composer_idle_matches "$content" "$FM_COMPOSER_HINTED_IDLE_RE_DEFAULT" sensitive; then
-    printf 'empty'; return 0
-  fi
   fm_composer_idle_matches "$content" "$idle_re" "$idle_case" && idle_collision=1
   # Ghost stripping can leave a REMNANT of an idle placeholder rather than
   # emptying it, because a terminal draws the cell under its cursor in reverse
@@ -997,10 +534,10 @@ _fm_composer_titled_rule_row() {  # <trimmed-row> <plain-rule-spaces>
 
 # Row-scan results are returned through FM_COMPOSER_SCAN_* globals (bash 3.2
 # has no nameref); they are internal to this owner.
-_fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] [cortex]
-  local pane=$1 cy=${2:-} cortex_proven=${4:-0}
+_fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
+  local pane=$1 cy=${2:-}
   local line indent left_stripped trimmed kind family side_family
-  local top_inner top_spaces='' geometry_check=0 geometry_ambiguous=0 titled_top=0 titled_cand=0
+  local top_inner top_spaces='' geometry_check=0 geometry_ambiguous=0
   local content_inner content_spaces bottom_inner bottom_spaces glyph
   local current_indent='' current_family='' row=0 top=-1 valid=0 content_rows=0
   # Complete-box results: the box containing the cursor (cursor mode) or the
@@ -1008,10 +545,6 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
   FM_COMPOSER_SCAN_BOX_TOP=-1
   FM_COMPOSER_SCAN_BOX_BOTTOM=-1
   FM_COMPOSER_SCAN_BOX_AMBIG=0
-  # 1 when the selected (bottom-most, or cursor-holding) complete box is a
-  # titled rounded box with an agent prompt glyph row that went unproven: the
-  # one shape a Cortex identity would change (see the cortex=ask capability).
-  FM_COMPOSER_SCAN_CORTEX_CANDIDATE=0
   FM_COMPOSER_SCAN_INCOMPLETE_BOX_FROM=-1
   FM_COMPOSER_SCAN_UNSAFE=0
   FM_COMPOSER_SCAN_CURSOR_EDGE=0
@@ -1132,8 +665,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
     # lower shell prompts as staleness evidence for cursorless selection.
     # Pi's cost footer can open with `$0.000`; that is furniture, not a prompt.
     if [ "$top" -lt 0 ] && fm_composer_leading_shell_glyph_var glyph "$trimmed" \
-       && ! _fm_composer_row_is_pi_status "$trimmed" \
-       && ! _fm_composer_row_is_cortex_status "$trimmed"; then
+       && ! _fm_composer_row_is_pi_status "$trimmed"; then
       FM_COMPOSER_SCAN_SHELL_ROW=$row
     elif fm_composer_leading_agent_glyph_var glyph "$trimmed"; then
       FM_COMPOSER_SCAN_BARE_ROW=$row
@@ -1158,8 +690,6 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
       box_glyph=''
       geometry_ambiguous=0
       geometry_check=1
-      titled_top=0
-      titled_cand=0
       top_inner=$trimmed
       case "$family" in
         rounded) top_inner=${top_inner#╭}; top_inner=${top_inner%╮}; top_spaces=${top_inner//─/ } ;;
@@ -1170,29 +700,8 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
       esac
       case "$top_spaces" in
         *[![:space:]]*)
-          # A TITLED top rule (Cortex Code writes the session name there,
-          # verified cortex 1.1.104) is tolerated only for a pane the caller
-          # proved is Cortex (the cortex=1 capability: tmux exact foreground
-          # process name, herdr native agent probe), only on the rounded
-          # family, and only when the title is printable ASCII embedded in
-          # the rule, so the inner still starts and ends with `─` and every
-          # title cell collapses to a space; the bottom rule and every
-          # content row are then held to that same width. The tolerance is
-          # also conditional on the box proving an agent prompt glyph row
-          # when it closes (titled_top), because a titled box with no glyph
-          # is exactly the decorative banner or dialog this rule must keep
-          # ambiguous. Without the identity every titled box stays ambiguous.
-          if [ "$cortex_proven" = 1 ] && [ "$family" = rounded ] \
-             && _fm_composer_titled_rule_inner_ok "$top_inner"; then
-            titled_top=1
-            top_spaces=${top_inner//─/ }
-            top_spaces=$(printf '%s' "$top_spaces" | LC_ALL=C sed 's/[!-~]/ /g')
-          else
-            [ "$family" != rounded ] || ! _fm_composer_titled_rule_inner_ok "$top_inner" \
-              || titled_cand=1
-            geometry_check=0
-            geometry_ambiguous=1
-          fi
+          geometry_check=0
+          geometry_ambiguous=1
           ;;
       esac
     elif [ "$kind" = bottom ] || { [ "$kind" = ascii ] && [ "$top" -ge 0 ]; }; then
@@ -1208,18 +717,7 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
             heavy) bottom_inner=${bottom_inner#┗}; bottom_inner=${bottom_inner%┛}; bottom_spaces=${bottom_inner//━/ } ;;
             ascii) bottom_inner=${bottom_inner#+}; bottom_inner=${bottom_inner%+}; bottom_spaces=${bottom_inner//-/ } ;;
           esac
-          if [ "$bottom_spaces" != "$top_spaces" ]; then
-            # A TITLED bottom border (grok writes its model name there) is
-            # tolerated when the inner still starts and ends with the family's
-            # own rule glyph: the corners, family, indent, and every content
-            # row's geometry were already proven. Anything else is ambiguity.
-            if ! _fm_composer_titled_bottom_ok "$family" "$bottom_inner" "$top_spaces"; then
-              geometry_ambiguous=1
-            fi
-          fi
-        fi
-        if [ "$titled_top" = 1 ] && [ "$box_glyph_row" -lt 0 ]; then
-          geometry_ambiguous=1
+          [ "$bottom_spaces" = "$top_spaces" ] || geometry_ambiguous=1
         fi
         if [ -n "$cy" ]; then
           if [ "$top" -lt "$cy" ] && [ "$cy" -le "$row" ]; then
@@ -1228,8 +726,6 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
             FM_COMPOSER_SCAN_BOX_AMBIG=$geometry_ambiguous
             FM_COMPOSER_SCAN_BOX_GLYPH_ROW=$box_glyph_row
             FM_COMPOSER_SCAN_BOX_GLYPH=$box_glyph
-            FM_COMPOSER_SCAN_CORTEX_CANDIDATE=0
-            [ "$titled_cand" != 1 ] || [ "$box_glyph_row" -lt 0 ] || FM_COMPOSER_SCAN_CORTEX_CANDIDATE=1
           fi
         else
           FM_COMPOSER_SCAN_BOX_TOP=$top
@@ -1237,8 +733,6 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap] 
           FM_COMPOSER_SCAN_BOX_AMBIG=$geometry_ambiguous
           FM_COMPOSER_SCAN_BOX_GLYPH_ROW=$box_glyph_row
           FM_COMPOSER_SCAN_BOX_GLYPH=$box_glyph
-          FM_COMPOSER_SCAN_CORTEX_CANDIDATE=0
-          [ "$titled_cand" != 1 ] || [ "$box_glyph_row" -lt 0 ] || FM_COMPOSER_SCAN_CORTEX_CANDIDATE=1
         fi
         FM_COMPOSER_SCAN_INCOMPLETE_BOX_FROM=-1
       else
@@ -1301,103 +795,6 @@ EOF
 }
 
 # 0 when <title> is exactly the typed Grok model/effort title shape.
-_fm_composer_grok_typed_title_ok() {  # <title>
-  local title=$1 effort model
-  case "$title" in
-    'Grok '*\ \(low\)) effort=low ;;
-    'Grok '*\ \(medium\)) effort=medium ;;
-    'Grok '*\ \(high\)) effort=high ;;
-    'Grok '*\ \(xhigh\)) effort=xhigh ;;
-    *) return 1 ;;
-  esac
-  model=${title#Grok }
-  model=${model%" ($effort)"}
-  [ -n "$model" ] || return 1
-  case "$model" in *[!A-Za-z0-9._-]*) return 1 ;; esac
-  return 0
-}
-
-# 0 when a rounded top rule's inner (corners already stripped) reads as a
-# printable ASCII TITLE embedded in the rule: it starts and ends with `─` and
-# the title between them is printable ASCII only, so a non-ASCII or malformed
-# title stays ambiguous. Rounded only: Cortex Code draws no other family. The
-# caller gates this on the cortex=1 capability.
-_fm_composer_titled_rule_inner_ok() {  # <top-inner>
-  local inner=$1 spaces
-  fm_composer_normalize_trim_var inner
-  case "$inner" in
-    '─'*'─') ;;
-    *) return 1 ;;
-  esac
-  spaces=${inner//─/ }
-  spaces=$(printf '%s' "$spaces" | LC_ALL=C sed 's/[!-~]/ /g')
-  case "$spaces" in
-    *[![:space:]]*) return 1 ;;
-  esac
-  return 0
-}
-
-# 0 when a mismatched bottom border reads as a legitimate TITLE: the trimmed
-# inner (corners already stripped) still starts and ends with the family's own
-# rule glyph, so the title is embedded IN the rule rather than replacing it.
-_fm_composer_titled_bottom_ok() {  # <family> <bottom-inner> <top-spaces>
-  local family=$1 inner=$2 expected=$3 dash spaces title
-  fm_composer_normalize_trim_var inner
-  case "$family" in
-    rounded|light) dash='─' ;;
-    double) dash='═' ;;
-    heavy) dash='━' ;;
-    ascii) dash='-' ;;
-    *) return 1 ;;
-  esac
-  case "$inner" in
-    "$dash"*"$dash") ;;
-    *) return 1 ;;
-  esac
-  title=${inner//"$dash"/}
-  fm_composer_normalize_trim_var title
-  # Grok 1.0.44 appends its approval mode after the typed title, joined by a
-  # mid-dot. Only that exact suffix on a typed Grok title is known; the single
-  # mid-dot column is swapped for an ASCII one so it cannot survive as residue
-  # in the geometry comparison, while any other mid-dot stays non-space.
-  case "$title" in
-    *' · always-approve')
-      # Only the rounded family was observed for this approval-title shape.
-      [ "$family" = rounded ] || return 1
-      _fm_composer_grok_typed_title_ok "${title%' · always-approve'}" || return 1
-      inner=${inner/' · always-approve'/' . always-approve'}
-      ;;
-  esac
-  spaces=${inner//"$dash"/ }
-  spaces=$(printf '%s' "$spaces" | LC_ALL=C sed 's/[!-~]/ /g')
-  case "$spaces" in
-    *[![:space:]]*) return 1 ;;
-  esac
-  [ "$spaces" = "$expected" ] && return 0
-
-  # Grok 1.0.5 renders its real model title FM_COMPOSER_GROK_TITLE_OVERHANG
-  # columns wider than the otherwise aligned top and content rows (issue
-  # #3436; see the constant's definition for provenance and caveats). Accept
-  # only that exact overhang and only the typed Grok model/effort title
-  # shape, which Grok 1.0.44's approval suffix can never match: 1.0.44 draws
-  # that title at the aligned width, so no overhang shape carrying it has
-  # been observed and none is accepted. This keeps arbitrary malformed bottoms
-  # ambiguous while preserving the complete-box proof around a genuinely idle
-  # or pending Grok composer.
-  local overhang
-  overhang=$(printf '%*s' "$FM_COMPOSER_GROK_TITLE_OVERHANG" '')
-  [ "$spaces" = "$expected$overhang" ] || return 1
-  _fm_composer_grok_typed_title_ok "$title"
-}
-
-# fm_composer_row_has_edge: 0 when the trimmed row starts or ends with a
-# box-drawing/edge glyph - a structural row, never an input row.
-# The half-block glyphs are edges too. Herdr draws a composer's top and bottom
-# rules with ▄ and ▀ instead of the box-drawing family, so without them a bare
-# composer's WRAP region walks straight through its own closing rule and
-# swallows the footer below it - which reads as real typed text and turns an
-# idle pane into a false `pending`. Measured live on a herdr cursor pane, where
-# the wrap region ran from the composer row through the model and path rows.
 fm_composer_row_has_edge() {  # <trimmed-row>
   local row=$1
   fm_composer_normalize_trim_var row
@@ -1507,11 +904,11 @@ _fm_composer_classify_bare_row() {  # <screen> <styled> <row>
   printf '%s' "$state"
 }
 
-# _fm_composer_row_is_omp_status: 0 when the trimmed row is omp's status line
-# (FM_COMPOSER_OMP_STATUS_RE_DEFAULT above) - composer furniture that sits
+# _fm_composer_row_is_status_furniture: 0 when the trimmed row is omp's status line
+# (FM_COMPOSER_STATUS_FURNITURE_RE above) - composer furniture that sits
 # below a bare composer and must bound its wrap region exactly as an edge does.
-_fm_composer_row_is_omp_status() {  # <trimmed-row>
-  fm_composer_idle_matches "$1" "${FM_COMPOSER_OMP_STATUS_RE:-$FM_COMPOSER_OMP_STATUS_RE_DEFAULT}" sensitive
+_fm_composer_row_is_status_furniture() {  # <trimmed-row>
+  fm_composer_idle_matches "$1" "$FM_COMPOSER_STATUS_FURNITURE_RE" sensitive
 }
 
 # _fm_composer_row_is_pi_status: 0 when the trimmed row is Pi's dollar-first
@@ -1519,20 +916,6 @@ _fm_composer_row_is_omp_status() {  # <trimmed-row>
 # the separated pair; a `$` cost cell must not count as a dead-shell prompt.
 _fm_composer_row_is_pi_status() {  # <trimmed-row>
   fm_composer_idle_matches "$1" "$FM_COMPOSER_PI_STATUS_RE_DEFAULT" sensitive
-}
-
-# _fm_composer_row_is_cortex_status: 0 when the trimmed row is Cortex Code's
-# mode line drawn under its composer (`>> bypass safeguards  |  teams: off  |
-# plan: off  |  guard: on ...`, verified cortex 1.1.104). Its leading `>>` would
-# otherwise read as a dead-shell prompt below the composer and make the
-# composer unprovable. The wording follows the terminal width (`teams: off` at
-# 100 columns, `teams mode: off` at 120), so the match needs the `>> ` opener,
-# a `teams` cell, and a later `plan` cell, all ` | ` separated.
-_fm_composer_row_is_cortex_status() {  # <trimmed-row>
-  case "$1" in
-    '>> '*' | '*teams*' | '*plan*) return 0 ;;
-  esac
-  return 1
 }
 
 # _fm_composer_row_is_braille_furniture: 0 when the row is non-blank and its
@@ -1577,7 +960,7 @@ _fm_composer_wrap_region_ok() {  # <plain-screen> <glyph-row> <cursor-row>
     fm_composer_normalize_trim_var trimmed
     [ -n "$trimmed" ] || return 1
     if fm_composer_row_has_edge "$trimmed"; then return 1; fi
-    if _fm_composer_row_is_omp_status "$trimmed"; then return 1; fi
+    if _fm_composer_row_is_status_furniture "$trimmed"; then return 1; fi
     if _fm_composer_row_is_braille_furniture "$trimmed"; then return 1; fi
     if fm_composer_leading_shell_glyph_var glyph "$trimmed"; then return 1; fi
     row=$((row + 1))
@@ -1869,7 +1252,7 @@ _fm_composer_leftbar_floor_row() {  # <trimmed-row>
 _fm_composer_row_is_composer_furniture() {  # <trimmed-row> <proof-glyph>
   local row=$1 proof=$2 glyph=''
   [ -n "$row" ] || return 1
-  _fm_composer_row_is_omp_status "$row" && return 0
+  _fm_composer_row_is_status_furniture "$row" && return 0
   _fm_composer_row_is_braille_furniture "$row" && return 0
   fm_composer_idle_matches "$row" \
     "${FM_COMPOSER_MODE_HINT_RE:-$FM_COMPOSER_MODE_HINT_RE_DEFAULT}" sensitive && return 0
@@ -2073,25 +1456,13 @@ _fm_composer_select_cursorless() {  # <plain-screen> <screen> <styled>
   fi
   if [ "$FM_COMPOSER_SELECTED_KIND" = bare ]; then
     next=$((FM_COMPOSER_SELECTED_LAST + 1))
-    # In the kiro scope a hinted idle placeholder is the whole composer, so the
-    # row below it (kiro's `/copy to clipboard` footer) is never wrapped input.
-    if fm_composer_kiro_scope; then
-      trimmed=$(_fm_composer_screen_row "$FM_COMPOSER_SELECTED_FIRST" "$plain")
-      fm_composer_normalize_trim_var trimmed
-      if fm_composer_leading_agent_glyph_var glyph "$trimmed"; then
-        trimmed=${trimmed#*"$glyph"}
-        fm_composer_normalize_trim_var trimmed
-        fm_composer_idle_matches "$trimmed" "$FM_COMPOSER_HINTED_IDLE_RE_DEFAULT" sensitive \
-          && next=-1
-      fi
-    fi
     while [ "$next" -ge 0 ]; do
       raw=$(_fm_composer_screen_row "$next" "$plain")
       trimmed=$raw
       fm_composer_normalize_trim_var trimmed
       [ -n "$trimmed" ] || break
       fm_composer_row_has_edge "$trimmed" && break
-      _fm_composer_row_is_omp_status "$trimmed" && break
+      _fm_composer_row_is_status_furniture "$trimmed" && break
       _fm_composer_row_is_braille_furniture "$trimmed" && break
       FM_COMPOSER_SELECTED_LAST=$next
       next=$((next + 1))
@@ -2284,35 +1655,9 @@ fm_composer_dialog_sink_release() {
   fi
 }
 
-# Hermes TUI 0.21.7: profile-prefixed ❯ prompt immediately below the status
-# rule; placeholder text is dim, while typed drafts are bright. Identity is
-# required, and dialogs, wrapped drafts, non-ready status and unstyled reads
-# remain unproven. The hook record, never this row, owns semantic busy state.
-_fm_composer_hermes_state() {  # <screen> <styled>
-  local screen=$1 styled=$2 stripped
-  [ "$styled" = 1 ] || { printf 'unknown'; return; }
-  # The busy hint uses xterm orange 178, above the shared dim threshold.
-  # Strip only the captured native synthetic cursor chip plus that exact hint;
-  # the same words typed in the normal bright input color remain a draft.
-  local esc=$'\033' hint
-  hint="${esc}[38;5;231m${esc}[48;5;178mC${esc}[38;5;178m${esc}[49mtrl+C to interrupt…${esc}[39m"
-  screen=${screen//"$hint"/}
-  stripped=$(printf '%s\n' "$screen" | fm_composer_strip_ghost | fm_composer_strip_ansi)
-  printf '%s\n' "$stripped" | awk '
-    { rows[NR]=$0 }
-    END {
-      last=NR; while (last>0 && rows[last] ~ /^[[:space:]]*$/) last--
-      # Never interpret a palette or arbitrary output as the composer.
-      if (last<2 || rows[last] !~ /^[[:space:]]*([a-z0-9][a-z0-9_-]*[[:space:]]+)?❯/) { print "unknown"; exit }
-      if (rows[last-1] !~ /^[[:space:]]*─[[:space:]]+.*│.*│/) { print "unknown"; exit }
-      text=rows[last]; sub(/^[[:space:]]*([a-z0-9][a-z0-9_-]*[[:space:]]+)?❯[[:space:]]*/, "", text)
-      if (text ~ /^[[:space:]]*$/) print "empty"; else print "pending"
-    }'
-}
-
 fm_composer_classify_screen() {  # <caps> <screen> [cursor_row] [identity]
   local caps=$1 screen=$2 cy=${3:-} identity=${4:-}
-  local styled=0 cursor=0 has_identity=0 cortex_proven=0 cortex_ask=0 kv plain
+  local styled=0 cursor=0 has_identity=0 kv plain
   # Note the dialog before any early return so a pending picker is still named.
   fm_composer_note_blocking_dialog "$screen" || true
   while IFS= read -r kv; do
@@ -2320,42 +1665,16 @@ fm_composer_classify_screen() {  # <caps> <screen> [cursor_row] [identity]
       styled=1) styled=1 ;;
       cursor=1) cursor=1 ;;
       identity=1) has_identity=1 ;;
-      cortex=1) cortex_proven=1 ;;
-      cortex=ask) cortex_ask=1 ;;
     esac
   done <<EOF
 $caps
 EOF
-  # A Command Code identity (`commandcode` from the tmux probe, `cmd` from
-  # Herdr's native agent detection) reads this one screen with Command Code's
-  # placeholder ceiling; see fm_composer_strip_ghost.
-  if [ "$has_identity" = 1 ]; then
-    case "${identity%%$'\t'*}" in
-      commandcode|cmd)
-        local FM_COMPOSER_GHOST_LUMA_MAX=160
-        ;;
-      cortex) cortex_proven=1 ;;
-    esac
-  fi
   [ "$cursor" = 1 ] || cy=''
   if [ -n "$cy" ]; then
     case "$cy" in *[!0-9]*) printf 'unknown'; return 0 ;; esac
   fi
-  if [ "$has_identity" = 1 ] && [ "${identity%%$'\t'*}" = hermes ]; then
-    _fm_composer_hermes_state "$screen" "$styled"
-    return
-  fi
   plain=$(printf '%s\n' "$screen" | fm_composer_strip_ansi)
-  _fm_composer_scan_screen "$plain" "$cy" '' "$cortex_proven"
-  # The lazy Cortex identity pass: only a caller that asked for it
-  # (cortex=ask), has not yet supplied an identity, and sees a titled rounded
-  # glyph box as its selected shape needs the probe; every other read keeps
-  # its verdict without one.
-  if [ "$cortex_ask" = 1 ] && [ "$has_identity" = 1 ] && [ -z "$identity" ] \
-     && [ "$FM_COMPOSER_SCAN_CORTEX_CANDIDATE" = 1 ]; then
-    printf 'need-identity'
-    return 0
-  fi
+  _fm_composer_scan_screen "$plain" "$cy"
   if [ -n "$cy" ]; then
     # Cursor mode (tmux): the shape CONTAINING the cursor is the composer.
     if [ "$FM_COMPOSER_SCAN_UNSAFE" = 1 ]; then
@@ -2445,48 +1764,6 @@ EOF
   esac
 }
 
-# fm_composer_submit_retry_core: the ONE verify-and-retry-Enter submit loop
-# for the cursor-less backends (cmux, orca, zellij, tern), parameterised by the
-# adapter's send-key and composer-state functions. The caller has already
-# typed the text ONCE (send_literal) and settled; this loop submits with
-# Enter, re-reading the composer verdict, and retries Enter ONLY - never
-# retypes, because a swallowed Enter leaves the text in the composer and
-# retyping would duplicate it. Proven pending (and pending-unproven) retries
-# consume the budget; any other verdict returns immediately, so `unknown`
-# stays a loud refusal rather than a blind retry into an unreadable pane.
-# tmux and herdr keep richer cores that consume this same shared verdict plus
-# fm_composer_queued_enter_verdict; no shape knowledge lives in any loop.
-fm_composer_submit_retry_core() {  # <send-key-fn> <state-fn> <target> <retries> <enter-sleep> [expected-label]
-  local send_key_fn=$1 state_fn=$2 target=$3 retries=$4 sleep_s=$5 expected_label=${6:-} i=0 state
-  while :; do
-    "$send_key_fn" "$target" Enter "$expected_label" || true
-    sleep "$sleep_s"
-    state=$("$state_fn" "$target" "$expected_label")
-    # The first Enter can open a picker. A later Enter would confirm it.
-    if fm_composer_blocking_dialog_noted >/dev/null; then
-      printf 'unknown'
-      return 0
-    fi
-    case "$state" in
-      pending|pending-unproven) ;;
-      *) printf '%s' "$state"; return 0 ;;
-    esac
-    i=$((i + 1))
-    [ "$i" -lt "$retries" ] || { printf '%s' "$state"; return 0; }
-  done
-}
-
-# fm_composer_queued_enter_verdict: the ONE busy-queued-Enter policy.
-# After Enter retries are spent, convert a structurally proven pending
-# composer given a delivery-busy signal from the adapter:
-#   pending + busy  -> empty   (Enter was accepted and queued; do not re-send)
-#   pending + idle  -> pending (genuine swallow; caller must not assume delivery)
-#   pending + unknown -> pending (unreadable busy is not proof of a queue)
-# Every other composer verdict is returned unchanged, so pending-unproven,
-# empty, and unknown never receive this conversion.
-# Adapters supply their own busy primitive (tmux: fm_pane_is_busy; herdr:
-# native agent_status=working, or a rendered busy footer on an idle native
-# baseline). This function does not read a pane.
 fm_composer_queued_enter_verdict() {  # <composer-state> <busy|idle|unknown>
   local state=$1 busy=${2:-}
   [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
@@ -2560,14 +1837,7 @@ _fm_composer_pi_verdict() {  # <screen> <styled> <has_identity> <identity>
   fi
   agent=${identity%%$'\t'*}
   agent_status=${identity#*$'\t'}
-  # polytoken is the second verified owner of the separated shape (verified
-  # live, 0.8.19: a full-width separator pair over one blank or pending
-  # content row with a footer below), so its identity passes the same
-  # conjunction: an idle polytoken proves an empty composer, and a working
-  # polytoken keeps the strict unknown - its composer really is empty
-  # mid-turn (Enter queues, verified live), but the unknown keeps the
-  # busy-queue conversion honest through the submit cores.
-  if { [ "$agent" != pi ] && [ "$agent" != polytoken ]; } \
+  if [ "$agent" != pi ] \
     || [ "$FM_COMPOSER_SCAN_PI_PAIR_VALID" != 1 ]; then
     printf 'unknown'
     return 0

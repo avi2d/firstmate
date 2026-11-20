@@ -113,10 +113,6 @@
 #                          inspection only - never an automatic interrupt,
 #                          signal, or restart of the worker or its
 #                          tool process.
-#                          At escalation time a T3 Code thread whose shared
-#                          classification still reads running resets the timer
-#                          while its latest turn boundary is under
-#                          BUSY_TURN_MAX_SECS old (wedge_defer_t3code_running).
 #   stale: <window> (unread firstmate instruction: ...)
 #   stale: <window> (steering-inbox ladder bookkeeping unwritable: ...)
 #   stale: <window> (steering-inbox busy bookkeeping unwritable: ...)
@@ -536,19 +532,6 @@ inbox_steer_escalate_unavailable() {  # <window> <task> <record>
   wake "$reason"
 }
 
-# inbox_steer_busy: the steering-inbox delivery guard. Every backend keeps the
-# recorded task's busy verdict (window_is_busy). T3 Code alone also treats its
-# native uncertainty as busy (fm_busy_is_busy), so a doorbell waits for proven
-# idle; pane staleness elsewhere still needs busy proof.
-inbox_steer_busy() {  # <window> <backend> <task> <tail40>
-  local w=$1 backend=$2 task=$3 tail40=$4
-  if [ "$backend" = t3code ]; then
-    fm_busy_is_busy t3code "$w" "$(window_harness "$w")" "$task" "$STATE" "$tail40"
-  else
-    window_is_busy "$w" "$tail40"
-  fi
-}
-
 # Steering-inbox loss detection, one cheap check per recorded window per poll.
 # bin/fm-task-inbox-lib.sh owns delivery, busy-deferral, retry, and escalation policy.
 # Endpoint and busy checks precede delivery so recovery never types into a busy,
@@ -586,7 +569,7 @@ inbox_steer_check() {  # <window> <task>
   esac
   watcher_capture "$backend" "$w" 40 "$(window_label "$w")" || WATCHER_CAPTURE=
   tail40=$WATCHER_CAPTURE
-  if inbox_steer_busy "$w" "$backend" "$task" "$tail40"; then
+  if window_is_busy "$w" "$tail40"; then
     [ "$verb" != retry ] || return 0
     if ! count=$(fm_task_inbox_record_busy "$STATE" "$task" "$rec"); then
       [ -f "$rec" ] || return 0
@@ -604,8 +587,7 @@ inbox_steer_check() {  # <window> <task>
   case "$verb" in
     ring)
       ring_rc=0
-      FM_COMPOSER_HARNESS=$(window_harness "$w") \
-        fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
       if [ "$ring_rc" -eq 3 ]; then
         inbox_steer_escalate_unavailable "$w" "$task" "$rec"
         return 0
@@ -625,8 +607,7 @@ inbox_steer_check() {  # <window> <task>
       ;;
     retry)
       ring_rc=0
-      FM_COMPOSER_HARNESS=$(window_harness "$w") \
-        fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
+      fm_task_inbox_ring "$backend" "$w" "$rec" "$(window_label "$w")" || ring_rc=$?
       if ! fm_task_inbox_clear_retry "$STATE" "$task" "$rec" && [ -f "$rec" ]; then
         reason="stale: $w (steering-inbox retry mark unremovable: ${rec%/*}/.retry-ring cannot be removed, so $rec would ring on every poll - inspect the inbox directory)"
         fm_wake_append stale "$w" "$reason" || exit 1
@@ -706,7 +687,7 @@ inbox_steer_check() {  # <window> <task>
 # no-captain-verb signal, so it never runs on the ordinary per-wake path.
 signal_turnend_panes_churned() {  # <file> ...
   [ -e "$CONFIG/turnend-churn-absorb" ] || return 1
-  local f base task meta kind w key backend harness label terminal prev now now_hash since now_s absorb_secs marker age
+  local f base task meta kind w key backend harness label prev now now_hash since now_s absorb_secs marker age
   local rec_task task_index i j count hash_file hash_bytes created
   local max_absorb_secs=9223372036854775807
   local -a signal_tasks=() signal_statuses=() snapshot_tasks=() snapshot_kinds=()
@@ -738,12 +719,7 @@ signal_turnend_panes_churned() {  # <file> ...
     rec_task=${rec_task%.meta}
     kind=$(fm_meta_get "$meta" kind)
     backend=$(fm_backend_of_meta "$meta")
-    if [ "$backend" = orca ]; then
-      terminal=$(fm_meta_get "$meta" terminal)
-      w=${terminal:-$(fm_meta_get "$meta" window)}
-    else
-      w=$(fm_meta_get "$meta" window)
-    fi
+    w=$(fm_meta_get "$meta" window)
     key=
     [ -n "$w" ] && key=$(window_key "$w")
     label="fm-$rec_task"
@@ -1714,10 +1690,7 @@ wedge_write_escalation_count() {  # <window> <window-key> <escalation-file> <sin
 # The opt-in validating-run consult (wedge_defer_validating) runs after those three,
 # so an endpoint with no agent left in it is still reported once even while its
 # run executes; its crew-state read keeps the same one-per-threshold bound
-# because its deferral restarts the idle timer. A T3 Code window gets one more
-# consult after that (wedge_defer_t3code_running): its transcript can stay
-# byte-identical through a long tool call, so the shared thread classification
-# is rechecked before active work is reported as a wedge. The opt-in operator
+# because its deferral restarts the idle timer. The opt-in operator
 # guard consult (wedge_guard_evidence) runs after all of these, so a dead or
 # missing endpoint is never deferred by a guard, and a home without
 # config/wedge-evidence-guards never reaches it. An opted-in foreground Pi
@@ -1842,9 +1815,6 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
           return 0
         fi
         if wedge_defer_validating "$win" "$since_file" "$label" "$age" "$task"; then
-          return 0
-        fi
-        if wedge_defer_t3code_running "$win" "$since_file" "$label" "$age"; then
           return 0
         fi
         guard_note=''
@@ -1982,31 +1952,6 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
       fi
       ;;
   esac
-}
-
-# wedge_defer_t3code_running: the T3 Code consult of the wedge ladder. A T3
-# window's capture is the thread's messages plus a session line, so it stays
-# byte-identical through a long tool call where a pane would keep repainting;
-# a still-running session is therefore read from the server itself before the
-# quiet transcript is reported. Only the adapter's `running` word defers,
-# covering V2's running turn and waiting post-turn drain. Starting, settled,
-# failed, missing, and unreadable threads keep the unchanged escalation.
-# The deferral is itself bounded by BUSY_TURN_MAX_SECS, measured from the latest
-# run boundary T3 records: a turn or post-turn drain that has lasted that long
-# without a newer boundary escalates like any
-# busy pane past the bound, and a missing turn timestamp never defers.
-# Returns 0 when it has handled the window, 1 to escalate on the unchanged path.
-wedge_defer_t3code_running() {  # <window> <since-file> <triage-label> <idle-age>
-  local win=$1 since_file=$2 label=$3 age=$4 turn_age
-  [ "$(window_backend "$win")" = t3code ] || return 1
-  fm_backend_source t3code || return 1
-  [ "$(fm_backend_t3code_probe "$win")" = running ] || return 1
-  turn_age=$(fm_backend_t3code_turn_age "$win") || return 1
-  [ "$turn_age" -lt "$BUSY_TURN_MAX_SECS" ] || return 1
-  clear_write_tracking "$(window_key "$win")"
-  date +%s > "$since_file"
-  triage_log "absorbed $label (T3 session still running, turn ${turn_age}s, idle ${age}s), timer reset: $win"
-  return 0
 }
 
 # busy_turn_over_age: 0 iff current opted-in stream silence crosses its bound,
@@ -3067,7 +3012,7 @@ heartbeat_scan_finds_actionable() {
 }
 
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
-# with push-capable windows (herdr, rex), it replaces the blind `sleep POLL` with a
+# with push-capable Herdr panes, it replaces the blind `sleep POLL` with a
 # bounded wait on the backend's native transition stream, so a crew going
 # `blocked` wakes the supervisor sub-second instead of after the stale-pane
 # wedge timer. For every other home - no push-capable window, backend not
@@ -3079,35 +3024,20 @@ heartbeat_scan_finds_actionable() {
 # a second watcher, so every guard/beacon/arm/turn-end mechanism is unchanged.
 event_wait_or_sleep() {
   local w b session first_backend="" first_session="" rec rc
-  local windows=() t3_windows=()
+  local windows=()
   while IFS= read -r w; do
     b=$(window_backend "$w")
     fm_backend_has_push "$b" || continue
-    # Secondmate endpoints are supervised via status writes, not pane/agent
-    # state (an idle or blocked secondmate agent pane is healthy by design), so
-    # they are excluded from the fast escalation exactly as the stale loop skips
-    # them.
-    # T3 Code's bounded wait runs only when no other push backend is recorded,
-    # so adding a T3 task to a herdr home never takes herdr's fast path away.
-    if [ "$b" = t3code ]; then
-      t3_windows+=("$w")
-      continue
-    fi
     session=${w%%:*}
     if [ -z "$first_backend" ]; then first_backend=$b; first_session=$session; fi
     # One socket connection covers one backend+session; a home normally has a
-    # single herdr or rex session. A window in a different backend/session stays on the
+    # single Herdr session. A window in a different backend/session stays on the
     # poll path this cycle.
     if [ "$b" != "$first_backend" ] || [ "$session" != "$first_session" ]; then
       continue
     fi
     windows+=("$w")
   done < <(recorded_windows)
-  if [ "${#windows[@]}" -eq 0 ] && [ "${#t3_windows[@]}" -gt 0 ]; then
-    first_backend=t3code
-    first_session=$(fm_backend_event_session t3code "${t3_windows[0]}")
-    windows=("${t3_windows[@]}")
-  fi
 
   if [ "${#windows[@]}" -eq 0 ]; then
     sleep "$POLL"
@@ -3359,8 +3289,7 @@ WATCHER_RECOVERY_PENDING=0
 if [ -n "${FM_LOCK_RECOVERED_PID:-}" ]; then
   WATCHER_RECOVERY_PENDING=1
 fi
-if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ] \
-  && [ "${FM_WATCH_FOREGROUND_CHECKPOINT:-0}" != 1 ]; then
+if [ "${FM_WATCH_HANDLING_SUCCESSOR:-0}" != 1 ]; then
   fm_recovery_marker_reopen_announced "$WATCHER_DOWNTIME_MARKER" "$STARTUP_LOCK_BOUND" \
     || startup_lock_failed "could not be reopened safely"
 fi
@@ -3838,7 +3767,7 @@ EOF
     ewf="$STATE/.wedge-escalations-$key"
     pf="$STATE/.paused-$key"   # flag: this key's stale is using the bounded pause cadence
     prev=$(cat "$hf" 2>/dev/null || true)
-    # Busy match: a backend's native semantic state when available (herdr, rex), else
+    # Busy match: a backend's native semantic state when available, else
     # the last 6 non-blank lines only (the TUI footer area, where every verified
     # harness renders its busy indicator) so busy-looking strings in displayed
     # content cannot suppress stale detection. Read once per window per poll and
@@ -4100,7 +4029,7 @@ $wait_items
 EOF
   fi
 
-  # Terminal wait: a bounded native-event wait for push-capable homes (herdr, rex),
+  # Terminal wait: a bounded native-event wait for push-capable homes,
   # else the blind poll sleep. See event_wait_or_sleep.
   event_wait_or_sleep
 done
