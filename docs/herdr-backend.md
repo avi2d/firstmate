@@ -281,6 +281,8 @@ The owning parent is the launcher's own exact workspace, resolved from the same 
 It falls back to a unique home-label lookup only for a Firstmate outside Herdr, and when that finds none the projection has no parent: its binding records an empty parent id and ordering leaves it where Herdr created it.
 Projected children are never collapsed back into that parent.
 The parent is the placement and ordering reference the projection is bound under.
+The binding records the parent's label as Herdr shows it at spawn, whatever that label is.
+Restart reclaim checks that recorded label on the same parent id.
 
 The normal `fm-<id>` task tab is created in the exact new workspace returned by Herdr.
 Only the exact seeded default tab returned by the same workspace-create response can be pruned.
